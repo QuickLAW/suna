@@ -231,9 +231,12 @@ func (t *TUI) chatTopMeta() string {
 }
 
 func styleToolCallLabel(te *toolEntry) string {
-	summary := strings.TrimSpace(te.summary)
+	summary := strings.TrimSpace(te.intent)
+	if summary == "" {
+		summary = strings.TrimSpace(te.summary)
+	}
 	if summary != "" {
-		return styleToolPill.Render(te.name + "(" + summary + ")")
+		return styleToolPill.Render(te.name + "(" + truncateRunes(summary, 42) + ")")
 	}
 	return styleToolPill.Render(te.name)
 }

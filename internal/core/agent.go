@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -435,24 +436,35 @@ func (a *Agent) Run(ctx context.Context, input string) <-chan Event {
 				return
 			}
 
+			toolIntent := extractToolIntent(fullContent)
+			preparedCalls := make([]preparedToolCall, 0, len(toolCalls))
+			cleanToolCalls := make([]model.ToolCall, 0, len(toolCalls))
+			for _, tc := range toolCalls {
+				params := model.ParseToolCallArguments(tc.Arguments)
+				params, intent := a.cleanToolParams(tc.Name, params)
+				if intent == "" {
+					intent = toolIntent
+				}
+				cleanTC := tc
+				if b, err := json.Marshal(params); err == nil {
+					cleanTC.Arguments = string(b)
+				}
+				preparedCalls = append(preparedCalls, preparedToolCall{tc: cleanTC, params: params, intent: intent})
+				cleanToolCalls = append(cleanToolCalls, cleanTC)
+			}
+
 			// 工具调用
 			assistantMsg := model.Message{
 				Role:        model.RoleAssistant,
 				TextContent: fullContent,
 				Content:     []model.ContentBlock{{Type: model.ContentText, Text: fullContent}},
-				ToolCalls:   toolCalls,
+				ToolCalls:   cleanToolCalls,
 			}
 			a.working.AddMessage(assistantMsg)
 
-			toolIntent := extractToolIntent(fullContent)
-			for _, tc := range toolCalls {
+			for _, pc := range preparedCalls {
 				hadToolCall = true
-				params := model.ParseToolCallArguments(tc.Arguments)
-				intent := consumeToolIntent(params)
-				if intent == "" {
-					intent = toolIntent
-				}
-				events <- Event{Type: EventToolCall, ToolCallID: tc.ID, ToolName: tc.Name, ToolParams: params, ToolIntent: intent}
+				events <- Event{Type: EventToolCall, ToolCallID: pc.tc.ID, ToolName: pc.tc.Name, ToolParams: pc.params, ToolIntent: pc.intent}
 			}
 
 			type toolExecResult struct {
@@ -460,18 +472,17 @@ func (a *Agent) Run(ctx context.Context, input string) <-chan Event {
 				tc     model.ToolCall
 				result tool.Result
 			}
-			resultCh := make(chan toolExecResult, len(toolCalls))
-			for i, tc := range toolCalls {
-				go func(index int, tc model.ToolCall) {
-					params := model.ParseToolCallArguments(tc.Arguments)
-					result := a.executeTool(runCtx, tc.Name, params, events)
-					resultCh <- toolExecResult{index: index, tc: tc, result: result}
-				}(i, tc)
+			resultCh := make(chan toolExecResult, len(preparedCalls))
+			for i, pc := range preparedCalls {
+				go func(index int, pc preparedToolCall) {
+					result := a.executeTool(runCtx, pc.tc.Name, pc.params, events)
+					resultCh <- toolExecResult{index: index, tc: pc.tc, result: result}
+				}(i, pc)
 			}
 
-			results := make([]toolExecResult, len(toolCalls))
+			results := make([]toolExecResult, len(preparedCalls))
 			toolFailed := false
-			for i := 0; i < len(toolCalls); i++ {
+			for i := 0; i < len(preparedCalls); i++ {
 				if runCtx.Err() != nil {
 					events <- Event{Type: EventStatus, Content: "cancelled"}
 					return
@@ -521,6 +532,53 @@ func (a *Agent) Run(ctx context.Context, input string) <-chan Event {
 	}()
 
 	return events
+}
+
+type preparedToolCall struct {
+	tc     model.ToolCall
+	params map[string]any
+	intent string
+}
+
+func (a *Agent) cleanToolParams(name string, params map[string]any) (map[string]any, string) {
+	intent := consumeToolIntent(params)
+	allowed := a.toolParamKeys(name)
+	if len(allowed) == 0 {
+		return params, intent
+	}
+	clean := make(map[string]any, len(params))
+	for k, v := range params {
+		if allowed[k] {
+			clean[k] = v
+		}
+	}
+	return clean, intent
+}
+
+func (a *Agent) toolParamKeys(name string) map[string]bool {
+	if t, ok := a.registry.Get(name); ok {
+		return schemaPropertyKeys(t.Parameters())
+	}
+	switch name {
+	case "askuser":
+		return map[string]bool{"question": true, "options": true}
+	case "spawn":
+		return map[string]bool{"task": true, "model": true, "system": true, "tools": true, "timeout": true, "context": true}
+	default:
+		return nil
+	}
+}
+
+func schemaPropertyKeys(schema map[string]any) map[string]bool {
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	keys := make(map[string]bool, len(props))
+	for k := range props {
+		keys[k] = true
+	}
+	return keys
 }
 
 func consumeToolIntent(params map[string]any) string {

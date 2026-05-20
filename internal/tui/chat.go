@@ -269,6 +269,12 @@ func (t *TUI) renderToolEntry(te *toolEntry) string {
 	}
 	line := fmt.Sprintf("  %s %s%s", statusIcon, styleToolCallLabel(te), dur)
 	if t.showToolDetail {
+		if strings.TrimSpace(te.intent) != "" {
+			line += "\n    " + styleDim.Render(t.tr("tui.tool.intent"))
+			for _, wrapped := range wrapLine(te.intent, max(20, t.width-8)) {
+				line += "\n    " + styleToolDim.Render(wrapped)
+			}
+		}
 		if te.params != "" {
 			line += "\n    " + styleDim.Render(t.tr("tui.tool.params"))
 			for _, l := range strings.Split(te.params, "\n") {

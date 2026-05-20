@@ -33,6 +33,7 @@ func defaultTranslationKeys() map[string]map[LocaleID]string {
 		"tui.chat.thinking":          {LocaleEN: "Thinking", LocaleZH: "思考"},
 		"tui.chat.thought_done":      {LocaleEN: "Thought completed", LocaleZH: "思考完成"},
 		"tui.chat.input_placeholder": {LocaleEN: "Type a message...", LocaleZH: "输入消息..."},
+		"tui.tool.intent":            {LocaleEN: "Intent", LocaleZH: "意图"},
 		"tui.tool.params":            {LocaleEN: "Parameters", LocaleZH: "参数"},
 		"tui.tool.result":            {LocaleEN: "Result", LocaleZH: "返回"},
 		"tui.ask.help":               {LocaleEN: "↑↓ choose · Enter confirm · type a custom answer", LocaleZH: "↑↓ 选择 · Enter 确认 · 也可直接输入自定义回答"},
