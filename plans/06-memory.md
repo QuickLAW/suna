@@ -93,13 +93,13 @@ Suna 的产品形态只有一个当前会话：用户要么新建，要么恢复
 
 ```
 resume_summary       上一轮会话的简短恢复摘要，仅作辅助展示
-last_messages        上一轮会话的完整可见 user/assistant transcript
+last_messages        上一轮 working memory 中仍保留的可见 user/assistant transcript
 tool_summary         上一轮会话的工具操作摘要，仅用于 UI 展示
 memory_processed_at  最近一次队列处理时间
 updated_at           更新时间
 ```
 
-`last_messages` 不是长期历史，只是上一次会话的恢复快照。它同步保存完整可见 user/assistant transcript，不依赖 memory_queue 或 LLM 总结。新建会话时清空，下一次会话会覆盖它。
+`last_messages` 不是长期历史，只是上一次会话的恢复快照。它只保存 working memory 中仍保留的可见 user/assistant 文本消息，并会剥离 assistant tool_calls/raw 结构。若当前会话发生过上下文压缩，压缩成的 system summary 不会写入 `last_messages`，因此它不是压缩前完整 transcript。新建会话时清空，下一次会话会覆盖它。
 
 `tool_summary` 只保存轻量摘要，例如“exec [success]: go test ./... 通过”。恢复时通过 TUI-only `restore_summary` role 展示给用户，不放回 LLM working memory。
 
@@ -117,7 +117,7 @@ updated_at           更新时间
   清空上一轮 last_messages/tool_summary
 ```
 
-如果 memory_queue 尚未被 daemon 处理，恢复上一轮时 `last_messages` 是兜底上下文，保证 Suna 仍能完整接上上一轮会话。恢复不依赖 LLM 总结，也不依赖记忆 batch 是否完成。
+如果 memory_queue 尚未被 daemon 处理，恢复上一轮时 `last_messages` 是兜底上下文。它能恢复最近可见对话，但不保证包含已被 compact 到 system summary 的旧上下文，也不恢复 raw tool call/result。
 
 ## memory_queue
 
@@ -253,14 +253,14 @@ LLM 必须遵守：
 
 不是全量拼接。每次最多从 30 条 active memory 中选 5 条。
 
-### 两层召回
+### 评分召回
 
 ```
-1. Core memory
-   每轮固定注入 3-5 条高优先级记忆。
-
-2. Matched memory
-   根据当前用户消息做关键词/tag/kind 匹配，最多补充 0-2 条。
+1. 对每条 active memory 计算 score。
+2. 初始 score = priority。
+3. core memory 额外 +1000，因此稳定优先注入，但不是硬性固定 3-5 条。
+4. 当前用户消息关键词命中 content/tags/kind 时，每个 token 额外 +80。
+5. stable sort 后取前 5 条；非 core 且 score < 40 的记录不注入。
 ```
 
 最终注入不超过 5 条。
@@ -268,10 +268,9 @@ LLM 必须遵守：
 ### 排序规则
 
 ```
+score desc
 is_core desc
 priority desc
-last_used_at desc
-updated_at desc
 id asc
 ```
 
@@ -370,7 +369,7 @@ memory_processed_at DATETIME
 updated_at DATETIME NOT NULL
 ```
 
-`last_messages` 为 JSON，保存上一次会话的完整可见 user/assistant transcript。它不保存 tool call 原始参数、tool result 原始输出或 streaming chunk。新建会话时清空，下一次会话会覆盖。
+`last_messages` 为 JSON，保存上一次 working memory 中仍保留的可见 user/assistant 纯文本 transcript。它不保存 tool call 原始参数、tool result 原始输出、system compression summary 或 streaming chunk。新建会话时清空，下一次会话会覆盖。
 
 `tool_summary` 为 JSON，只保存工具操作摘要，用于 TUI 恢复展示，不注入 LLM 上下文。
 
@@ -410,7 +409,7 @@ processed_at DATETIME
 (user_id, processed_at)
 ```
 
-已处理队列可以立即删除。如果需要 debug，可保留短期日志，但必须有 TTL。
+当前实现成功处理后直接删除队列行；`processed_at` 主要作为 pending filter/兼容字段，不作为成功历史。失败时通过 `attempts`、`next_attempt_at`、`last_error` 做退避重试。
 
 ### 失败重试
 

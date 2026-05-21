@@ -36,8 +36,8 @@ type Provider interface {
   Chunk              { Content, ToolCalls, Done, Usage }
 
 Provider 内部处理:
-  openai    → ChatCompletionRequest → ChatCompletionResponse (改 baseURL)
-  anthropic → MessageNewParams → Message
+  openai    → ChatCompletionStream → Chunk 流式输出，支持 usage
+  anthropic → Messages.New → 一次性 Message，再转换为 content/tool_calls/done
 ```
 
 ### Tool Calling 的统一
@@ -52,6 +52,8 @@ Anthropic:  tool_use block with name + input (JSON object)
 Provider 负责双向转换：
 - `CompletionRequest.Tools[]` → 各厂商格式
 - 各厂商的 tool_call 响应 → `Chunk.ToolCalls[]`
+
+当前差异：OpenAI-compatible provider 已走 streaming；Anthropic provider 当前使用非 streaming API，收到完整响应后再发一个 content chunk 和 done，usage/reasoning 暂未映射。
 
 ## Provider 类型
 
@@ -286,9 +288,9 @@ Main agent 使用 active_model 运行。Sub agent 的模型由 main agent 在 `s
   ❌ 频繁变更工具定义
 ```
 
-### Anthropic prompt caching
+### Anthropic prompt caching — 目标设计
 
-Anthropic 支持 `cache_control` 标记，可以显式标记哪些内容应该被缓存：
+Anthropic 支持 `cache_control` 标记，可以显式标记哪些内容应该被缓存；当前 provider 适配层尚未写入 cache_control：
 
 ```
 System prompt 的能力列表部分 → 标记为 cacheable
@@ -296,7 +298,7 @@ System prompt 的能力列表部分 → 标记为 cacheable
   多次调用共享缓存，减少输入 token 计费
 ```
 
-### 本地缓存（可选）
+### 本地缓存（可选，未实现）
 
 ```
 相同输入 → 相同输出的场景:
@@ -309,15 +311,12 @@ TTL: 5 分钟
 ## 错误处理与降级
 
 ```
-模型调用失败时的策略:
+当前行为:
 
-1. 单次超时 → 重试 1 次 (相同模型)
-2. 429 限流 → 等待 retry-after → 重试
-3. 500 服务端错误 → 重试 1 次
-4. 401/403 认证失败 → 不重试，通知用户检查 API key
-5. 连续 3 次失败 → 降级到 active_model
+1. Router 只负责选择 active provider/model 并做每模型 ref 的简单 rate limit。
+2. provider 调用失败时，agent 立即把错误返回给 TUI/LLM 流程。
+3. 当前没有统一 retry、retry-after 处理或跨模型 fallback。
 
 Sub agent 失败:
-  - 超时 → 通知 main，main 决定重试或换模型
-  - 错误 → 结果中包含错误信息，main 自行处理
+  - 超时或错误 → spawn tool result 中返回失败状态，main LLM 自行决定是否重试、换模型或向用户说明
 ```

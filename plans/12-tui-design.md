@@ -59,7 +59,7 @@ TUI 现在已经能跑通基本使用流：启动后进入 Welcome，进入 Chat
 
 1. **当前实现优先**：文档描述必须和 `internal/tui` 当前行为一致，未实现功能放入“未实现清单”，不能混在主流程里。
 2. **Chat 优先**：Chat 是核心页面，常驻信息只保留身份、模型、context、输入和运行状态。
-3. **TUI 纯前端**：TUI 不持有业务逻辑、数据库连接或模型执行逻辑，只渲染 UI 并通过 IPC 与 daemon 通信。
+3. **TUI 纯前端**：TUI 只持有 UI 展示/输入状态，不持有业务逻辑、数据库连接或模型执行逻辑，只渲染 UI 并通过 IPC 与 daemon 通信。
 4. **配置足够可用**：MVP 只要求能配置模型连接、凭证、context window、语言和主题；高级配置后续分组补齐。
 5. **信息不重复**：Chat 顶栏显示 provider/model/context/连接状态；底栏只显示 token 和速度；快捷键通过 help 查看。
 6. **全程 i18n**：用户可见文本必须走 `internal/tui/i18n_keys.go` 或 translator，不在页面代码里散落硬编码文案。
@@ -661,9 +661,9 @@ Help 有两个形态：
 
 当前不足：
 
-- Config 的 `A/E/D/T/Space/j/k` 未在完整 Help 中集中展示。
-- Welcome 的 `n/r/Ctrl+O/?/j/k` 未在完整 Help 中集中展示。
-- Help 内容仍偏 Chat，需要按页面分组补齐。
+- Help 内容仍偏 Chat，需要按页面分组补齐 Welcome、Config 和 copy mode 的说明。
+- Config 的 `Space` 激活、`Enter` 菜单动作和 `j/k` 导航需要在完整 Help 中更清晰展示。
+- Welcome 的菜单式入口和 `j/k` 导航需要在完整 Help 中更清晰展示。
 
 ---
 
@@ -671,25 +671,17 @@ Help 有两个形态：
 
 | Key | Welcome | Chat | Config | Help |
 |---|---|---|---|---|
-| `Enter` | 选择 | 发送/接受建议/确认 AskUser option | 打开/保存/切换 | - |
+| `Enter` | 选择 | 发送/接受建议/确认 AskUser option | 打开/保存/执行当前菜单动作 | - |
 | `Shift+Enter` / `Alt+Enter` | - | 换行 | - | - |
-| `Esc` | 无操作 | 关闭 overlay/cancel/清空输入/回 Welcome | 返回/取消 | 返回来源页 |
+| `Esc` | - | 关闭 overlay/cancel/清空输入/回 Welcome | 返回/取消 | 返回来源页 |
 | `Ctrl+C` | 退出 | 退出 | 退出 | 退出 |
-| `↑↓` | 移动菜单 | 命令建议或 AskUser options | 移动列表/表单焦点 | - |
+| `↑↓` | 移动菜单 | 命令建议或 AskUser options | 移动列表/表单焦点/确认按钮 | - |
 | `j/k` | 移动菜单 | model picker 中可用 | 移动列表 | - |
-| `n` | New | - | - | - |
-| `r` | Resume | - | - | - |
-| `Ctrl+N` | - | 新会话 | - | - |
-| `Ctrl+O` | Config | Config | - | - |
 | `Ctrl+T` | - | 展开/收起 tool/thinking | - | - |
-| `Ctrl+U/D` | - | viewport 半页滚动 | - | Help viewport 半页滚动 |
+| `Ctrl+Y` | - | 进入/退出 copy mode | - | - |
 | `PgUp/PgDown` | - | viewport 半页滚动 | - | Help viewport 半页滚动 |
 | `?` / `F1` | Help 页面 | help overlay | help overlay | - |
-| `A` | - | - | models list 新增 | - |
-| `E` | - | - | models/detail 编辑 | - |
-| `D` | - | - | models list 删除 | - |
 | `Space` | - | - | models list 激活 | - |
-| `T` | - | - | detail check，占位 | - |
 
 ---
 

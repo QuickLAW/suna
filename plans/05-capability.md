@@ -2,10 +2,15 @@
 
 Suna 的核心创新：空杯出厂 + 按需学习。能力不是预装的，是使用过程中生长的。
 
+> 当前实现状态: **Basic**
+>
+> 已实现的是 declarative `SKILL.md` 加载、能力摘要注入、`[LOAD_SKILL: name]` 后完整内容注入，以及能力目录的基础解析/存储。`main.js` QuickJS/WASM runner、MCP client、lifecycle hooks、skill validate/test 闭环和能力市场仍是目标设计，不能按已运行能力理解。
+
 ## 能力的本质
 
 ```
-能力 = 知识 (SKILL.md) + 可选的程序 (main.js) + 可选的外部服务 (MCP)
+当前实现: 能力 = 知识 (SKILL.md)
+目标设计: 能力 = 知识 (SKILL.md) + 可选的程序 (main.js) + 可选的外部服务 (MCP)
 ```
 
 ## 能力文件格式
@@ -103,6 +108,8 @@ func ParseSkillMD(content string) *Capability {
 
 有 `main.js`，由 QuickJS 引擎（编译为 WASM，wazero 运行）在 agent 进程内执行。覆盖 ~25% 场景。
 
+当前状态：未接入执行链路。Suna 可以解析能力目录和 `SKILL.md`，但不会执行 `main.js`、注册 execute 函数或运行 JS hooks。
+
 QuickJS 支持 ES2024 完整语法，LLM 生成的 JS 代码无需任何转译或约束。WASM sandbox 提供进程级隔离——内存、计算、IO 全部受控。
 
 #### main.js 结构
@@ -196,6 +203,8 @@ host.log(message)                → void
 
 有 `mcp.json`，覆盖 ~5% 场景。
 
+当前状态：未接入 MCP client。`mcp.json` 是目标设计格式，当前不会把 MCP server tools 注册到 agent。
+
 ```json
 {
     "command": "npx",
@@ -211,6 +220,8 @@ host.log(message)                → void
 ## Lifecycle Hooks
 
 skill 的 main.js 可以声明 hooks，自动拦截 agent 的操作。
+
+当前状态：未实现。core 目前没有执行 Shell hooks 或 Skill hooks。
 
 ### 4 个 Hook 点
 
@@ -300,18 +311,11 @@ Agent 启动
 扫描 ~/.suna/capabilities/
   │
   ├── 每个 skill 目录:
-  │   ├── 读 SKILL.md → 解析 name, prompt, type, tools
-  │   ├── 检查 main.js → 有则解析 module.exports
-  │   │   ├── 有 hooks → 按 scope 注册:
-  │   │   │   ├── scope:"always" → 立即注册到 hook 链
-  │   │   │   └── scope:"matched" → 标记，LLM 加载该 skill 时注册
-  │   │   └── 有 execute → 注册为可调用函数
-  │   └── 检查 mcp.json → 有则启动 MCP Client
+  │   └── 读 SKILL.md → 解析 name 和 prompt 摘要
   │
   ├── 每轮对话:
   │   ├── LLM 看到所有 SKILL.md 摘要 → 自行判断加载哪个
-  │   ├── 加载 = 完整 SKILL.md 注入 system prompt
-  │   └── scope:"matched" 的 hooks 此时激活
+  │   └── 加载 = 完整 SKILL.md 注入后续 system prompt
   │
   └── 用户不配置能力选择，LLM 自主决定
 ```
@@ -337,7 +341,7 @@ System Prompt 中的能力部分分两层注入:
     → 当 LLM 判断某个能力与当前任务相关时，在回复中包含:
        [LOAD_SKILL: skill-name]
     → 内核拦截此标记 → 将完整 SKILL.md 注入到下一条 system 消息中
-    → 同时激活 scope:"matched" 的 hooks
+    → 当前只注入 prompt，不激活 hooks
     → 标记从 LLM 输出中移除，用户不可见
   已加载的能力在后续轮次中保持注入，不需要重复加载
 
@@ -349,6 +353,8 @@ System Prompt 中的能力部分分两层注入:
 ## Skill 验证机制
 
 skill 写完后必须通过验证才能上线。验证由 Suna 内核执行，agent 自动闭环。
+
+当前状态：未实现验证命令和自动修复闭环。以下是目标设计。
 
 ### 验证流程
 

@@ -1,8 +1,12 @@
 # 07 — 感知层 (Sense)
 
+> 当前实现状态: **预留 / 设计归档**
+>
+> 当前代码只保留了 SQLite `triggers` 表、IPC 方法常量/状态字段等预留结构；没有 `internal/trigger`、SenseManager、Timer/Watcher/Webhook/Stream runtime，也没有 server 路由 `trigger.*` 方法。以下内容描述目标设计，不代表当前 daemon 已经 24/7 运行感知源。
+
 感知层是 Suna 三层架构的第一层。传统 agent 的感知是被动的——只有当用户发消息时才"醒来"。Suna 的感知是主动的——持续监听环境变化，将信号直接传递给行动层。
 
-感知源在 Daemon (sunad) 进程内 24/7 运行，与 TUI 完全解耦。用户关闭 TUI 后，Timer、Watcher、Webhook、Stream 继续工作。结果存入 daemon，下次 TUI 连接时展示。
+目标设计中，感知源在 Daemon (sunad) 进程内 24/7 运行，与 TUI 完全解耦。当前实现尚未接入这条运行链路。
 
 ## 信号流转
 
@@ -87,7 +91,7 @@ Cron 表达式驱动的定时触发。
 
 ### 配置
 
-用户不直接写 TOML 配置。触发器由用户通过自然语言让 agent 创建，或通过 TUI 命令 `/trigger add` 创建，实际数据存储在 SQLite `triggers` 表中。以下 TOML 格式仅作文档用途，展示配置字段：
+目标设计中，用户不直接写 TOML 配置。触发器由用户通过自然语言让 agent 创建，或通过 TUI/CLI 管理入口创建，实际数据存储在 SQLite `triggers` 表中。以下 TOML 格式仅作文档用途，展示配置字段：
 
 ```toml
 # 文档用途，用户不需要手写

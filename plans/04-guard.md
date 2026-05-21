@@ -17,6 +17,7 @@ Guard 已有最低安全闭环，支持 4 种 mode，真实 confirm 和 LLM revi
 - **LLM Review 修复**: review 失败、JSON parse 失败、不确定、confirm、modify 都保守转用户确认，不再静默放行。
 - **Modify 处理**: 当前不做自动参数改写，作为带 suggestion 的 confirm 处理。
 - **Sub-agent**: 通过 `newGuardForSession()` 继承主 Guard policy、blocked/allowed、audit DB。
+- **审计**: 当前记录 Guard 决策本身；tool 执行后的最终 result/error 暂未回写到 audit_log。
 - **TUI**: Guard confirm overlay 显示 tool/risk/reason/suggestion/params，支持键位操作；Config home 可切换 Guard Mode。
 - **IPC**: `MethodGuardReply` / `NotifyGuardConfirm` / `GuardConfirmParams` / `GuardReplyParams`；server 用 `pendingGuards sync.Map` 管理。
 
@@ -129,12 +130,12 @@ Action 请求 (WriteFile / EditFile / Exec / WriteHTTP)
            │
            ▼
 ┌──────────────────────────┐
-│  Stage 3: LLM 审查       │  用 active_model，+50-100ms
+│  Stage 3: LLM 审查       │  用 active_model
 │                          │
 │  输入:                    │
 │  - 操作类型和参数          │
 │  - 操作意图摘要            │
-│  - 最近 3 轮对话上下文     │
+│  - recent context 字段      │
 │  - 目标文件/路径信息       │
 │                          │
 │  输出:                    │
@@ -146,12 +147,12 @@ Action 请求 (WriteFile / EditFile / Exec / WriteHTTP)
            │
            ▼
 ┌──────────────────────────┐
-│  Stage 4: 执行 + 审计    │
+│  Stage 4: 审计 + 执行    │
 │                          │
 │  执行操作                  │
-│  记录审计日志              │
-│  检查执行结果              │
-│  异常 → 记录失败记忆      │
+│  先记录 Guard 决策          │
+│  再执行操作                 │
+│  执行结果进入 tool result   │
 └──────────────────────────┘
 ```
 
@@ -208,6 +209,8 @@ reason = "读文件直接放行"
 
 内置规则不可配置、不可覆盖。用户自定义规则追加在内置规则之后。
 
+注意：`guard.allowed.reason` 当前可以持久化到 config，但 `newGuardForSession()` 创建 Guard 时只传递 pattern/tool，放行原因暂未进入 Guard 决策或审计输出。
+
 ## LLM 审查的 Prompt
 
 ```
@@ -219,7 +222,7 @@ reason = "读文件直接放行"
 目标: {{ 文件路径 / URL / 命令 }}
 
 上下文:
-{{ 最近 3 轮对话摘要 }}
+{{ recent context，如已设置 }}
 
 判断标准:
 - 用户明确要求的操作 → approve
@@ -243,17 +246,12 @@ reason = "读文件直接放行"
   - 延迟 +50-100ms
 ```
 
-### 为什么只传最近 3 轮
+### Recent Context 当前状态
 
 ```
-审查不需要完整上下文:
-  - 传太多 → 审查成本高、延迟大
-  - 传太少 → 缺少意图信息
-  - 3 轮是经验和成本的平衡点
+Guard 结构中保留 recent context 字段，LLM review prompt 也支持注入该字段。
 
-如果 3 轮不够判断:
-  → decision="confirm"，转用户确认
-  宁可多问一次，不要误放
+当前 core 执行路径尚未在每次工具调用前填充最近 3 轮对话或 sub-agent task context，因此多数 LLM review 的 recent context 为空。若 review 不确定，smart mode 会保守转用户确认。
 ```
 
 ## 风险评级的实现
@@ -342,9 +340,11 @@ func isReadOnlyCommand(cmd string) bool {
 | risk_level | TEXT | low/medium/high |
 | guard_decision | TEXT | approve/reject/confirm |
 | guard_reason | TEXT | 审查原因 |
-| result | TEXT | success/failure |
-| error | TEXT | 错误信息 (如有) |
+| result | TEXT | 预留字段；当前未回写执行结果 |
+| error | TEXT | 预留字段；当前未回写执行错误 |
 ```
+
+当前审计写入发生在 Guard 决策阶段，记录 session/tool/params/risk/decision/reason。tool 执行后的 stdout/stderr、成功/失败和 error 不会再更新到同一条 audit_log。
 
 用户可以通过自然语言查询近期审计记录:
   "帮我看看最近做了哪些操作"
@@ -358,11 +358,10 @@ func isReadOnlyCommand(cmd string) bool {
 Sub agent 的 Guard 和 main 共享同一套规则
 但 sub agent 的操作上下文更少 (sub 没有完整对话历史)
 
-处理方式:
-  - sub 的 Guard 审查 prompt 中额外注入:
-    "这是 main agent 委派的子任务: {task_description}"
-  - 让 Guard 知道操作的大背景
-  - 如果审查不确定 → confirm 转给 main agent → main 转给用户
+当前处理方式:
+  - sub 通过 newGuardForSession() 继承同一套 mode、blocked/allowed、audit DB 和 LLM reviewer
+  - sub 的 Guard recent context 当前未自动注入 delegated task 描述
+  - 如果审查不确定 → confirm 事件回到发起连接，由 TUI 展示给用户
 ```
 
 ## 渐进信任

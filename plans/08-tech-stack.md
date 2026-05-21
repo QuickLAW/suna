@@ -25,10 +25,11 @@
 IPC 通信 (1):
   github.com/Microsoft/go-winio               # Windows Named Pipe (Docker 同款)
 
-TUI (3):
+TUI (4):
   charm.land/bubbletea/v2                     # TUI 框架 (v2)
   charm.land/bubbles/v2                       # TUI 组件 (textarea/viewport/spinner)
   charm.land/lipgloss/v2                      # TUI 样式
+  charm.land/glamour/v2                       # Markdown 渲染
 
 事件触发 (待引入):
   github.com/robfig/cron/v3                   # Cron 调度 (Phase 2)
@@ -117,8 +118,8 @@ MVP 目标平台:
   裸 Windows:  Phase 2 (translate_windows.go 命令翻译层)
 
 平台检测 (Exec shell=auto):
-  Windows: bash 风格 → Git Bash, PowerShell 风格 → powershell.exe, cmd 风格 → cmd.exe
-  macOS/Linux: 默认 bash
+  Windows: 当前实现优先找 Git Bash，再回退 PowerShell/cmd；语法级自动转换仍是后续项
+  macOS/Linux: 当前实现直接使用默认 bash/sh，不做命令语法检测
 ```
 
 ### 可选依赖 (Phase 2+)
@@ -173,7 +174,7 @@ suna/
 │   │   ├── anthropic.go         # anthropic-sdk-go 适配
 │   │   ├── router.go            # 路由工具函数 (RouteWithLLM 已移除)
 │   │   └── token.go             # token 估算
-│   ├── tool/                    # 9 个核心工具
+│   ├── tool/                    # 7 个 registry tools；askuser/spawn 由 core 特殊处理
 │   │   ├── tool.go              # Tool 接口 + 注册
 │   │   ├── readfile.go
 │   │   ├── listdir.go
@@ -215,7 +216,7 @@ suna/
 │   │   └── i18n.go              # key-value 翻译表 (中英文，可扩展)
 │   ├── config/                  # 配置
 │   │   └── config.go            # TOML 加载/保存/验证 + 凭证管理
-│   └── tui/                     # 终端 UI (纯前端，无业务逻辑)
+│   └── tui/                     # 终端 UI (只持有 UI 状态，无模型/DB 业务逻辑)
 │       ├── app.go               # Bubble Tea 主程序 + Setup Wizard
 │       ├── chat.go              # 对话界面 + 键盘快捷键 + 命令补全
 │       ├── commands.go          # TUI 命令 (/new, /model, /compact 等)
@@ -338,7 +339,7 @@ command = "echo checking"
 | `[[guard.allowed]]` | array | 否 | 空 | 用户自定义允许规则，优先于 mode/risk，低于硬拦截。 |
 | `guard.allowed.pattern` | string | 是 | 无 | Go regexp，匹配命令、路径或 URL。 |
 | `guard.allowed.tool` | string | 否 | 空 | 限定 tool；为空表示匹配所有 guard target。 |
-| `guard.allowed.reason` | string | 否 | 空 | 放行原因，当前字段可持久化。 |
+| `guard.allowed.reason` | string | 否 | 空 | 放行原因，当前字段可持久化；Guard 决策中暂未使用该 reason。 |
 | `[ui].theme` | string | 否 | `auto` | TUI 主题：`auto` / `dark` / `light`。 |
 | `[ui].locale` | string | 否 | `en` | TUI 语言；当前内置 `en` 和中文。 |
 | `[[hooks]]` | array | 否 | 空 | Hook 配置结构已支持保存；执行链路仍是后续项。 |
@@ -368,13 +369,13 @@ api_key = "..."
 | 模块 | 状态 | 当前能力 | 主要缺口 |
 |---|---|---|---|
 | Daemon / IPC | Usable MVP | Unix Socket / Windows Named Pipe、JSON-RPC、stream/config/session/guard 通知 | 多客户端边界和错误恢复仍需加强 |
-| Model | Usable MVP | OpenAI-compatible 与 Anthropic provider、tool calling、usage/context 透传 | provider ping、成本统计和高级路由策略不完整 |
-| Core Agent | Usable MVP | agent loop、streaming、reasoning、tool call、AskUser、Spawn、session 管理 | 更细的取消/并发边界和长期任务恢复 |
+| Model | Usable MVP | OpenAI-compatible 与 Anthropic provider、tool calling、usage/context 透传；OpenAI-compatible 支持 streaming，Anthropic 当前非 streaming | provider ping、成本统计、Anthropic usage/reasoning 映射和高级路由策略不完整 |
+| Core Agent | Usable MVP | agent loop、provider-dependent streaming、tool call 并发执行、AskUser、Spawn、session 管理 | 更细的取消/并发边界和长期任务恢复 |
 | Tools | Usable MVP | read/list/readhttp/exec/write/edit/writehttp/askuser/spawn | Windows 命令翻译层仍是后续项 |
 | Guard | Usable MVP | `readonly` / `ask` / `auto` / `smart`、硬拦截、风险分级、TUI confirm、LLM review | rules 编辑 UI、modify 参数改写、渐进信任未完成 |
 | Memory | Usable MVP | SQLite active memory、memory_queue、conversation_state、异步 full compaction、上下文压缩 | 记忆质量评估、用户可编辑记忆 UI |
 | TUI | Usable MVP | Welcome/Chat/Config/Help、模型配置、工具记录、AskUser、Guard overlay、compact、active memory list | Provider test、Config 高级项和 Help 覆盖仍不完整 |
-| Logging | Usable MVP | `~/.suna/logs/{app,llm,ipc,memory,agent,config}.log` 分类文本日志，格式为 `time level event key=value`；所有 `Provider.Complete` 调用统一写入 `llm.log` 且每次调用只写一条最终记录；每类日志只保留一份最新文件，超过 10MB 清空重写 | UI 查看日志、导出诊断包 |
+| Logging | Usable MVP | 分类文本日志和 provider 调用日志已接入；具体文件分类以 `internal/logging` 当前实现为准 | UI 查看日志、导出诊断包 |
 | Capability | Basic | SKILL.md 加载和能力目录结构 | JS/WASM runner、MCP client、能力市场未完成 |
 
 后续路线以 `plans/00-progress.md` 为准；本文件只记录当前技术选型、目录结构和配置字段。
