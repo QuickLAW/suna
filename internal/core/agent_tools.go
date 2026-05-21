@@ -39,6 +39,8 @@ func (a *Agent) guardLLMReview(ctx context.Context, toolName string, paramsJSON 
 	}
 	req := &model.CompletionRequest{
 		Model:     modelRef,
+		Purpose:   "guard_review",
+		RequestID: uuid.New().String(),
 		System:    "Reply with JSON only.",
 		Messages:  []model.Message{model.NewTextMessage(model.RoleUser, reviewPrompt)},
 		MaxTokens: 100,
@@ -212,8 +214,6 @@ func (a *Agent) executeSpawn(ctx context.Context, params map[string]any) tool.Re
 		registry:             subRegistry,
 		guard:                a.newGuardForSession(sessionID),
 		working:              memory.NewWorkingMemory(),
-		episodic:             a.episodic,
-		semantic:             a.semantic,
 		prompts:              a.prompts,
 		sessionID:            sessionID,
 		modelRef:             modelRef,

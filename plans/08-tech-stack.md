@@ -191,17 +191,16 @@ suna/
 │   │   ├── rules_unix.go        # Unix 硬规则 (//go:build !windows)
 │   │   ├── rules_windows.go     # Windows 硬规则 (//go:build windows)
 │   │   └── sensitive.go         # 敏感信息检测
-│   ├── memory/                  # 分层记忆
-│   │   ├── store.go             # Store: SQLite 初始化 + schema
-│   │   ├── working.go           # 工作记忆 (进程内)
-│   │   ├── episodic.go          # 情景记忆 (SQLite + FTS5 + 向量)
-│   │   ├── semantic.go          # 语义记忆 (SQLite)
-│   │   ├── entity.go            # 实体索引
-│   │   ├── session.go           # 会话持久化 + 用量记录
-│   │   ├── compress.go          # 上下文压缩
-│   │   ├── queue.go             # 提取 channel + 恢复 (扫描 memory_extracted=0)
-│   │   ├── worker.go            # Memory Worker (异步批量提取 goroutine)
-│   │   └── significance.go      # 显著性判断 (规则，零 LLM)
+	│   ├── memory/                  # 轻量 active memory
+	│   │   ├── store.go             # Store: SQLite 初始化 + schema
+	│   │   ├── active.go            # user_memory 存取、召回和 compact diff
+	│   │   ├── conversation.go      # 最近一轮会话恢复状态
+	│   │   ├── working.go           # 工作记忆 (进程内)
+	│   │   ├── session.go           # 用量记录 + legacy session helpers
+	│   │   ├── compress.go          # 上下文压缩
+	│   │   ├── queue.go             # memory_queue 写入 + pending 恢复
+	│   │   ├── worker.go            # Memory Worker (异步 full compaction)
+	│   │   └── significance.go      # 显著性判断 (规则，零 LLM)
 │   ├── capability/              # 能力管理
 │   │   └── capability.go        # 加载/存储/解析能力目录 + LOAD_SKILL 处理
 │   ├── prompt/                  # 提示词模板
@@ -211,7 +210,7 @@ suna/
 │   │       ├── spawn_system.md  # sub-agent 独立 prompt (task/env/tools/context/rules)
 │   │       ├── guard.md         # Guard 审查提示词
 │   │       ├── compress.md      # 压缩摘要提示词
-│   │       └── extract.md       # 记忆提取提示词
+	│   │       └── extract_batch.md # active memory full compaction 提示词
 │   ├── i18n/                    # 国际化
 │   │   └── i18n.go              # key-value 翻译表 (中英文，可扩展)
 │   ├── config/                  # 配置
@@ -373,8 +372,9 @@ api_key = "..."
 | Core Agent | Usable MVP | agent loop、streaming、reasoning、tool call、AskUser、Spawn、session 管理 | 更细的取消/并发边界和长期任务恢复 |
 | Tools | Usable MVP | read/list/readhttp/exec/write/edit/writehttp/askuser/spawn | Windows 命令翻译层仍是后续项 |
 | Guard | Usable MVP | `readonly` / `ask` / `auto` / `smart`、硬拦截、风险分级、TUI confirm、LLM review | rules 编辑 UI、modify 参数改写、渐进信任未完成 |
-| Memory | Usable MVP | SQLite、session 持久化、FTS、异步提取、上下文压缩 | embedding 自动化和实体/语义查询体验需加强 |
-| TUI | Usable MVP | Welcome/Chat/Config/Help、模型配置、工具记录、AskUser、Guard overlay、compact、memory search | Provider test、Config 高级项和 Help 覆盖仍不完整 |
+| Memory | Usable MVP | SQLite active memory、memory_queue、conversation_state、异步 full compaction、上下文压缩 | 记忆质量评估、用户可编辑记忆 UI |
+| TUI | Usable MVP | Welcome/Chat/Config/Help、模型配置、工具记录、AskUser、Guard overlay、compact、active memory list | Provider test、Config 高级项和 Help 覆盖仍不完整 |
+| Logging | Usable MVP | `~/.suna/logs/{app,llm,ipc,memory,agent,config}.log` 分类文本日志，格式为 `time level event key=value`；所有 `Provider.Complete` 调用统一写入 `llm.log` 且每次调用只写一条最终记录；每类日志只保留一份最新文件，超过 10MB 清空重写 | UI 查看日志、导出诊断包 |
 | Capability | Basic | SKILL.md 加载和能力目录结构 | JS/WASM runner、MCP client、能力市场未完成 |
 
 后续路线以 `plans/00-progress.md` 为准；本文件只记录当前技术选型、目录结构和配置字段。

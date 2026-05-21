@@ -152,12 +152,12 @@ func (t *TUI) compactCmd() tea.Cmd {
 	}
 }
 
-func (t *TUI) searchMemoryCmd(query string, topK int) tea.Cmd {
+func (t *TUI) listMemoryCmd() tea.Cmd {
 	return func() tea.Msg {
 		if t.ipcCli == nil {
 			return ipcErrorNotification("config.error", fmt.Errorf("%s", t.tr("error.not_connected")))
 		}
-		if err := t.ipcCli.SearchMemory(query, topK); err != nil {
+		if err := t.ipcCli.ListMemory(); err != nil {
 			return ipcErrorNotification("config.error", err)
 		}
 		return nil

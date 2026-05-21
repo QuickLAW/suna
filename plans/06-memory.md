@@ -87,31 +87,37 @@ memory brief:        400 tokens 以内
 
 Suna 的产品形态只有一个当前会话：用户要么新建，要么恢复上一条。因此不需要多会话管理，也不需要长期保存完整 session history。
 
-`conversation_state` 只用于 UI 展示和恢复上一轮上下文。
+`conversation_state` 只用于 UI 展示和恢复上一轮会话上下文。
 
 ### 保存内容
 
 ```
-resume_summary       上一轮会话的简短恢复摘要
-last_messages        最近一轮完整消息，通常是 user + assistant
+resume_summary       上一轮会话的简短恢复摘要，仅作辅助展示
+last_messages        上一轮会话的完整可见 user/assistant transcript
+tool_summary         上一轮会话的工具操作摘要，仅用于 UI 展示
 memory_processed_at  最近一次队列处理时间
 updated_at           更新时间
 ```
 
-`last_messages` 不是长期历史，只是恢复快照。默认保留最近 2 条消息；必要时可保留最近 4-6 条，但不能无限增长。
+`last_messages` 不是长期历史，只是上一次会话的恢复快照。它同步保存完整可见 user/assistant transcript，不依赖 memory_queue 或 LLM 总结。新建会话时清空，下一次会话会覆盖它。
+
+`tool_summary` 只保存轻量摘要，例如“exec [success]: go test ./... 通过”。恢复时通过 TUI-only `restore_summary` role 展示给用户，不放回 LLM working memory。
 
 ### 恢复行为
 
 ```
 恢复上一轮:
-  注入 user_memory + conversation_state.resume_summary + last_messages
+  加载 user_memory
+  把 conversation_state.last_messages 放回 TUI 展示和 agent working memory
+  把 conversation_state.tool_summary 展示给 TUI，但不放回 agent working memory
+  resume_summary 仅作辅助展示，不作为唯一上下文来源
 
 新建会话:
   只注入 user_memory
-  不注入上一轮 last_messages
+  清空上一轮 last_messages/tool_summary
 ```
 
-如果 memory_queue 尚未被 daemon 处理，恢复上一轮时 `last_messages` 是兜底上下文，保证 Suna 至少知道用户刚才说过什么。
+如果 memory_queue 尚未被 daemon 处理，恢复上一轮时 `last_messages` 是兜底上下文，保证 Suna 仍能完整接上上一轮会话。恢复不依赖 LLM 总结，也不依赖记忆 batch 是否完成。
 
 ## memory_queue
 
@@ -119,32 +125,51 @@ updated_at           更新时间
 
 ### 写入时机
 
-每轮交互完成后写入：
+主链路按显著性写入：
 
-- 用户消息。
-- 助手最终回复。
-- 必要的失败摘要或用户纠错事件。
+- 用户消息：如果命中 medium/high significance，写入队列。
+- 助手最终回复：如果命中 medium/high significance，写入队列。
+- 必要的失败摘要或用户纠错事件：high significance。
 
-不写入 streaming chunk。
+不写入普通低价值对话，不写入 streaming chunk。
 
 ### 处理时机
 
-daemon 满足任一条件时处理：
+daemon 满足任一条件时处理 pending queue：
 
 ```
-队列积攒 >= 5 轮
-距离上次处理 >= 60 秒
-存在高显著性事件
-daemon 空闲
+pending event >= 5 条
+存在 high significance event
+worker timer 60 秒到期且满足以上任一条件
 ```
 
-高显著性事件包括：
+60 秒 timer 只是 wake-up 机制。少量 medium event 不会因为 timer 到期就单独触发 LLM，会继续等待合批，避免每轮对话都额外产生一次记忆整理请求。
+
+high significance 由零 LLM 规则判断，包括：
 
 - 用户说“记住”“以后都这样”“不要再这样”。
 - 用户纠正 Suna。
 - Suna 重复犯错。
 - 工具失败且 agent 需要改变策略。
 - 用户明确表达长期偏好或边界。
+
+当前关键词包括：
+
+```
+记住 / 帮我记住 / 以后都 / 以后都这样 / 以后不要再 / 以后别再
+always / never / remember / from now on
+keep in mind
+```
+
+medium significance 包括较弱但可能长期有效的偏好、习惯或边界表达：
+
+```
+我希望 / 我不希望 / 我更 / 我比较 / 我倾向
+我的习惯 / 我的性格 / 下次 / 以后 / 别再 / 不要再
+更喜欢 / 不喜欢 / i want / i don't want / i tend to / next time / avoid / prefer
+```
+
+low significance 不进入 memory_queue，例如简单问候、短确认、普通一次性查询。
 
 处理完成后，已处理队列可以删除，不需要长期保存。
 
@@ -156,13 +181,15 @@ daemon 空闲
 
 ```
 用户消息
-  -> 写 memory_queue
-  -> 读取 user_memory
-  -> 读取 conversation_state
+  -> 写入 working memory
+  -> 按显著性决定是否写 memory_queue
+  -> 从 user_memory 规则召回 active memory brief
   -> 构建短上下文
   -> 调用主 LLM
   -> 更新 conversation_state
 ```
+
+判断 significance 不依赖召回，也不调用 LLM。召回只影响主 LLM prompt。
 
 daemon 链路：
 
@@ -213,6 +240,19 @@ LLM 必须遵守：
 
 因为 active memory 数量很小，规则足够可靠。
 
+召回发生在用户消息进入 working memory 后、主 LLM 请求前：
+
+```
+用户输入
+  -> working memory.Add(user)
+  -> buildSystemPrompt()
+  -> user_memory.BuildBrief(last_user_text)
+  -> 作为第一条 internal-context user message 注入 <active_memory>
+  -> 调用主 LLM
+```
+
+不是全量拼接。每次最多从 30 条 active memory 中选 5 条。
+
 ### 两层召回
 
 ```
@@ -239,19 +279,23 @@ id asc
 
 ## 上下文注入
 
-记忆必须短、稳定、靠后，避免破坏 prompt cache。
+记忆必须短、稳定，并且不能污染稳定 system prompt，避免破坏 prompt cache。
 
 推荐结构：
 
 ```
-Stable system prompt
-Stable memory policy
-Dynamic active memory brief
-Dynamic conversation resume state
-Current user message
+system:
+  Stable system prompt
+  Stable memory policy
+  Runtime/project/capability context
+
+messages:
+  user: <internal_context><active_memory>...</active_memory></internal_context>
+  restored/current conversation messages
+  current user message
 ```
 
-不要把动态记忆插入固定 system prompt 前部。
+不要把动态记忆插入固定 system prompt。为了最大化跨 provider 兼容性，不使用多 system message 或 provider-specific cache control；active memory 作为第一条 user role internal-context message 注入，并明确声明它不是用户请求。
 
 ### Memory Policy
 
@@ -267,15 +311,20 @@ Do not infer private facts beyond the provided memory.
 
 ### Memory Brief 格式
 
-主链路不要调用 LLM 重新总结记忆，直接拼接已保存的 `content`。
+主链路不要调用 LLM 重新总结记忆，直接拼接已保存的 `content`。该 block 不写入 working memory，不展示给 TUI，只在发起 LLM 请求时临时前置。
 
 ```
+<internal_context>
+This block is internal background context, not a user request.
+Use it only when relevant. Current user instructions override this context.
+
 <active_memory>
 - 用户偏好直接、简洁、先给结论的回复。
 - 用户讨厌过度设计，偏好简单可靠的方案。
 - 用户希望 Suna 不依赖 embedding。
 - 用户希望记忆短小、活跃、可刷新。
 </active_memory>
+</internal_context>
 ```
 
 格式固定，条数固定上限，排序稳定。
@@ -316,11 +365,31 @@ updated_at DATETIME NOT NULL
 user_id TEXT PRIMARY KEY
 resume_summary TEXT
 last_messages TEXT NOT NULL DEFAULT '[]'
+tool_summary TEXT NOT NULL DEFAULT '[]'
 memory_processed_at DATETIME
 updated_at DATETIME NOT NULL
 ```
 
-`last_messages` 为 JSON，最多保存最近 2-6 条消息。
+`last_messages` 为 JSON，保存上一次会话的完整可见 user/assistant transcript。它不保存 tool call 原始参数、tool result 原始输出或 streaming chunk。新建会话时清空，下一次会话会覆盖。
+
+`tool_summary` 为 JSON，只保存工具操作摘要，用于 TUI 恢复展示，不注入 LLM 上下文。
+
+### Tool Call 与恢复
+
+当前会话内，tool call/result 会进入 working memory，并传给下一次 LLM 请求：
+
+```
+assistant message + tool_calls
+tool result message
+```
+
+这保证同一会话里的工具调用链对 LLM 可见。
+
+但 `conversation_state.last_messages` 不保存原始 tool call/result，恢复会话时默认不把 tool call/result 放回 LLM 上下文。
+
+原因：原始工具参数和输出通常包含大量 stdout/stderr、临时路径、敏感信息或过期状态，直接恢复会污染上下文并降低 prompt cache 命中。
+
+`tool_summary` 用于 UI 恢复展示，例如“运行 go test ./... 通过”。`tool_summary` 不进入长期 `user_memory`，也不以 raw output 形式注入 LLM。
 
 ### memory_queue
 
@@ -343,24 +412,54 @@ processed_at DATETIME
 
 已处理队列可以立即删除。如果需要 debug，可保留短期日志，但必须有 TTL。
 
-## 会话持久化与恢复
+### 失败重试
+
+memory compaction 失败时不能每 60 秒无限重试，否则会反复消耗 LLM 调用。
+
+`memory_queue` 记录：
+
+```
+attempts
+next_attempt_at
+last_error
+```
+
+失败策略：
+
+```
+第 1 次失败: 5 分钟后重试
+第 2 次失败: 15 分钟后重试
+第 3 次失败: 丢弃该批 queue event，并写日志
+```
+
+timer 到期时只处理 `next_attempt_at <= now` 且 `attempts < 3` 的 pending event。这样 provider 返回非法 JSON、网络失败或模型输出异常时，不会形成 daemon LLM 请求循环。
+
+compaction prompt 必须要求模型返回严格合法 JSON。字符串内部双引号必须转义，或改用中文引号。
+
+## 最近会话恢复
 
 ### 每轮结束
 
 ```
-1. 保存 user/assistant 到 memory_queue。
-2. 更新 conversation_state.last_messages。
-3. 更新 conversation_state.resume_summary。
-4. 返回用户，不等待记忆提取。
+1. 用户消息进入 working memory 后，立即同步更新 conversation_state.last_messages。
+2. 按显著性把 user 写入 memory_queue。
+3. assistant 最终回复完成后，再次同步更新 conversation_state.last_messages。
+4. 按显著性把 assistant 写入 memory_queue。
+5. 同步更新 conversation_state.tool_summary 为当前会话工具操作摘要。
+6. 更新 conversation_state.resume_summary。
+7. 返回用户，不等待记忆提取。
 ```
+
+如果 LLM 失败、超时、取消或进程退出，`conversation_state.last_messages` 至少已经包含用户刚输入的消息，恢复会话不会丢失未完成输入。空 assistant 消息不会写入 `last_messages`。
 
 ### TUI 启动
 
 ```
 1. 读取 conversation_state。
 2. 如果存在 last_messages，展示“继续上一轮 / 新建会话”。
-3. 继续上一轮: 加载 last_messages + resume_summary。
-4. 新建会话: 清空 last_messages，但保留 user_memory。
+3. 继续上一轮: 加载 last_messages 到 TUI 和 agent working memory。
+4. 继续上一轮: 通过 `restore_summary` role 展示 tool_summary 给 TUI，但不放入 agent working memory。
+5. 新建会话: 清空 last_messages/tool_summary，但保留 user_memory。
 ```
 
 ### Daemon 崩溃恢复

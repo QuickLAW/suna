@@ -16,6 +16,7 @@ import (
 	"github.com/alanchenchen/suna/internal/capability"
 	"github.com/alanchenchen/suna/internal/config"
 	"github.com/alanchenchen/suna/internal/guard"
+	"github.com/alanchenchen/suna/internal/logging"
 	"github.com/alanchenchen/suna/internal/memory"
 	"github.com/alanchenchen/suna/internal/model"
 	"github.com/alanchenchen/suna/internal/prompt"
@@ -36,7 +37,7 @@ API 表面：
 	Run(ctx, input) ←chan Event    核心：输入 → 事件流
 	NewSession()                    新建会话
 	ListModels() []string           列出可用模型
-	SearchMemory(ctx, query)        搜索记忆
+	ListMemory(ctx)                 查看 active memory
 	Compact()                       压缩上下文
 	Close()                         释放资源
 */
@@ -46,10 +47,9 @@ type Agent struct {
 	registry             *tool.Registry
 	guard                *guard.Guard
 	working              *memory.WorkingMemory
-	episodic             *memory.EpisodicStore
-	semantic             *memory.SemanticStore
 	sessions             *memory.SessionStore
-	entities             *memory.EntityStore
+	memories             *memory.MemoryStore
+	conversation         *memory.ConversationStore
 	compressor           *memory.Compressor
 	prompts              *prompt.Loader
 	store                *memory.Store
@@ -58,6 +58,7 @@ type Agent struct {
 	turnCount            int
 	modelRef             string
 	resumeInput          string
+	toolSummary          []memory.ToolSummaryItem
 	systemPromptOverride string
 
 	extractQueue  *memory.ExtractQueue
@@ -113,18 +114,13 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 		return nil, fmt.Errorf("init prompts: %w", err)
 	}
 
-	episodic := memory.NewEpisodicStore(store.DB())
-	semantic := memory.NewSemanticStore(store.DB())
 	sessions := memory.NewSessionStore(store.DB())
-	entities := memory.NewEntityStore(store.DB())
-
-	sessions.ExpireOldSessions(context.Background(), 7*24*time.Hour)
+	memories := memory.NewMemoryStore(store.DB())
+	conversation := memory.NewConversationStore(store.DB())
 
 	var extractProvider model.Provider
 	if router != nil {
-		if p, _ := router.EmbeddingProvider(); p != nil {
-			extractProvider = p
-		} else if p, err := router.Provider("fast"); err == nil {
+		if p, err := router.Provider("fast"); err == nil {
 			extractProvider = p
 		} else if p := router.DefaultProvider(); p != nil {
 			extractProvider = p
@@ -132,24 +128,16 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 	}
 
 	extractQueue := memory.NewExtractQueue(store.DB())
-	extractWorker := memory.NewWorker(
-		extractQueue,
-		episodic,
-		semantic,
-		entities,
-		sessions,
-		extractProvider,
-	)
+	extractWorker := memory.NewWorker(extractQueue, memories, store.DB(), extractProvider)
 
 	agent := &Agent{
 		cfg:           cfg,
 		router:        router,
 		registry:      registry,
 		working:       memory.NewWorkingMemory(),
-		episodic:      episodic,
-		semantic:      semantic,
 		sessions:      sessions,
-		entities:      entities,
+		memories:      memories,
+		conversation:  conversation,
 		compressor:    memory.NewCompressor(extractProvider),
 		prompts:       prompts,
 		store:         store,
@@ -279,12 +267,10 @@ func (a *Agent) Run(ctx context.Context, input string) <-chan Event {
 		a.working.AddMessage(model.NewTextMessage(model.RoleUser, input))
 
 		a.turnCount++
-		if a.sessions != nil {
-			if a.turnCount == 1 {
-				a.sessions.CreateSession(runCtx, a.sessionID)
-			}
-			a.sessions.SaveMessage(runCtx, a.sessionID, a.turnCount, "user", input)
-		}
+		a.enqueueMemoryEvent(runCtx, model.RoleUser, input, false, false, false, false)
+		// 用户输入后立刻保存一次恢复快照。这样即使 LLM 还没返回、进程退出或请求失败，
+		// 下次恢复会话时也能看到这条未完成的用户输入，而不是依赖 assistant 完成后才落库。
+		a.saveConversationState(runCtx)
 
 		var hadToolCall bool
 		var hadToolFailure bool
@@ -304,6 +290,7 @@ func (a *Agent) Run(ctx context.Context, input string) <-chan Event {
 			} else {
 				_, ref, err := a.router.Route(runCtx, input)
 				if err != nil {
+					logging.Error("agent", "route_failed", err, logging.Event{"session_id": a.sessionID})
 					events <- Event{Type: EventStatus, Content: "error: " + err.Error()}
 					return
 				}
@@ -312,12 +299,13 @@ func (a *Agent) Run(ctx context.Context, input string) <-chan Event {
 
 			// 构建请求
 			systemPrompt, _ := a.buildSystemPrompt(runCtx)
-			messages := a.working.Messages()
+			messages := a.buildRequestMessages(runCtx)
 			tools := a.buildToolDefs()
 			modelID := resolveModelID(a.cfg, modelRef)
-
 			req := &model.CompletionRequest{
 				Model:     modelID,
+				Purpose:   "chat",
+				RequestID: uuid.New().String(),
 				System:    systemPrompt,
 				Messages:  messages,
 				Tools:     tools,
@@ -333,6 +321,7 @@ func (a *Agent) Run(ctx context.Context, input string) <-chan Event {
 			} else {
 				p, _ := a.router.Provider(modelRef)
 				if p == nil {
+					logging.Error("agent", "provider_not_found", fmt.Errorf("provider not found"), logging.Event{"session_id": a.sessionID, "model_ref": modelRef})
 					events <- Event{Type: EventStatus, Content: "error: provider not found"}
 					return
 				}
@@ -392,7 +381,7 @@ func (a *Agent) Run(ctx context.Context, input string) <-chan Event {
 				}
 			}
 
-			if fullContent != "" || len(toolCalls) == 0 {
+			if fullContent != "" || len(toolCalls) > 0 {
 				// 处理 [LOAD_SKILL: name] 标记
 				if a.caps != nil {
 					cleaned, loaded := a.caps.ProcessLoadMarkers(fullContent)
@@ -428,11 +417,9 @@ func (a *Agent) Run(ctx context.Context, input string) <-chan Event {
 				if doneEvt.HasUsage && doneEvt.ContextTokens <= 0 {
 					doneEvt.ContextTokens = doneEvt.InputTokens + doneEvt.OutputTokens
 				}
-				if a.sessions != nil && fullContent != "" {
-					a.sessions.SaveMessage(runCtx, a.sessionID, a.turnCount, "assistant", fullContent)
-				}
+				a.enqueueMemoryEvent(runCtx, model.RoleAssistant, fullContent, hadToolCall, hadToolFailure, false, false)
+				a.saveConversationState(runCtx)
 				events <- doneEvt
-				go a.extractMemories(runCtx, input, fullContent, hadToolCall, hadToolFailure, false, false)
 				return
 			}
 
@@ -502,6 +489,7 @@ func (a *Agent) Run(ctx context.Context, input string) <-chan Event {
 					TextContent: r.result.Content,
 					Content:     []model.ContentBlock{{Type: model.ContentText, Text: r.result.Content}},
 				})
+				a.addToolSummary(r.tc.Name, r.result)
 			}
 
 			// 记录每次 LLM 调用的用量

@@ -232,7 +232,7 @@ func (t *TUI) renderWelcomeInfo() string {
 		rows = append(rows, fmt.Sprintf("%-8s %s", t.tr("tui.status.uptime"), styleHL.Render(s.Uptime)))
 	}
 	if s.Memory != nil {
-		rows = append(rows, fmt.Sprintf("%-8s %s", t.tr("tui.status.memory"), styleHL.Render(fmt.Sprintf("%d ep · %d ent", s.Memory.Episodes, s.Memory.Entities))))
+		rows = append(rows, fmt.Sprintf("%-8s %s", t.tr("tui.status.memory"), styleHL.Render(fmt.Sprintf("%d active · %d core · %d queued", s.Memory.Active, s.Memory.Core, s.Memory.Queued))))
 	}
 	if s.Sessions != nil {
 		rows = append(rows, fmt.Sprintf("%-8s %s", t.tr("tui.status.session"), styleHL.Render(fmt.Sprintf("%d active · %d done", s.Sessions.Active, s.Sessions.Completed))))

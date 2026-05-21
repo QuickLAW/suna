@@ -134,6 +134,10 @@ func (t *TUI) syncContent() {
 			content, _ := msg.content.(string)
 			sb.WriteString("\n" + styleErrLine.Render("  ✗ "+content) + "\n")
 			inSunaBlock = false
+		case "restore_summary":
+			content, _ := msg.content.(string)
+			sb.WriteString("\n" + t.renderRestoreSummaryBox(content) + "\n")
+			inSunaBlock = false
 		default:
 			content, _ := msg.content.(string)
 			sb.WriteString("\n" + styleSysLine.Render("  ◆ "+content) + "\n")
@@ -522,7 +526,7 @@ func (t *TUI) allCommands() []commandSpec {
 		{"/compact", "tui.command.compact.desc"},
 		{"/config", "tui.command.config.desc"},
 		{"/model", "tui.command.model.desc"},
-		{"/memory search", "tui.command.memory.desc"},
+		{"/memory", "tui.command.memory.desc"},
 		{"/help", "tui.command.help.desc"},
 	}
 }

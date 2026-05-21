@@ -84,6 +84,34 @@ func (t *TUI) renderGuardOverlay(width int) string {
 	return boxStyle.Width(w).Padding(1, 2).Render(strings.Join(lines, "\n"))
 }
 
+func (t *TUI) renderRestoreSummaryBox(content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	width := max(36, min(76, t.width-6))
+	inner := max(20, width-8)
+	lines := strings.Split(content, "\n")
+	if len(lines) > 0 && strings.Contains(lines[0], "：") {
+		lines = lines[1:]
+	}
+	var body []string
+	for _, line := range lines {
+		line = strings.TrimSpace(strings.TrimPrefix(line, "-"))
+		if line == "" {
+			continue
+		}
+		for _, wrapped := range wrapLine(line, inner) {
+			body = append(body, styleDim.Render(wrapped))
+		}
+	}
+	if len(body) == 0 {
+		body = []string{styleDim.Render(content)}
+	}
+	title := styleHL.Render("上一轮操作摘要")
+	return indentLines(boxStyle.Width(width).Padding(1, 2).Render(title+"\n"+strings.Join(body, "\n")), "  ")
+}
+
 func (t *TUI) guardButton(idx int, label string) string {
 	if t.guardCursor == idx {
 		return styleCursor.Render("▶ ") + styleHL.Render(label)

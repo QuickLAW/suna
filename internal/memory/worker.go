@@ -2,39 +2,20 @@ package memory
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
-	"database/sql"
-
+	"github.com/alanchenchen/suna/internal/logging"
 	"github.com/alanchenchen/suna/internal/model"
 	"github.com/alanchenchen/suna/internal/prompt"
 )
 
-/*
-Worker 异步批量处理记忆提取。
-
-设计原则（06-memory.md Memory Worker）：
-  - 独立 goroutine，常驻 daemon 进程
-  - 积攒到 N 轮或空闲 M 秒后批量提取
-  - 不阻塞 Agent Loop
-  - TUI 关闭后 worker 继续处理
-  - 单次 LLM 调用同时产出情景记忆 + 语义记忆 + 实体
-
-触发条件（满足任一）：
-  - 队列积攒 ≥ 5 轮未提取的交互
-  - 距上次提取 ≥ 60 秒
-  - 队列中存在高显著性交互
-*/
 type Worker struct {
 	queue    *ExtractQueue
-	episodic *EpisodicStore
-	semantic *SemanticStore
-	entities *EntityStore
-	sessions *SessionStore
+	memories *MemoryStore
 	db       *sql.DB
 	provider model.Provider
 	prompts  *prompt.Loader
@@ -46,257 +27,173 @@ const (
 	batchTimeout = 60 * time.Second
 )
 
-func NewWorker(
-	queue *ExtractQueue,
-	episodic *EpisodicStore,
-	semantic *SemanticStore,
-	entities *EntityStore,
-	sessions *SessionStore,
-	provider model.Provider,
-) *Worker {
-	return &Worker{
-		queue:    queue,
-		episodic: episodic,
-		semantic: semantic,
-		entities: entities,
-		sessions: sessions,
-		provider: provider,
-		closed:   make(chan struct{}),
-	}
+func NewWorker(queue *ExtractQueue, memories *MemoryStore, db *sql.DB, provider model.Provider) *Worker {
+	return &Worker{queue: queue, memories: memories, db: db, provider: provider, closed: make(chan struct{})}
 }
 
-func (w *Worker) SetPrompts(p *prompt.Loader) {
-	w.prompts = p
-}
+func (w *Worker) SetPrompts(p *prompt.Loader) { w.prompts = p }
 
-/*
-Run 启动 worker 主循环。阻塞直到 channel 关闭。
-*/
 func (w *Worker) Run() {
 	defer close(w.closed)
-
-	var batch []ExtractItem
 	timer := time.NewTimer(batchTimeout)
 	defer timer.Stop()
-
 	for {
 		select {
-		case item, ok := <-w.queue.Ch():
+		case _, ok := <-w.queue.Ch():
 			if !ok {
-				if len(batch) > 0 {
-					w.processBatch(batch)
-				}
+				w.processPending()
 				return
 			}
-			batch = append(batch, item)
-
-			hasHigh := false
-			for _, it := range batch {
-				if it.Significance == SignificanceHigh {
-					hasHigh = true
-					break
-				}
+			// 普通事件攒批处理；high significance 事件尽快处理，减少“用户刚纠正但记忆还没更新”的窗口。
+			if w.pendingCount() >= batchSize || w.hasHighPending() {
+				w.processPending()
+				resetTimer(timer)
 			}
-
-			if len(batch) >= batchSize || hasHigh {
-				w.processBatch(batch)
-				batch = nil
-				if !timer.Stop() {
-					select {
-					case <-timer.C:
-					default:
-					}
-				}
-				timer.Reset(batchTimeout)
-			}
-
 		case <-timer.C:
-			if len(batch) > 0 {
-				w.processBatch(batch)
-				batch = nil
+			// timer 只是兜底 wake-up。为了避免“每条中等显著性消息都额外触发一次 LLM”，
+			// 只有 high 事件或队列攒够 batchSize 时才处理；少量 medium 继续等待合批。
+			if w.pendingCount() >= batchSize || w.hasHighPending() {
+				w.processPending()
 			}
 			timer.Reset(batchTimeout)
 		}
 	}
 }
 
-func (w *Worker) Wait() {
-	<-w.closed
+func (w *Worker) Wait() { <-w.closed }
+
+func (w *Worker) pendingCount() int {
+	if w.db == nil {
+		return 0
+	}
+	return QueueDueCount(context.Background(), w.db, DefaultUserID)
 }
 
-/*
-processBatch 批量处理一组交互记录。
+func (w *Worker) hasHighPending() bool {
+	if w.db == nil {
+		return false
+	}
+	var n int
+	_ = w.db.QueryRow(`SELECT COUNT(*) FROM memory_queue WHERE user_id = ? AND processed_at IS NULL AND significance = ? AND attempts < ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?)`, DefaultUserID, SignificanceHigh, maxQueueAttempts, time.Now()).Scan(&n)
+	return n > 0
+}
 
-一次 LLM 调用同时产出：
-  - 情景记忆（episodic_memories）
-  - 语义事实（semantic_facts）
-  - 实体（entities）
-
-然后标记 session_messages 为 memory_extracted=1。
-*/
-func (w *Worker) processBatch(items []ExtractItem) {
-	if len(items) == 0 {
+func (w *Worker) processPending() {
+	if w == nil || w.db == nil || w.memories == nil {
 		return
 	}
-
-	// 1. 存精简版交互摘要到 episodic（零 LLM 成本）
-	for _, item := range items {
-		w.storeEpisodicSummary(item)
-	}
-
-	// 2. LLM 提取事实和实体。失败时保留 memory_extracted=0，交给后续恢复/重试处理。
-	if w.provider != nil {
-		if err := w.extractBatch(items); err != nil {
-			log.Printf("[memory] extract batch error: %v", err)
-			return
-		}
-	}
-
-	// 3. 标记为已提取
-	for _, item := range items {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		MarkExtracted(ctx, w.sessions.db, item.SessionID, item.Turn)
-		cancel()
-	}
-}
-
-func (w *Worker) storeEpisodicSummary(item ExtractItem) {
-	if w.episodic == nil {
-		return
-	}
-	ctx := context.Background()
-	content := fmt.Sprintf("User: %s\nAssistant: %s",
-		truncateStr(item.UserInput, 500),
-		truncateStr(item.AgentOutput, 500),
-	)
-	mem := &EpisodicMemory{
-		Content:   content,
-		Type:      "interaction",
-		Source:    "auto",
-		SessionID: item.SessionID,
-	}
-	if err := w.episodic.Store(ctx, mem); err != nil {
-		log.Printf("[memory] episodic store error: %v", err)
-	}
-}
-
-type extractResult struct {
-	Episodes []extractEpisode `json:"episodes"`
-	Facts    []extractFact    `json:"facts"`
-}
-
-type extractEpisode struct {
-	Content  string   `json:"content"`
-	Type     string   `json:"type"`
-	Entities []string `json:"entities"`
-}
-
-type extractFact struct {
-	Type   string `json:"type"`
-	Key    string `json:"key"`
-	Value  string `json:"value"`
-	Source string `json:"source"`
-}
-
-func (w *Worker) extractBatch(items []ExtractItem) error {
-	var systemPrompt string
-	if w.prompts != nil {
-		interactions := make([]prompt.ExtractInteraction, len(items))
-		for i, item := range items {
-			interactions[i] = prompt.ExtractInteraction{
-				Index:       i + 1,
-				UserInput:   truncateStr(item.UserInput, 300),
-				AgentOutput: truncateStr(item.AgentOutput, 300),
-			}
-		}
-		rendered, err := w.prompts.RenderExtractBatch(interactions)
-		if err == nil && rendered != "" {
-			systemPrompt = rendered
-		}
-	}
-	if systemPrompt == "" {
-		var sb strings.Builder
-		sb.WriteString("Extract from these interactions:\n1. Memorable fact fragments (episodes)\n2. Structured user preferences/constraints/habits (facts)\n3. Key entity names\n\n")
-		for i, item := range items {
-			sb.WriteString(fmt.Sprintf("--- Interaction %d ---\nUser: %s\nAssistant: %s\n\n", i+1,
-				truncateStr(item.UserInput, 300), truncateStr(item.AgentOutput, 300)))
-		}
-		sb.WriteString(`Output JSON:{"episodes":[{"content":"...","type":"preference|action|fact|decision","entities":["..."]}],"facts":[{"key":"...","value":"...","type":"preference|habit|constraint|fact","source":"user_stated|observed"}]}`)
-		systemPrompt = sb.String()
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-
-	ch, err := w.provider.Complete(ctx, &model.CompletionRequest{
-		System:    systemPrompt,
-		Messages:  []model.Message{model.NewTextMessage(model.RoleUser, "Extract facts now.")},
-		MaxTokens: 2048,
-	})
-	if err != nil {
-		return err
+	items, err := LoadPendingQueue(ctx, w.db, DefaultUserID, 50)
+	if err != nil || len(items) == 0 {
+		return
 	}
+	ids := make([]string, 0, len(items))
+	for _, it := range items {
+		ids = append(ids, it.ID)
+	}
+	if w.provider == nil {
+		// 没有可用模型时保留队列，等待后续 provider 配置好再处理，避免静默丢记忆。
+		logging.Info("memory", "compaction_no_provider", logging.Event{"queue_events": len(items)})
+		return
+	}
+	current, err := w.memories.List(ctx, DefaultUserID, MaxActiveMemories)
+	if err != nil {
+		logging.Error("memory", "load_active_memory_failed", err, logging.Event{"queue_events": len(items)})
+		_ = RetryQueueItems(context.Background(), w.db, ids, err)
+		return
+	}
+	newList, err := w.compact(ctx, current, items)
+	if err != nil {
+		logging.Error("memory", "compaction_failed", err, logging.Event{"queue_events": len(items), "active_memories_before": len(current)})
+		_ = RetryQueueItems(context.Background(), w.db, ids, err)
+		return
+	}
+	if err := w.memories.ReplaceAll(ctx, DefaultUserID, newList); err != nil {
+		logging.Error("memory", "replace_active_memory_failed", err, logging.Event{"queue_events": len(items), "active_memories_after": len(newList)})
+		_ = RetryQueueItems(context.Background(), w.db, ids, err)
+		return
+	}
+	if err := DeleteQueueItems(ctx, w.db, ids); err != nil {
+		logging.Error("memory", "delete_queue_failed", err, logging.Event{"queue_events": len(items)})
+		return
+	}
+	_, _ = w.db.ExecContext(ctx, `UPDATE conversation_state SET memory_processed_at = ?, updated_at = ? WHERE user_id = ?`, time.Now(), time.Now(), DefaultUserID)
+	logging.Info("memory", "compaction_success", logging.Event{"queue_events": len(items), "active_memories": len(newList)})
+}
 
+type compactionMemory struct {
+	ID       string   `json:"id,omitempty"`
+	Kind     string   `json:"kind"`
+	Content  string   `json:"content"`
+	Tags     []string `json:"tags,omitempty"`
+	Priority int      `json:"priority"`
+	IsCore   bool     `json:"is_core"`
+}
+
+type compactionResult struct {
+	Memories []compactionMemory `json:"memories"`
+}
+
+func (w *Worker) compact(ctx context.Context, current []UserMemory, items []QueueItem) ([]UserMemory, error) {
+	systemPrompt := w.renderCompactionPrompt(current, items)
+	// 记忆整理是异步 LLM 调用，一次处理多条 queue event，并要求模型返回完整的新列表。
+	// 主请求链路不会等待这个调用，因此不会影响用户看到回复的延迟。
+	ch, err := w.provider.Complete(ctx, &model.CompletionRequest{Purpose: "memory_compact", System: systemPrompt, Messages: []model.Message{model.NewTextMessage(model.RoleUser, "Return the new active memory JSON now.")}, MaxTokens: 4096})
+	if err != nil {
+		return nil, err
+	}
 	var full string
 	for chunk := range ch {
 		if chunk.Content != "" {
 			full += chunk.Content
 		}
 		if chunk.Error != "" {
-			return fmt.Errorf("provider stream: %s", chunk.Error)
+			return nil, fmt.Errorf("provider stream: %s", chunk.Error)
 		}
 		if chunk.Done {
 			break
 		}
 	}
-
-	if full == "" {
-		return fmt.Errorf("empty extract response")
-	}
-
-	result := parseExtractResult(full)
+	result := parseCompactionResult(full)
 	if result == nil {
-		return fmt.Errorf("failed to parse extract result: %s", truncateStr(full, 200))
+		return nil, fmt.Errorf("failed to parse compaction result: %s", truncateRunes(full, 300))
 	}
-
-	ctx2 := context.Background()
-	for _, ep := range result.Episodes {
-		mem := &EpisodicMemory{
-			Content:   ep.Content,
-			Type:      ep.Type,
-			Source:    "extracted",
-			Entities:  ep.Entities,
-			SessionID: items[0].SessionID,
-		}
-		if w.episodic != nil {
-			if err := w.episodic.Store(ctx2, mem); err != nil {
-				log.Printf("[memory] store episode error: %v", err)
-			}
-		}
-		if w.entities != nil && len(ep.Entities) > 0 && mem.ID != "" {
-			w.entities.StoreBatch(ctx2, ep.Entities, mem.ID)
-		}
+	out := make([]UserMemory, 0, len(result.Memories))
+	for _, m := range result.Memories {
+		out = append(out, UserMemory{ID: m.ID, Kind: m.Kind, Content: m.Content, Tags: m.Tags, Priority: m.Priority, IsCore: m.IsCore})
 	}
-
-	for _, f := range result.Facts {
-		if f.Key == "" || f.Value == "" {
-			continue
-		}
-		if w.semantic != nil {
-			if err := w.semantic.Store(ctx2, f.Type, f.Key, f.Value, f.Source); err != nil {
-				log.Printf("[memory] store fact error: %v", err)
-			}
-		}
-	}
-
-	log.Printf("[memory] extracted %d episodes, %d facts from %d items",
-		len(result.Episodes), len(result.Facts), len(items))
-	return nil
+	return out, nil
 }
 
-func parseExtractResult(raw string) *extractResult {
+func (w *Worker) renderCompactionPrompt(current []UserMemory, items []QueueItem) string {
+	data := memoryPromptData(current, items)
+	b, _ := json.MarshalIndent(data, "", "  ")
+	if w.prompts != nil {
+		data["input_json"] = string(b)
+		if rendered, err := w.prompts.RenderMemoryCompact(data); err == nil && rendered != "" {
+			return rendered
+		}
+	}
+	return "You maintain Suna active user memory. Return JSON {\"memories\":[...]} with at most 30 concise active memories. Prefer updating/merging over adding. Keep only user preferences, habits, constraints, corrections, personality, and durable facts. Delete stale or temporary details. Current user instruction overrides old memory.\n\nInput:\n" + string(b)
+}
+
+func memoryPromptData(current []UserMemory, items []QueueItem) map[string]any {
+	cur := make([]compactionMemory, 0, len(current))
+	for _, m := range current {
+		cur = append(cur, compactionMemory{ID: m.ID, Kind: m.Kind, Content: m.Content, Tags: m.Tags, Priority: m.Priority, IsCore: m.IsCore})
+	}
+	events := make([]map[string]any, 0, len(items))
+	for _, it := range items {
+		events = append(events, map[string]any{"role": it.Role, "content": truncateRunes(it.Content, 800), "significance": string(it.Significance), "created_at": it.CreatedAt.Format(time.RFC3339)})
+	}
+	return map[string]any{"current_memories": cur, "events": events, "max_memories": MaxActiveMemories, "max_core": MaxCoreMemories}
+}
+
+func parseCompactionResult(raw string) *compactionResult {
 	s := strings.TrimSpace(raw)
 	if strings.HasPrefix(s, "```") {
+		// 兼容模型把 JSON 包在 markdown code fence 里的情况。
 		if idx := strings.Index(s, "\n"); idx >= 0 {
 			s = s[idx+1:]
 		}
@@ -305,28 +202,24 @@ func parseExtractResult(raw string) *extractResult {
 		}
 		s = strings.TrimSpace(s)
 	}
-
 	start := strings.Index(s, "{")
 	end := strings.LastIndex(s, "}")
-	if start < 0 || end < 0 || end <= start {
+	if start < 0 || end <= start {
 		return nil
 	}
-
-	var result extractResult
+	var result compactionResult
 	if err := json.Unmarshal([]byte(s[start:end+1]), &result); err != nil {
 		return nil
 	}
 	return &result
 }
 
-func truncateStr(s string, max int) string {
-	if max <= 0 || len(s) <= max {
-		return s
-	}
-	for i := range s {
-		if i > max {
-			return s[:i] + "..."
+func resetTimer(timer *time.Timer) {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
 		}
 	}
-	return s
+	timer.Reset(batchTimeout)
 }

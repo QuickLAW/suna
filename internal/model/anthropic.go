@@ -3,7 +3,9 @@ package model
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"github.com/alanchenchen/suna/internal/logging"
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 )
@@ -41,6 +43,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 
 	go func() {
 		defer close(ch)
+		started := time.Now()
 
 		params := anthropic.MessageNewParams{
 			Model:     modelName,
@@ -58,7 +61,8 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 
 		msg, err := p.client.Messages.New(ctx, params)
 		if err != nil {
-			ch <- Chunk{Done: true, Content: fmt.Sprintf("error: %v", err)}
+			logLLMFailure(req, err, loggingFields(started, nil))
+			ch <- Chunk{Done: true, Error: fmt.Sprintf("%v", err)}
 			return
 		}
 
@@ -90,6 +94,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 		if len(toolCalls) > 0 {
 			ch <- Chunk{ToolCalls: toolCalls, Done: false}
 		}
+		logLLMSuccess(req, logging.Event{"duration_ms": time.Since(started).Milliseconds(), "tool_calls": len(toolCalls)})
 		ch <- Chunk{Done: true}
 	}()
 
@@ -105,14 +110,6 @@ func (p *AnthropicProvider) ContextWindow() int {
 		return p.contextWindow
 	}
 	return 200000
-}
-
-func (p *AnthropicProvider) SupportsEmbedding() bool {
-	return false
-}
-
-func (p *AnthropicProvider) Embed(ctx context.Context, texts []string) ([][]float64, error) {
-	return nil, fmt.Errorf("anthropic does not support embedding")
 }
 
 func (p *AnthropicProvider) buildMessages(req *CompletionRequest) []anthropic.MessageParam {

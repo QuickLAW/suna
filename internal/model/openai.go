@@ -8,7 +8,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
-	"strings"
+	"time"
 
 	"github.com/sashabaranov/go-openai"
 )
@@ -17,11 +17,6 @@ type OpenAIProvider struct {
 	client        *openai.Client
 	model         string
 	contextWindow int
-	baseURL       string
-	apiKey        string
-	supportsEmbed bool
-	embedChecked  bool
-	embedModel    string
 	httpClient    *http.Client
 }
 
@@ -40,8 +35,6 @@ func NewOpenAIProvider(apiKey, baseURL, model string, contextWindow int) *OpenAI
 		client:        client,
 		model:         model,
 		contextWindow: contextWindow,
-		baseURL:       baseURL,
-		apiKey:        apiKey,
 		httpClient:    httpClient,
 	}
 }
@@ -54,6 +47,7 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *CompletionRequest) (
 
 	go func() {
 		defer close(ch)
+		started := time.Now()
 
 		stream, err := p.client.CreateChatCompletionStream(ctx, openai.ChatCompletionRequest{
 			Model:         p.resolveModel(req.Model),
@@ -65,6 +59,7 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *CompletionRequest) (
 			StreamOptions: &openai.StreamOptions{IncludeUsage: true},
 		})
 		if err != nil {
+			logLLMFailure(req, err, loggingFields(started, nil))
 			ch <- Chunk{Done: true, Error: err.Error()}
 			return
 		}
@@ -77,6 +72,9 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		for {
 			resp, err := stream.Recv()
 			if err == io.EOF {
+				fields := loggingFields(started, &usage)
+				fields["tool_calls"] = len(toolCallsAcc)
+				logLLMSuccess(req, fields)
 				if len(toolCallsAcc) > 0 {
 					ch <- Chunk{
 						ToolCalls: p.accumulateToolCalls(toolCallsAcc),
@@ -91,6 +89,7 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *CompletionRequest) (
 				return
 			}
 			if err != nil {
+				logLLMFailure(req, err, loggingFields(started, &usage))
 				ch <- Chunk{Done: true, Error: fmt.Sprintf("stream error: %v", err)}
 				return
 			}
@@ -183,103 +182,6 @@ func (p *OpenAIProvider) ContextWindow() int {
 		return p.contextWindow
 	}
 	return 128000
-}
-
-func (p *OpenAIProvider) SupportsEmbedding() bool {
-	if p.embedChecked {
-		return p.supportsEmbed
-	}
-	if p.baseURL == "" {
-		p.supportsEmbed = true
-		p.embedChecked = true
-		return true
-	}
-	p.detectEmbedding()
-	p.embedChecked = true
-	return p.supportsEmbed
-}
-
-func (p *OpenAIProvider) Embed(ctx context.Context, texts []string) ([][]float64, error) {
-	if !p.SupportsEmbedding() {
-		return nil, fmt.Errorf("embedding not supported by this provider")
-	}
-	embedModel := p.embedModel
-	if embedModel == "" {
-		embedModel = "text-embedding-3-small"
-	}
-	resp, err := p.client.CreateEmbeddings(ctx, openai.EmbeddingRequestStrings{
-		Input: texts,
-		Model: openai.EmbeddingModel(embedModel),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("embedding API: %w", err)
-	}
-	result := make([][]float64, len(resp.Data))
-	for i, d := range resp.Data {
-		result[i] = make([]float64, len(d.Embedding))
-		for j, v := range d.Embedding {
-			result[i][j] = float64(v)
-		}
-	}
-	return result, nil
-}
-
-func (p *OpenAIProvider) detectEmbedding() {
-	p.embedModel = resolveEmbedModel(p.baseURL)
-
-	reqBody := fmt.Sprintf(`{"input":"hi","model":"%s"}`, p.embedModel)
-	endpoint := strings.TrimRight(p.baseURL, "/") + "/embeddings"
-	if p.baseURL == "" {
-		endpoint = "https://api.openai.com/v1/embeddings"
-	}
-
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, strings.NewReader(reqBody))
-	if err != nil {
-		p.supportsEmbed = false
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+p.apiKey)
-
-	client := p.httpClient
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		p.supportsEmbed = false
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
-		p.supportsEmbed = true
-		return
-	}
-	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
-		p.supportsEmbed = false
-		return
-	}
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusBadRequest {
-		p.supportsEmbed = true
-		return
-	}
-	p.supportsEmbed = false
-}
-
-func resolveEmbedModel(baseURL string) string {
-	switch {
-	case strings.Contains(baseURL, "open.bigmodel.cn"):
-		return "embedding-3"
-	case strings.Contains(baseURL, "openai.com"):
-		return "text-embedding-3-small"
-	case strings.Contains(baseURL, "dashscope.aliyuncs.com"):
-		return "text-embedding-v3"
-	case strings.Contains(baseURL, "deepseek.com"):
-		return "deepseek-chat"
-	default:
-		return "text-embedding-3-small"
-	}
 }
 
 func (p *OpenAIProvider) resolveModel(m string) string {

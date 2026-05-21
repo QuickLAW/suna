@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,28 +13,24 @@ import (
 	"github.com/alanchenchen/suna/internal/model"
 )
 
-func (a *Agent) MemoryStats(ctx context.Context) (episodes, entities, facts int) {
-	if a.episodic != nil {
-		episodes, _ = a.episodic.Count(ctx)
+func (a *Agent) MemoryStats(ctx context.Context) (active, core, queued int) {
+	if a.memories != nil {
+		active, core = a.memories.Count(ctx, memory.DefaultUserID)
 	}
-	if a.semantic != nil {
-		facts, _ = a.semantic.Count(ctx)
+	if a.store != nil {
+		queued = memory.QueueCount(ctx, a.store.DB(), memory.DefaultUserID)
 	}
-	if a.entities != nil {
-		entities, _ = a.entities.Count(ctx)
-	}
-	return
+	return active, core, queued
 }
 
 func (a *Agent) SessionStats(ctx context.Context) (active, completed int, lastID string) {
-	if a.sessions == nil {
+	if a.conversation == nil {
 		return
 	}
-	active, _ = a.sessions.CountByStatus(ctx, "active")
-	completed, _ = a.sessions.CountByStatus(ctx, "completed")
-	info, _ := a.sessions.LastActiveSession(ctx)
-	if info != nil {
-		lastID = info.ID
+	st, _ := a.conversation.Load(ctx, memory.DefaultUserID)
+	if st != nil && len(st.LastMessages) > 0 {
+		active = 1
+		lastID = "last"
 	}
 	return
 }
@@ -71,8 +66,11 @@ func (a *Agent) WorkingTokens() int {
 	return a.working.EstimatedTokens()
 }
 
-func (a *Agent) SearchMemory(ctx context.Context, query string, limit int) ([]*memory.EpisodicMemory, error) {
-	return a.episodic.SearchFTS(ctx, query, limit)
+func (a *Agent) ListMemory(ctx context.Context) ([]memory.UserMemory, error) {
+	if a.memories == nil {
+		return nil, nil
+	}
+	return a.memories.List(ctx, memory.DefaultUserID, memory.MaxActiveMemories)
 }
 
 func (a *Agent) ListCapabilities() []capability.Info {
@@ -80,13 +78,6 @@ func (a *Agent) ListCapabilities() []capability.Info {
 		return nil
 	}
 	return a.caps.List()
-}
-
-func (a *Agent) SemanticSummary(ctx context.Context) (string, error) {
-	if a.semantic == nil {
-		return "", nil
-	}
-	return a.semantic.Summary(ctx)
 }
 
 func (a *Agent) ReloadCapabilities() error {
@@ -131,83 +122,45 @@ func (a *Agent) Compact(ctx context.Context) (int, int, int, int, int, error) {
 }
 
 func (a *Agent) NewSession() {
-	pendingCtx := ""
-	if a.sessions != nil && a.sessionID != "" {
-		msgs := a.working.Messages()
-		hasContent := false
-		for _, m := range msgs {
-			if m.Role == model.RoleUser || m.Role == model.RoleAssistant {
-				if m.Text() != "" {
-					hasContent = true
-					break
-				}
-			}
-		}
-		if hasContent {
-			a.sessions.CompleteSession(context.Background(), a.sessionID)
-			unextracted, _ := a.sessions.LoadUnextractedMessages(context.Background(), a.sessionID, 5)
-			if len(unextracted) > 0 {
-				var parts []string
-				for _, m := range unextracted {
-					parts = append(parts, fmt.Sprintf("- [%s] %s (source: previous session)", m.Role, truncateStr(m.Content, 200)))
-				}
-				pendingCtx = strings.Join(parts, "\n")
-			}
-			a.extractQueue.EnqueueSession(context.Background(), a.sessionID)
-		}
+	if a.conversation != nil {
+		a.conversation.ClearLastMessages(context.Background(), memory.DefaultUserID)
 	}
 	a.sessionID = uuid.New().String()
 	a.turnCount = 0
 	a.guard = a.newGuardForSession(a.sessionID)
 	a.working.Clear()
-	if pendingCtx != "" {
-		a.working.AddMessage(model.NewTextMessage(model.RoleSystem,
-			"## Relevant memory from previous session\n"+pendingCtx))
-	}
+	a.toolSummary = nil
 }
 
 func (a *Agent) RestoreSession(ctx context.Context) int {
-	if a.sessions == nil {
+	if a.conversation == nil {
 		return 0
 	}
-
-	info, err := a.sessions.LastActiveSession(ctx)
-	if err != nil || info == nil {
-		a.sessions.CreateSession(ctx, a.sessionID)
+	st, err := a.conversation.Load(ctx, memory.DefaultUserID)
+	if err != nil || st == nil || len(st.LastMessages) == 0 {
 		return 0
 	}
-
-	a.sessions.CompleteOtherSessions(ctx, info.ID)
-
-	msgs, err := a.sessions.LoadMessages(ctx, info.ID)
-	if err != nil || len(msgs) == 0 {
-		a.sessionID = info.ID
-		a.guard = a.newGuardForSession(a.sessionID)
-		return 0
-	}
-
-	a.sessionID = info.ID
-	a.turnCount = msgs[len(msgs)-1].Turn
+	a.sessionID = uuid.New().String()
+	a.turnCount = 0
 	a.guard = a.newGuardForSession(a.sessionID)
-
 	a.working.Clear()
+	a.toolSummary = nil
 	a.resumeInput = ""
-	visibleMsgs := msgs
-	if last := len(visibleMsgs) - 1; last >= 0 && visibleMsgs[last].Role == string(model.RoleUser) {
-		// 最后一条孤立用户消息代表上次尚未获得回复，恢复到输入框并避免重复进入 LLM 上下文。
-		a.resumeInput = visibleMsgs[last].Content
-		a.sessions.DeleteLastMessage(ctx, info.ID, visibleMsgs[last].Turn, visibleMsgs[last].Role, visibleMsgs[last].Content)
-		visibleMsgs = visibleMsgs[:last]
-		a.turnCount = 0
-		if len(visibleMsgs) > 0 {
-			a.turnCount = visibleMsgs[len(visibleMsgs)-1].Turn
-		}
+	for _, m := range st.LastMessages {
+		a.working.AddMessage(m)
 	}
-	for _, m := range visibleMsgs {
-		a.working.AddMessage(model.NewTextMessage(model.Role(m.Role), m.Content))
-	}
+	return len(st.LastMessages)
+}
 
-	return len(msgs)
+func (a *Agent) RestoreToolSummary(ctx context.Context) string {
+	if a.conversation == nil {
+		return ""
+	}
+	st, err := a.conversation.Load(ctx, memory.DefaultUserID)
+	if err != nil || st == nil {
+		return ""
+	}
+	return memory.FormatToolSummary(st.ToolSummary)
 }
 
 func (a *Agent) ConsumeResumeInput() string {

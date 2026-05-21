@@ -135,11 +135,8 @@ func (c *ipcClient) RestoreSession() error {
 	return c.SendRequestNotify(ipc.MethodSessionRestore, nil)
 }
 
-func (c *ipcClient) SearchMemory(query string, topK int) error {
-	return c.SendRequestNotify(ipc.MethodMemorySearch, ipc.MemorySearchParams{
-		Query: query,
-		TopK:  topK,
-	})
+func (c *ipcClient) ListMemory() error {
+	return c.SendRequestNotify(ipc.MethodMemoryList, nil)
 }
 
 func (c *ipcClient) Compact() error {

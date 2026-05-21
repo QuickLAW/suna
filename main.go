@@ -1,8 +1,8 @@
 package main
 
 import (
+	"flag"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +10,7 @@ import (
 
 	"github.com/alanchenchen/suna/internal/config"
 	"github.com/alanchenchen/suna/internal/daemon"
+	"github.com/alanchenchen/suna/internal/logging"
 	"github.com/alanchenchen/suna/internal/tui"
 )
 
@@ -21,22 +22,79 @@ func main() {
 	}
 
 	configPath := filepath.Join(homeDir, ".suna", "config.toml")
-
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "daemon", "--serve":
-			runDaemon(configPath)
-			return
-		case "stop":
-			stopDaemonCommand()
-			return
-		case "status":
-			showStatus()
-			return
-		}
+	if os.Getenv("SUNA_RUN_DAEMON") == "1" {
+		runDaemon(configPath)
+		return
 	}
 
-	runTUI()
+	cmd := parseCLI(os.Args[1:])
+	switch cmd {
+	case "tui":
+		runTUI()
+	case "help":
+		printHelp()
+	case "start":
+		if daemon.IsRunning() {
+			pid, _ := daemon.ReadPID()
+			fmt.Printf("sunad is already running (pid %d)\n", pid)
+			return
+		}
+		startDaemon()
+		fmt.Println("sunad started")
+	case "stop":
+		stopDaemonCommand()
+	case "status":
+		showStatus()
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", cmd)
+		printHelp()
+		os.Exit(2)
+	}
+}
+
+func parseCLI(args []string) string {
+	fs := flag.NewFlagSet("suna", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	help := fs.Bool("help", false, "show help")
+	helpShort := fs.Bool("h", false, "show help")
+	if err := fs.Parse(args); err != nil {
+		return "help"
+	}
+	if *help || *helpShort {
+		return "help"
+	}
+	if fs.NArg() == 0 {
+		return "tui"
+	}
+	switch fs.Arg(0) {
+	case "help":
+		return "help"
+	case "start":
+		return "start"
+	case "stop":
+		return "stop"
+	case "status":
+		return "status"
+	default:
+		return fs.Arg(0)
+	}
+}
+
+func printHelp() {
+	fmt.Print(`Suna CLI
+
+Usage:
+  suna                 Open the TUI. Starts the daemon if needed.
+  suna start           Start the daemon in the background.
+  suna stop            Stop the running daemon.
+  suna status          Show daemon status.
+  suna help            Show this help.
+
+Notes:
+  Logs:   ~/.suna/logs/
+  Config: ~/.suna/config.toml
+  Data:   ~/.suna/
+`)
 }
 
 func runDaemon(configPath string) {
@@ -109,14 +167,14 @@ func ensureDaemonRunning() {
 }
 
 func startDaemon() {
-
 	exe, err := os.Executable()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: cannot determine executable path: %s\n", err)
 		os.Exit(1)
 	}
 
-	cmd := exec.Command(exe, "--serve")
+	cmd := exec.Command(exe)
+	cmd.Env = append(os.Environ(), "SUNA_RUN_DAEMON=1")
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = os.Stderr
@@ -133,7 +191,7 @@ func startDaemon() {
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "Error: daemon failed to start within 10 seconds (check logs at ~/.suna/logs/suna.log)\n")
+	fmt.Fprintf(os.Stderr, "Error: daemon failed to start within 10 seconds (check logs at ~/.suna/logs/app.log)\n")
 	os.Exit(1)
 }
 
@@ -154,11 +212,6 @@ func loadOrCreateConfig(configPath string) *config.Config {
 }
 
 func initLogging(dataDir string) {
-	logPath := filepath.Join(dataDir, "logs", "suna.log")
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		return
-	}
-	log.SetOutput(logFile)
-	log.SetFlags(log.Ltime | log.Lmicroseconds)
+	logging.Init(dataDir)
+	logging.Info("app", "daemon_start", logging.Event{"data_dir": dataDir})
 }

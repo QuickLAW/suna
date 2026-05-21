@@ -18,8 +18,7 @@ func New() (*Loader, error) {
 		templates: make(map[string]*template.Template),
 	}
 	files := []string{
-		"system", "guard", "guard_review", "compress", "extract",
-		"extract_batch", "spawn_system",
+		"system", "guard", "guard_review", "compress", "extract_batch", "spawn_system",
 	}
 	for _, name := range files {
 		data, err := templatesFS.ReadFile("templates/" + name + ".md")
@@ -49,28 +48,19 @@ func (l *Loader) Render(name string, data map[string]any) (string, error) {
 
 func (l *Loader) RenderSystem(data SystemPromptData) (string, error) {
 	return l.Render("system", map[string]any{
-		"OS":               data.OS,
-		"Arch":             data.Arch,
-		"WorkDir":          data.WorkDir,
-		"ActiveModel":      data.ActiveModel,
-		"ModelRouting":     data.ModelRouting,
-		"ProjectConfig":    data.ProjectConfig,
-		"UserPreferences":  data.UserPreferences,
-		"RecalledMemories": data.RecalledMemories,
-		"Capabilities":     data.Capabilities,
+		"OS":            data.OS,
+		"Arch":          data.Arch,
+		"WorkDir":       data.WorkDir,
+		"ActiveModel":   data.ActiveModel,
+		"ModelRouting":  data.ModelRouting,
+		"ProjectConfig": data.ProjectConfig,
+		"Capabilities":  data.Capabilities,
 	})
 }
 
 func (l *Loader) RenderCompress(content string) (string, error) {
 	return l.Render("compress", map[string]any{
 		"Content": content,
-	})
-}
-
-func (l *Loader) RenderExtract(userInput, agentOutput string) (string, error) {
-	return l.Render("extract", map[string]any{
-		"UserInput":   userInput,
-		"AgentOutput": agentOutput,
 	})
 }
 
@@ -89,6 +79,14 @@ func (l *Loader) RenderExtractBatch(interactions []ExtractInteraction) (string, 
 	})
 }
 
+func (l *Loader) RenderMemoryCompact(data map[string]any) (string, error) {
+	return l.Render("extract_batch", map[string]any{
+		"MaxMemories": data["max_memories"],
+		"MaxCore":     data["max_core"],
+		"InputJSON":   data["input_json"],
+	})
+}
+
 func (l *Loader) RenderSpawnSystem(data SpawnPromptData) (string, error) {
 	return l.Render("spawn_system", map[string]any{
 		"Task":    data.Task,
@@ -101,15 +99,13 @@ func (l *Loader) RenderSpawnSystem(data SpawnPromptData) (string, error) {
 }
 
 type SystemPromptData struct {
-	OS               string
-	Arch             string
-	WorkDir          string
-	ActiveModel      string
-	ModelRouting     string
-	ProjectConfig    string
-	UserPreferences  string
-	RecalledMemories string
-	Capabilities     string
+	OS            string
+	Arch          string
+	WorkDir       string
+	ActiveModel   string
+	ModelRouting  string
+	ProjectConfig string
+	Capabilities  string
 }
 
 type GuardReviewData struct {

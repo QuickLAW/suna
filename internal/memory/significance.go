@@ -16,16 +16,19 @@ const (
 /*
 JudgeSignificance 判断交互的显著性等级（零 LLM 成本）。
 
-高显著性（立即触发提取）：
-  - 用户说"以后都这样"/"记住"/"不要"等明确指令
-  - 工具执行失败
-  - Guard 拦截了操作
-  - 用户纠正了 agent 的输出
+		高显著性（立即触发提取）：
 
-中显著性（正常排队）：
-  - 包含工具调用的交互
-  - 用户的非简单查询消息
-  - Agent 做出了决策
+		  - 用户说"记住"/"以后都这样"/"以后不要再这样"等明确长期指令
+
+	  - 工具执行失败
+
+	  - Guard 拦截了操作
+
+	  - 用户纠正了 agent 的输出
+
+	    中显著性（正常排队）：
+
+	  - 用户表达了可能长期有效的偏好、习惯或边界
 
 低显著性（跳过提取）：
   - 纯闲聊 / 简单问候
@@ -42,15 +45,11 @@ func JudgeSignificance(userInput, agentOutput string, hadToolCall, toolFailed, g
 		return SignificanceHigh
 	}
 
-	if hadToolCall {
-		return SignificanceMedium
-	}
-
 	if isTrivialInput(userLower) {
 		return SignificanceLow
 	}
 
-	if len([]rune(userInput)) > 20 || containsDecision(agentOutput) {
+	if containsDurablePreference(userLower) {
 		return SignificanceMedium
 	}
 
@@ -58,15 +57,27 @@ func JudgeSignificance(userInput, agentOutput string, hadToolCall, toolFailed, g
 }
 
 var rememberPatterns = []string{
-	"记住", "以后都", "以后都这样", "不要", "别这样",
-	"always", "never", "remember", "from now on",
-	"don't", "do not", "make sure", "keep in mind",
-	"我喜欢", "我偏好", "我习惯", "我通常",
-	"i prefer", "i like", "i usually", "my preference",
+	"记住", "帮我记住", "以后都", "以后都这样", "以后不要再", "以后别再",
+	"always", "never", "remember", "from now on", "keep in mind",
+}
+
+var durablePatterns = []string{
+	"我希望", "我不希望", "我更", "我比较", "我倾向", "我的习惯", "我的性格",
+	"下次", "以后", "别再", "不要再", "更喜欢", "不喜欢",
+	"i want", "i don't want", "i tend to", "next time", "avoid", "prefer",
 }
 
 func isExplicitRemember(input string) bool {
 	for _, p := range rememberPatterns {
+		if strings.Contains(input, strings.ToLower(p)) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsDurablePreference(input string) bool {
+	for _, p := range durablePatterns {
 		if strings.Contains(input, strings.ToLower(p)) {
 			return true
 		}
@@ -96,22 +107,6 @@ func isTrivialInput(input string) bool {
 	}
 	if len([]rune(input)) <= 3 && !containsCJK(input) {
 		return true
-	}
-	return false
-}
-
-var decisionPhrases = []string{
-	"决定", "选择", "确认", "修改", "创建", "删除", "更新",
-	"decided", "chose", "confirmed", "modified", "created", "deleted", "updated",
-	"will use", "let's use", "switching to",
-}
-
-func containsDecision(output string) bool {
-	outputLower := strings.ToLower(output)
-	for _, p := range decisionPhrases {
-		if strings.Contains(outputLower, p) {
-			return true
-		}
 	}
 	return false
 }

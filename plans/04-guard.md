@@ -346,10 +346,11 @@ func isReadOnlyCommand(cmd string) bool {
 | error | TEXT | 错误信息 (如有) |
 ```
 
-用户可以通过自然语言查询审计记录:
+用户可以通过自然语言查询近期审计记录:
   "帮我看看最近做了哪些操作"
   "有哪些高风险操作"
-  或通过 /memory search "audit" 查询
+
+审计日志不进入 user_memory，也不通过 `/memory search` 暴露，避免污染用户画像。
 
 ## Sub Agent 的 Guard
 

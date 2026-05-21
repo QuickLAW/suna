@@ -16,7 +16,7 @@ func defaultTranslationKeys() map[string]map[LocaleID]string {
 		"cmd.model_not_found":     {LocaleEN: "Model not found: {}", LocaleZH: "未找到模型：{}"},
 		"cmd.unknown":             {LocaleEN: "Unknown command: {}", LocaleZH: "未知命令：{}"},
 		"memory.not_found":        {LocaleEN: "No memories found", LocaleZH: "未找到记忆"},
-		"memory.search_hint":      {LocaleEN: "Usage: /memory search <query>", LocaleZH: "用法：/memory search <查询词>"},
+		"memory.list_hint":        {LocaleEN: "Usage: /memory", LocaleZH: "用法：/memory"},
 		"error.not_connected":     {LocaleEN: "Not connected to daemon", LocaleZH: "未连接到守护进程"},
 
 		"tui.welcome.title":      {LocaleEN: "Welcome", LocaleZH: "欢迎"},
@@ -76,7 +76,7 @@ func defaultTranslationKeys() map[string]map[LocaleID]string {
 		"tui.command.new.desc":     {LocaleEN: "Start a new session", LocaleZH: "开始新会话"},
 		"tui.command.model.desc":   {LocaleEN: "Switch model", LocaleZH: "切换模型"},
 		"tui.command.compact.desc": {LocaleEN: "Compact context", LocaleZH: "压缩上下文"},
-		"tui.command.memory.desc":  {LocaleEN: "Search memory", LocaleZH: "搜索记忆"},
+		"tui.command.memory.desc":  {LocaleEN: "Show active memory", LocaleZH: "查看活跃记忆"},
 		"tui.command.help.desc":    {LocaleEN: "Open help page", LocaleZH: "打开帮助页"},
 		"tui.command.config.desc":  {LocaleEN: "Open configuration", LocaleZH: "打开配置"},
 
@@ -190,7 +190,7 @@ func defaultTranslationKeys() map[string]map[LocaleID]string {
 		"compact.after":        {LocaleEN: "After", LocaleZH: "压缩后"},
 		"compact.retained":     {LocaleEN: "Retained", LocaleZH: "保留"},
 		"compact.keep_recent":  {LocaleEN: "Recent {} turns of full conversation", LocaleZH: "最近 {} 轮完整对话"},
-		"compact.original":     {LocaleEN: "Original messages available via /memory search", LocaleZH: "原始消息可通过 /memory search 回溯"},
+		"compact.original":     {LocaleEN: "Older details may be summarized; active memory keeps durable user preferences", LocaleZH: "较早细节可能被摘要；活跃记忆只保留长期用户偏好"},
 		"compact.window":       {LocaleEN: "of window", LocaleZH: "窗口"},
 		"compact.summary":      {LocaleEN: "Summarized", LocaleZH: "摘要"},
 		"compact.summary_unit": {LocaleEN: "summary", LocaleZH: "段摘要"},

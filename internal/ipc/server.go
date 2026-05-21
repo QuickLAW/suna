@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"sync"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/alanchenchen/suna/internal/config"
 	"github.com/alanchenchen/suna/internal/core"
+	"github.com/alanchenchen/suna/internal/logging"
 	"github.com/alanchenchen/suna/internal/memory"
 )
 
@@ -94,6 +94,7 @@ func (s *Server) HandleConn(ctx context.Context, conn Conn, onDone func()) {
 }
 
 func (s *Server) route(ctx context.Context, conn Conn, req Request) {
+	logging.Info("ipc", "request", logging.Event{"conn_id": conn.ID(), "method": req.Method, "request_id": req.ID})
 	switch req.Method {
 	case MethodSendMessage:
 		s.handleSendMessage(ctx, conn, req)
@@ -103,10 +104,8 @@ func (s *Server) route(ctx context.Context, conn Conn, req Request) {
 		s.handleAskReply(ctx, conn, req)
 	case MethodGuardReply:
 		s.handleGuardReply(ctx, conn, req)
-	case MethodMemorySearch:
-		s.handleMemorySearch(ctx, conn, req)
-	case MethodMemoryFacts:
-		s.handleMemoryFacts(ctx, conn, req)
+	case MethodMemoryList:
+		s.handleMemoryList(ctx, conn, req)
 	case MethodSkillList:
 		s.handleSkillList(ctx, conn, req)
 	case MethodSessionNew:
@@ -158,9 +157,11 @@ func (s *Server) handleConfigSet(ctx context.Context, conn Conn, req Request) {
 		},
 	})
 	if err != nil {
+		logging.Error("config", "update_failed", err, logging.Event{"action": params.Action, "model_ref": params.ModelRef, "active_model": params.ActiveModel})
 		s.sendError(conn, req.ID, ErrInvalidParams, err.Error())
 		return
 	}
+	logging.Info("config", "update_success", logging.Event{"action": params.Action, "model_ref": params.ModelRef, "active_model": params.ActiveModel})
 	result := configToParams(updated)
 	s.sendResult(conn, req.ID, result)
 	s.Send(ctx, conn, "config.state", result)
@@ -200,6 +201,7 @@ func (s *Server) handleSendMessage(ctx context.Context, conn Conn, req Request) 
 	// 不自行推断 token、速率或上下文窗口，保证不同 UI 客户端看到一致状态。
 	go func() {
 		started := time.Now()
+		logging.Info("agent", "run_start", logging.Event{"conn_id": conn.ID(), "input_chars": len(content)})
 		events := s.agent.Run(ctx, content)
 		for evt := range events {
 			switch evt.Type {
@@ -208,10 +210,12 @@ func (s *Server) handleSendMessage(ctx context.Context, conn Conn, req Request) 
 			case core.EventReasoning:
 				s.Send(ctx, conn, NotifyReasoning, StreamParams{Chunk: evt.Content})
 			case core.EventToolCall:
+				logging.Info("agent", "tool_call", logging.Event{"conn_id": conn.ID(), "tool": evt.ToolName, "intent": evt.ToolIntent})
 				s.Send(ctx, conn, NotifyToolStart, ToolStartParams{
 					ID: evt.ToolCallID, Tool: evt.ToolName, Params: evt.ToolParams, Intent: evt.ToolIntent,
 				})
 			case core.EventToolResult:
+				logging.Info("agent", "tool_result", logging.Event{"conn_id": conn.ID(), "tool": evt.ToolName, "tool_error": evt.ToolError, "result_chars": len(evt.ToolResult)})
 				s.Send(ctx, conn, NotifyToolEnd, ToolEndParams{
 					ID: evt.ToolCallID, Tool: evt.ToolName, Result: evt.ToolResult, Error: evt.ToolError,
 				})
@@ -237,6 +241,7 @@ func (s *Server) handleSendMessage(ctx context.Context, conn Conn, req Request) 
 				})
 			case core.EventStatus:
 				if strings.HasPrefix(evt.Content, "error:") || evt.Content == "cancelled" {
+					logging.Error("agent", "run_failed", fmt.Errorf("%s", evt.Content), logging.Event{"conn_id": conn.ID(), "duration_ms": time.Since(started).Milliseconds()})
 					s.Send(ctx, conn, NotifyStream, StreamParams{Chunk: evt.Content, Done: true})
 					s.Send(ctx, conn, "daemon.full_status", s.buildDaemonStatus(ctx))
 				} else if evt.Content == "done" {
@@ -246,6 +251,7 @@ func (s *Server) handleSendMessage(ctx context.Context, conn Conn, req Request) 
 							speed = float64(evt.OutputTokens) / elapsed
 						}
 					}
+					logging.Info("agent", "run_done", logging.Event{"conn_id": conn.ID(), "duration_ms": time.Since(started).Milliseconds(), "input_tokens": evt.InputTokens, "output_tokens": evt.OutputTokens, "cached_tokens": evt.CachedTokens})
 					s.Send(ctx, conn, NotifyStream, StreamParams{
 						Done:          true,
 						InputTokens:   evt.InputTokens,
@@ -309,43 +315,21 @@ func (s *Server) handleCancel(ctx context.Context, conn Conn, req Request) {
 	s.sendResult(conn, req.ID, map[string]string{"status": "cancelled"})
 }
 
-func (s *Server) handleMemorySearch(ctx context.Context, conn Conn, req Request) {
-	params, ok := req.Params.(map[string]any)
-	if !ok {
-		s.sendError(conn, req.ID, ErrInvalidParams, "invalid params")
-		return
-	}
-
-	query, _ := params["query"].(string)
-	topK := 5
-	if tk, ok := params["top_k"].(float64); ok && int(tk) > 0 {
-		topK = int(tk)
-	}
-
-	memories, err := s.agent.SearchMemory(ctx, query, topK)
+func (s *Server) handleMemoryList(ctx context.Context, conn Conn, req Request) {
+	memories, err := s.agent.ListMemory(ctx)
 	if err != nil {
 		s.sendError(conn, req.ID, ErrInternal, err.Error())
 		return
 	}
 
-	result := MemorySearchResult{Memories: make([]MemoryItem, 0, len(memories))}
+	result := MemoryListResult{Memories: make([]MemoryItem, 0, len(memories))}
 	for _, m := range memories {
 		result.Memories = append(result.Memories, MemoryItem{
-			ID: m.ID, Content: m.Content, Type: m.Type,
-			Timestamp: m.Timestamp.Format("2006-01-02 15:04"),
+			ID: m.ID, Content: m.Content, Kind: m.Kind, Tags: m.Tags, Priority: m.Priority, IsCore: m.IsCore,
 		})
 	}
 	s.sendResult(conn, req.ID, map[string]string{"status": "ok"})
-	s.Send(ctx, conn, NotifyMemorySearchResult, result)
-}
-
-func (s *Server) handleMemoryFacts(ctx context.Context, conn Conn, req Request) {
-	summary, err := s.agent.SemanticSummary(ctx)
-	if err != nil {
-		s.sendError(conn, req.ID, ErrInternal, err.Error())
-		return
-	}
-	s.sendResult(conn, req.ID, map[string]string{"summary": summary})
+	s.Send(ctx, conn, NotifyMemoryListResult, result)
 }
 
 func (s *Server) handleSkillList(ctx context.Context, conn Conn, req Request) {
@@ -374,6 +358,9 @@ func (s *Server) handleSessionRestore(ctx context.Context, conn Conn, req Reques
 			case "assistant":
 				s.Send(ctx, conn, NotifySessionRestoreMsg, map[string]string{"role": "assistant", "content": content})
 			}
+		}
+		if summary := s.agent.RestoreToolSummary(ctx); summary != "" {
+			s.Send(ctx, conn, NotifySessionRestoreMsg, map[string]string{"role": "restore_summary", "content": summary})
 		}
 	}
 	if input := s.agent.ConsumeResumeInput(); input != "" {
@@ -430,7 +417,7 @@ func (s *Server) handleDaemonStop(ctx context.Context, conn Conn, req Request) {
 	s.sendResult(conn, req.ID, map[string]string{"status": "stopping"})
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		log.Println("[daemon] stop requested via IPC")
+		logging.Info("agent", "daemon_stop_requested", logging.Event{"conn_id": conn.ID()})
 		s.daemon.Stop()
 	}()
 }
@@ -464,8 +451,8 @@ func (s *Server) buildDaemonStatus(ctx context.Context) DaemonStatusParams {
 		Connections: s.daemon.ConnectionCount(),
 	}
 	if s.agent != nil {
-		ep, en, fa := s.agent.MemoryStats(ctx)
-		params.Memory = &MemoryStats{Episodes: ep, Entities: en, Facts: fa}
+		activeMem, coreMem, queuedMem := s.agent.MemoryStats(ctx)
+		params.Memory = &MemoryStats{Active: activeMem, Core: coreMem, Queued: queuedMem}
 		active, completed, lastID := s.agent.SessionStats(ctx)
 		params.Sessions = &SessionStats{Active: active, Completed: completed, LastID: lastID}
 		if sum, err := s.agent.UsageSummary(ctx, time.Now().Add(-24*time.Hour)); err == nil && sum != nil {
@@ -500,7 +487,7 @@ func (s *Server) ensureConfigLoaded() {
 		return
 	}
 	if _, err := s.agent.ReloadConfigFromDiskIfNeeded(); err != nil {
-		log.Printf("[config] reload skipped: %v", err)
+		logging.Error("config", "reload_skipped", err, nil)
 	}
 }
 
@@ -514,7 +501,7 @@ func (s *Server) Send(ctx context.Context, conn Conn, method string, params any)
 	sendCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := conn.Send(sendCtx, data); err != nil {
-		log.Printf("[ipc] send to %s error: %v", conn.ID(), err)
+		logging.Error("ipc", "send_failed", err, logging.Event{"conn_id": conn.ID(), "method": method})
 	}
 }
 
@@ -543,6 +530,7 @@ func (s *Server) sendResult(conn Conn, id int, result any) {
 }
 
 func (s *Server) sendError(conn Conn, id int, code int, message string) {
+	logging.Error("ipc", "response_error", fmt.Errorf("%s", message), logging.Event{"conn_id": conn.ID(), "request_id": id, "error_code": code})
 	resp := Response{JSONRPC: "2.0", ID: id, Error: &Error{Code: code, Message: message}}
 	data, err := json.Marshal(resp)
 	if err != nil {

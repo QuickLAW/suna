@@ -451,15 +451,19 @@ func (t *TUI) handleIPCNotification(notif ipcNotification) {
 		}
 		json.Unmarshal(notif.params, &p)
 		t.messages = append(t.messages, chatMsg{role: "error", content: p.Message})
-	case ipc.NotifyMemorySearchResult:
-		var p ipc.MemorySearchResult
+	case ipc.NotifyMemoryListResult:
+		var p ipc.MemoryListResult
 		json.Unmarshal(notif.params, &p)
 		if len(p.Memories) == 0 {
 			t.messages = append(t.messages, chatMsg{role: "system", content: t.i18n.T("memory.not_found")})
 		} else {
 			var lines []string
 			for _, m := range p.Memories {
-				lines = append(lines, fmt.Sprintf("  [%s] %s — %s", m.Timestamp, m.Type, m.Content))
+				core := ""
+				if m.IsCore {
+					core = " core"
+				}
+				lines = append(lines, fmt.Sprintf("  [%s%s:%d] %s", m.Kind, core, m.Priority, m.Content))
 			}
 			t.messages = append(t.messages, chatMsg{role: "system", content: strings.Join(lines, "\n")})
 		}

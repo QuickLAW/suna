@@ -4,213 +4,176 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
+	"time"
+
+	"github.com/alanchenchen/suna/internal/logging"
+	"github.com/google/uuid"
 )
 
-/*
-ExtractItem 待提取的交互记录。
-包含足够的上下文供 Memory Worker 进行 LLM 提取。
-*/
-type ExtractItem struct {
-	SessionID    string
-	Turn         int
-	UserInput    string
-	AgentOutput  string
-	Significance Significance
+const maxQueueAttempts = 3
+
+type QueueItem struct {
+	ID            string
+	UserID        string
+	Role          string
+	Content       string
+	Significance  Significance
+	CreatedAt     time.Time
+	NextAttemptAt time.Time
+	Attempts      int
 }
 
-/*
-ExtractQueue 记忆提取队列。
-
-设计原则（06-memory.md 提取流程）：
-  - Agent Loop 不等待提取完成，直接入队
-  - Memory Worker 独立消费，不阻塞主循环
-  - Daemon 重启后扫描 memory_extracted=0 补处理
-*/
 type ExtractQueue struct {
-	ch chan ExtractItem
+	ch chan struct{}
 	db *sql.DB
 }
 
-// extractTurnPair 用于把同一 session+turn 的 user/assistant 消息聚合成一次提取单元。
-type extractTurnPair struct {
-	sessionID    string
-	turn         int
-	userInput    string
-	agentOutput  string
-	significance Significance
-}
-
-// extractTurnKey 是提取恢复阶段的稳定键，必须包含 sessionID 以避免跨会话串数据。
-type extractTurnKey struct {
-	sessionID string
-	turn      int
-}
-
-const extractQueueSize = 64
+const extractQueueSize = 1
 
 func NewExtractQueue(db *sql.DB) *ExtractQueue {
-	return &ExtractQueue{
-		ch: make(chan ExtractItem, extractQueueSize),
-		db: db,
-	}
+	return &ExtractQueue{ch: make(chan struct{}, extractQueueSize), db: db}
 }
 
-func (q *ExtractQueue) Push(item ExtractItem) bool {
-	select {
-	case q.ch <- item:
-		return true
-	default:
-		log.Printf("[memory] extract queue full, dropping turn %d", item.Turn)
+func (q *ExtractQueue) Push(ctx context.Context, userID, role, content string, sig Significance) bool {
+	if q == nil || q.db == nil || content == "" {
 		return false
 	}
-}
-
-func (q *ExtractQueue) Ch() <-chan ExtractItem {
-	return q.ch
-}
-
-func (q *ExtractQueue) Close() {
-	close(q.ch)
-}
-
-func (q *ExtractQueue) EnqueueSession(ctx context.Context, sessionID string) {
-	rows, err := q.db.QueryContext(ctx, `
-		SELECT session_id, turn, role, content, significance
-		FROM session_messages
-		WHERE session_id = ? AND (memory_extracted = 0 OR memory_extracted IS NULL)
-		ORDER BY turn ASC`,
-		sessionID,
-	)
+	if userID == "" {
+		userID = DefaultUserID
+	}
+	_, err := q.db.ExecContext(ctx, `
+		INSERT INTO memory_queue (id, user_id, role, content, significance, created_at, next_attempt_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`, uuid.New().String(), userID, role, content, string(sig), time.Now(), time.Now())
 	if err != nil {
-		return
+		logging.Error("memory", "queue_insert_failed", err, logging.Event{"queue_role": role, "significance": string(sig)})
+		return false
 	}
-	defer rows.Close()
+	q.Signal()
+	return true
+}
 
-	pairs := make(map[extractTurnKey]*extractTurnPair)
-
-	for rows.Next() {
-		var sid, role, content string
-		var turn int
-		var sig sql.NullString
-		if err := rows.Scan(&sid, &turn, &role, &content, &sig); err != nil {
-			continue
-		}
-		key := extractTurnKey{sessionID: sid, turn: turn}
-		p, ok := pairs[key]
-		if !ok {
-			p = &extractTurnPair{sessionID: sid, turn: turn}
-			pairs[key] = p
-		}
-		if sig.Valid {
-			p.significance = Significance(sig.String)
-		}
-		switch role {
-		case "user":
-			p.userInput = content
-		case "assistant":
-			p.agentOutput = content
-		}
-	}
-
-	for _, p := range pairs {
-		if p.userInput == "" && p.agentOutput == "" {
-			continue
-		}
-		if p.significance == "" {
-			p.significance = SignificanceMedium
-		}
-		q.Push(ExtractItem{
-			SessionID:    p.sessionID,
-			Turn:         p.turn,
-			UserInput:    p.userInput,
-			AgentOutput:  p.agentOutput,
-			Significance: p.significance,
-		})
+func (q *ExtractQueue) Signal() {
+	select {
+	case q.ch <- struct{}{}:
+	default:
 	}
 }
 
-/*
-RecoverUnextracted 扫描 session_messages 中 memory_extracted=0 的记录，
-恢复到提取队列中。用于 daemon 重启后的冷恢复。
+func (q *ExtractQueue) Ch() <-chan struct{} { return q.ch }
 
-策略：取最近 50 条未提取的记录，按 turn ASC 排序（保证时序正确）。
-*/
+func (q *ExtractQueue) Close() { close(q.ch) }
+
 func (q *ExtractQueue) RecoverUnextracted(ctx context.Context) (int, error) {
-	rows, err := q.db.QueryContext(ctx, `
-		SELECT session_id, turn, role, content, significance
-		FROM session_messages
-		WHERE memory_extracted = 0
-		ORDER BY created_at ASC
-		LIMIT 100`,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("recover unextracted: %w", err)
+	if q == nil || q.db == nil {
+		return 0, nil
 	}
-	defer rows.Close()
-
-	pairs := make(map[extractTurnKey]*extractTurnPair)
-
-	for rows.Next() {
-		var sessionID, role, content string
-		var turn int
-		var sig sql.NullString
-		if err := rows.Scan(&sessionID, &turn, &role, &content, &sig); err != nil {
-			continue
-		}
-
-		key := extractTurnKey{sessionID: sessionID, turn: turn}
-		p, ok := pairs[key]
-		if !ok {
-			p = &extractTurnPair{sessionID: sessionID, turn: turn}
-			pairs[key] = p
-		}
-		if sig.Valid {
-			p.significance = Significance(sig.String)
-		}
-		switch role {
-		case "user":
-			p.userInput = content
-		case "assistant":
-			p.agentOutput = content
-		}
+	var count int
+	if err := q.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM memory_queue WHERE processed_at IS NULL`).Scan(&count); err != nil {
+		return 0, fmt.Errorf("recover memory queue: %w", err)
 	}
-
-	recovered := 0
-	for _, p := range pairs {
-		if p.userInput == "" && p.agentOutput == "" {
-			continue
-		}
-		if p.significance == "" {
-			p.significance = SignificanceMedium
-		}
-		item := ExtractItem{
-			SessionID:    p.sessionID,
-			Turn:         p.turn,
-			UserInput:    p.userInput,
-			AgentOutput:  p.agentOutput,
-			Significance: p.significance,
-		}
-		if q.Push(item) {
-			recovered++
-		}
+	if count > 0 {
+		q.Signal()
+		logging.Info("memory", "queue_recovered", logging.Event{"pending_queue_events": count})
 	}
-
-	if recovered > 0 {
-		log.Printf("[memory] recovered %d unextracted turns", recovered)
-	}
-	return recovered, nil
+	return count, nil
 }
 
-/*
-MarkExtracted 标记指定 session+turn 的消息为已提取。
-*/
-func MarkExtracted(ctx context.Context, db *sql.DB, sessionID string, turn int) error {
-	_, err := db.ExecContext(ctx, `
-		UPDATE session_messages
-		SET memory_extracted = 1
-		WHERE session_id = ? AND turn = ?`,
-		sessionID, turn,
-	)
-	return err
+func LoadPendingQueue(ctx context.Context, db *sql.DB, userID string, limit int) ([]QueueItem, error) {
+	if userID == "" {
+		userID = DefaultUserID
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, user_id, role, content, significance, created_at, next_attempt_at, attempts
+		FROM memory_queue
+		WHERE user_id = ?
+		  AND processed_at IS NULL
+		  AND attempts < ?
+		  AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+		ORDER BY created_at ASC
+		LIMIT ?`, userID, maxQueueAttempts, time.Now(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []QueueItem
+	for rows.Next() {
+		var item QueueItem
+		var sig, created, nextAttempt sql.NullString
+		if err := rows.Scan(&item.ID, &item.UserID, &item.Role, &item.Content, &sig, &created, &nextAttempt, &item.Attempts); err != nil {
+			continue
+		}
+		item.Significance = Significance(sig.String)
+		item.CreatedAt = parseDBTime(created.String)
+		item.NextAttemptAt = parseDBTime(nextAttempt.String)
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func DeleteQueueItems(ctx context.Context, db *sql.DB, ids []string) error {
+	for _, id := range ids {
+		if _, err := db.ExecContext(ctx, `DELETE FROM memory_queue WHERE id = ?`, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func RetryQueueItems(ctx context.Context, db *sql.DB, ids []string, cause error) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	errText := ""
+	if cause != nil {
+		errText = truncateRunes(cause.Error(), 500)
+	}
+	for _, id := range ids {
+		var attempts int
+		_ = db.QueryRowContext(ctx, `SELECT attempts FROM memory_queue WHERE id = ?`, id).Scan(&attempts)
+		nextAttempts := attempts + 1
+		if nextAttempts >= maxQueueAttempts {
+			if _, err := db.ExecContext(ctx, `DELETE FROM memory_queue WHERE id = ?`, id); err != nil {
+				return err
+			}
+			logging.Error("memory", "queue_drop_after_retries", cause, logging.Event{"attempts": nextAttempts, "queue_id": id})
+			continue
+		}
+		next := time.Now().Add(queueBackoff(nextAttempts))
+		if _, err := db.ExecContext(ctx, `UPDATE memory_queue SET attempts = ?, next_attempt_at = ?, last_error = ? WHERE id = ?`, nextAttempts, next, errText, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func queueBackoff(attempts int) time.Duration {
+	switch attempts {
+	case 1:
+		return 5 * time.Minute
+	case 2:
+		return 15 * time.Minute
+	default:
+		return time.Hour
+	}
+}
+
+func QueueCount(ctx context.Context, db *sql.DB, userID string) int {
+	if userID == "" {
+		userID = DefaultUserID
+	}
+	var count int
+	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM memory_queue WHERE user_id = ? AND processed_at IS NULL`, userID).Scan(&count)
+	return count
+}
+
+func QueueDueCount(ctx context.Context, db *sql.DB, userID string) int {
+	if userID == "" {
+		userID = DefaultUserID
+	}
+	var count int
+	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM memory_queue WHERE user_id = ? AND processed_at IS NULL AND attempts < ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?)`, userID, maxQueueAttempts, time.Now()).Scan(&count)
+	return count
 }

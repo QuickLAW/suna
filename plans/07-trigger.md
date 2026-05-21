@@ -110,9 +110,9 @@ enabled = true
   2. 注册到 cron.Scheduler
   3. 到点触发 → handler(task)
   4. handler 调 agent.Run(ctx, task)
-  5. agent 执行结果 → 存入 session_messages
+  5. agent 执行结果 → 更新 conversation_state / memory_queue
      如果 TUI 在线 → 通过 IPC 推送结果
-     如果 TUI 离线 → 结果存好，下次连接时展示
+     如果 TUI 离线 → 只保留最近恢复状态和必要 active memory
 
 感知源在 daemon 进程内运行，不依赖 TUI
 ```

@@ -2,8 +2,9 @@ package daemon
 
 import (
 	"context"
-	"log"
 	"time"
+
+	"github.com/alanchenchen/suna/internal/logging"
 )
 
 /*
@@ -46,13 +47,13 @@ func (l *Lifecycle) Watch(ctx context.Context) {
 			// 无客户端连接
 			if idleSince.IsZero() {
 				idleSince = time.Now()
-				log.Printf("[lifecycle] no clients, starting idle timer")
+				logging.Info("agent", "idle_timer_started", nil)
 				continue
 			}
 
 			// 等待超时
 			if time.Since(idleSince) >= idleShutdownDelay {
-				log.Printf("[lifecycle] idle for %v, shutting down", idleShutdownDelay)
+				logging.Info("agent", "idle_shutdown", logging.Event{"idle_for": idleShutdownDelay.String()})
 				l.daemon.Stop()
 				return
 			}

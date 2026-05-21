@@ -51,8 +51,7 @@ const (
 	MethodSendMessage    = "agent.sendMessage"
 	MethodCancel         = "agent.cancel"
 	MethodGuardReply     = "agent.guardReply"
-	MethodMemorySearch   = "memory.search"
-	MethodMemoryFacts    = "memory.facts"
+	MethodMemoryList     = "memory.list"
 	MethodTriggerList    = "trigger.list"
 	MethodTriggerAdd     = "trigger.add"
 	MethodTriggerRemove  = "trigger.remove"
@@ -89,7 +88,7 @@ const (
 	NotifyPerception          = "perception.event"
 	NotifyMemoryUpdated       = "memory.updated"
 	NotifyCompactResult       = "session.compact_result"
-	NotifyMemorySearchResult  = "memory.search_result"
+	NotifyMemoryListResult    = "memory.list_result"
 	NotifySessionRestoreMsg   = "session.restore_message"
 	NotifySessionRestoreInput = "session.restore_input"
 )
@@ -202,9 +201,9 @@ type ConfigSetParams struct {
 }
 
 type MemoryStats struct {
-	Episodes int `json:"episodes"`
-	Entities int `json:"entities"`
-	Facts    int `json:"facts"`
+	Active int `json:"active"`
+	Core   int `json:"core"`
+	Queued int `json:"queued"`
 }
 
 type SessionStats struct {
@@ -218,22 +217,17 @@ type SendMessageParams struct {
 	Content string `json:"content"`
 }
 
-// MemorySearchParams 记忆搜索参数
-type MemorySearchParams struct {
-	Query string `json:"query"`
-	TopK  int    `json:"top_k,omitempty"`
-}
-
-// MemorySearchResult 记忆搜索结果
-type MemorySearchResult struct {
+type MemoryListResult struct {
 	Memories []MemoryItem `json:"memories"`
 }
 
 type MemoryItem struct {
-	ID        string `json:"id"`
-	Content   string `json:"content"`
-	Type      string `json:"type"`
-	Timestamp string `json:"timestamp"`
+	ID       string   `json:"id"`
+	Content  string   `json:"content"`
+	Kind     string   `json:"kind"`
+	Tags     []string `json:"tags,omitempty"`
+	Priority int      `json:"priority"`
+	IsCore   bool     `json:"is_core"`
 }
 
 // UsageResult 用量查询结果

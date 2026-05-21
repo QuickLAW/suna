@@ -99,6 +99,7 @@ func (c *Compressor) CompressHistory(ctx context.Context, messages []model.Messa
 			}
 		}
 		req := &model.CompletionRequest{
+			Purpose: "compress",
 			Messages: []model.Message{
 				model.NewTextMessage(model.RoleUser, summary),
 			},

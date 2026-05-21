@@ -109,30 +109,6 @@ func (r *Router) ListProviders() []string {
 	return names
 }
 
-func (r *Router) EmbeddingProvider() (Provider, string) {
-	r.mu.RLock()
-	refs := make([]string, 0, len(r.providers))
-	if r.activeRef != "" {
-		refs = append(refs, r.activeRef)
-	}
-	for ref := range r.providers {
-		if ref != r.activeRef {
-			refs = append(refs, ref)
-		}
-	}
-	providers := make(map[string]Provider, len(r.providers))
-	for ref, p := range r.providers {
-		providers[ref] = p
-	}
-	r.mu.RUnlock()
-	for _, ref := range refs {
-		if p := providers[ref]; p != nil && p.SupportsEmbedding() {
-			return p, ref
-		}
-	}
-	return nil, ""
-}
-
 func createProvider(mc config.ModelConfig) (Provider, error) {
 	apiKey, err := mc.ResolveAPIKey()
 	if err != nil {

@@ -41,78 +41,50 @@ func (s *Store) Close() error {
 
 func (s *Store) migrate() error {
 	migrations := []string{
-		// ── 核心表 ──
+		// ── Active memory tables ──
 
-		// 会话：一个 session 代表一次连续对话
-		`CREATE TABLE IF NOT EXISTS sessions (
+		`CREATE TABLE IF NOT EXISTS user_memory (
 			id TEXT PRIMARY KEY,
-			created_at DATETIME NOT NULL DEFAULT (datetime('now')),
-			updated_at DATETIME NOT NULL DEFAULT (datetime('now')),
-			summary TEXT NOT NULL DEFAULT '',
-			status TEXT NOT NULL DEFAULT 'active'
-		)`,
-
-		// 会话消息：对话的原始记录（唯一的完整对话存储点）
-		`CREATE TABLE IF NOT EXISTS session_messages (
-			session_id TEXT NOT NULL,
-			turn INTEGER NOT NULL,
-			role TEXT NOT NULL,
-			content TEXT NOT NULL DEFAULT '',
-			tool_call TEXT NOT NULL DEFAULT '',
-			tool_result TEXT NOT NULL DEFAULT '',
-			significance TEXT NOT NULL DEFAULT '',
-			memory_extracted INTEGER NOT NULL DEFAULT 0,
-			created_at DATETIME NOT NULL DEFAULT (datetime('now')),
-			PRIMARY KEY (session_id, turn, role, created_at)
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_session_msgs ON session_messages(session_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_session_msgs_extract ON session_messages(memory_extracted)`,
-
-		// ── 记忆表 ──
-
-		// 情景记忆：LLM 提取的结构化摘要（不存原始对话原文，原文在 session_messages）
-		// embedding 用于语义搜索，source 标记提取方式
-		`CREATE TABLE IF NOT EXISTS episodic_memories (
-			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			kind TEXT NOT NULL,
 			content TEXT NOT NULL,
-			type TEXT NOT NULL DEFAULT '',
-			source TEXT NOT NULL DEFAULT '',
-			entities TEXT NOT NULL DEFAULT '[]',
-			embedding BLOB,
-			ts DATETIME NOT NULL DEFAULT (datetime('now')),
-			session_id TEXT NOT NULL DEFAULT '',
-			metadata TEXT NOT NULL DEFAULT '{}'
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_episodic_ts ON episodic_memories(ts)`,
-		`CREATE INDEX IF NOT EXISTS idx_episodic_source ON episodic_memories(source)`,
-
-		// FTS 索引（CJK 降级 LIKE，英文走 FTS）
-		`CREATE VIRTUAL TABLE IF NOT EXISTS episodic_fts USING fts5(
-			content,
-			content='episodic_memories',
-			content_rowid='rowid'
-		)`,
-
-		// 语义记忆：用户偏好、事实、习惯。
-		// UPSERT 语义：同一 type+key 只保留最新值，避免膨胀。
-		// 但保留更新历史（ts 字段），可追溯变化。
-		`CREATE TABLE IF NOT EXISTS semantic_facts (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			type TEXT NOT NULL,
-			key TEXT NOT NULL,
-			value TEXT NOT NULL,
-			source TEXT NOT NULL DEFAULT '',
-			ts DATETIME NOT NULL DEFAULT (datetime('now'))
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_semantic_type_key_ts ON semantic_facts(type, key, ts)`,
-
-		// 实体：从记忆中提取的命名实体（Vue3、Vite 等）
-		`CREATE TABLE IF NOT EXISTS entities (
-			name TEXT PRIMARY KEY,
-			memory_ids TEXT NOT NULL DEFAULT '[]',
-			embedding BLOB,
+			tags TEXT NOT NULL DEFAULT '[]',
+			priority INTEGER NOT NULL DEFAULT 50,
+			is_core INTEGER NOT NULL DEFAULT 0,
+			use_count INTEGER NOT NULL DEFAULT 0,
+			last_used_at DATETIME,
+			refreshed_at DATETIME NOT NULL DEFAULT (datetime('now')),
+			expires_at DATETIME,
+			created_at DATETIME NOT NULL DEFAULT (datetime('now')),
 			updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
 		)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_memory_core ON user_memory(user_id, is_core, priority)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_memory_kind ON user_memory(user_id, kind)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_memory_updated ON user_memory(user_id, updated_at)`,
+
+		`CREATE TABLE IF NOT EXISTS conversation_state (
+			user_id TEXT PRIMARY KEY,
+			resume_summary TEXT NOT NULL DEFAULT '',
+			last_messages TEXT NOT NULL DEFAULT '[]',
+			tool_summary TEXT NOT NULL DEFAULT '[]',
+			memory_processed_at DATETIME,
+			updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
+		)`,
+
+		`CREATE TABLE IF NOT EXISTS memory_queue (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			role TEXT NOT NULL,
+			content TEXT NOT NULL,
+			significance TEXT NOT NULL DEFAULT '',
+			created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+			next_attempt_at DATETIME NOT NULL DEFAULT (datetime('now')),
+			attempts INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT NOT NULL DEFAULT '',
+			processed_at DATETIME
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_memory_queue_pending ON memory_queue(processed_at, next_attempt_at, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_memory_queue_user ON memory_queue(user_id, processed_at)`,
 
 		// ── 运维表 ──
 
@@ -178,8 +150,11 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("exec migration: %w\nquery: %s", err, m)
 		}
 	}
-
-	s.db.Exec(`DROP INDEX IF EXISTS idx_semantic_unique`)
+	s.db.Exec(`ALTER TABLE conversation_state ADD COLUMN tool_summary TEXT NOT NULL DEFAULT '[]'`)
+	s.db.Exec(`ALTER TABLE memory_queue ADD COLUMN next_attempt_at DATETIME`)
+	s.db.Exec(`ALTER TABLE memory_queue ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`)
+	s.db.Exec(`ALTER TABLE memory_queue ADD COLUMN last_error TEXT NOT NULL DEFAULT ''`)
+	s.db.Exec(`UPDATE memory_queue SET next_attempt_at = datetime('now') WHERE next_attempt_at IS NULL`)
 
 	return nil
 }

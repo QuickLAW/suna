@@ -81,6 +81,8 @@ type ToolDef struct {
 // CompletionRequest 是 provider 的统一请求格式，对应设计文档中的 Model Router 输出。
 type CompletionRequest struct {
 	Model       string    `json:"model"`
+	Purpose     string    `json:"purpose,omitempty"`
+	RequestID   string    `json:"request_id,omitempty"`
 	System      string    `json:"system,omitempty"`
 	Messages    []Message `json:"messages"`
 	Tools       []ToolDef `json:"tools,omitempty"`
@@ -111,8 +113,6 @@ type Provider interface {
 	Complete(ctx context.Context, req *CompletionRequest) (<-chan Chunk, error)
 	EstimateTokens(text string) int
 	ContextWindow() int
-	SupportsEmbedding() bool
-	Embed(ctx context.Context, texts []string) ([][]float64, error)
 }
 
 // ParseToolCallArguments 将模型返回的工具参数 JSON 解为 map；非法 JSON 会显式保留 raw 字段便于排错。

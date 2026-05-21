@@ -8,7 +8,7 @@
 
 ## 当前结论
 
-TUI 现在已经能跑通基本使用流：启动后进入 Welcome，进入 Chat 后可以发消息、看流式回复、看工具执行、处理 AskUser 选项、处理 Guard confirm、切换模型、手动 compact、搜索记忆，并能通过 Config 管理模型连接、语言、主题和 Guard Mode。
+TUI 现在已经能跑通基本使用流：启动后进入 Welcome，进入 Chat 后可以发消息、看流式回复、看工具执行、处理 AskUser 选项、处理 Guard confirm、切换模型、手动 compact、查看 active memory，并能通过 Config 管理模型连接、语言、主题和 Guard Mode。
 
 当前实现不是完整 GUI 化配置中心，设计重点应收敛到“能稳定对话 + 能完成模型配置 + 能清楚展示 agent 运行状态”。复杂配置和远期多渠道能力不要塞进 TUI MVP。
 
@@ -34,7 +34,7 @@ TUI 现在已经能跑通基本使用流：启动后进入 Welcome，进入 Chat
 | Reasoning/Thinking | 已实现 | `app.go`, `chat.go` | 默认折叠，`Ctrl+T` 展开 |
 | Tool 展示 | 已实现 | `app.go`, `chat.go`, `chat_render.go` | running/done/error，归入 Suna 回合，详情最多展示 10 行结果 |
 | AskUser 选项 | 已实现 | `app.go`, `chat.go` | options 为 `[]string`，支持上下选择、Enter、数字输入、自定义答案 |
-| Slash command | 已实现 | `commands.go` | `/new`, `/model`, `/memory search`, `/compact`, `/config`, `/help` |
+| Slash command | 已实现 | `commands.go` | `/new`, `/model`, `/memory`, `/compact`, `/config`, `/help` |
 | Model picker | 已实现 | `commands.go`, `chat_render.go` | `/model` 无参数时打开列表 |
 | Markdown 渲染 | 已实现 | `markdown.go` | Glamour v2，assistant 和 expanded thinking 使用 |
 | Compact 面板 | 已实现 | `ui.go`, `commands.go` | 展示 before/after、context window 百分比、压缩轮数 |
@@ -359,7 +359,7 @@ type GuardConfirmParams struct {
 |---|---|
 | `/new` | 新建 session，清空当前 Chat 状态 |
 | `/model [ref]` | 无参数时打开模型选择器；带 ref 时切换模型；没有 provider 前缀时使用当前 provider |
-| `/memory search <q>` | 调 `memory.search`，显示结果 |
+| `/memory` | 调 `memory.list`，显示当前 active memory |
 | `/compact` | 调 `session.compact`，显示 compact 结果面板 |
 | `/config` | 进入 Config home |
 | `/help` | 进入 Help 页面 |
@@ -379,7 +379,7 @@ type GuardConfirmParams struct {
 
 - 只有命中已注册命令入口时才作为 TUI 本地命令处理。
 - 未注册的 `/...` 输入会作为普通用户消息发送给 agent，不再显示 unknown command 错误。
-- 已注册入口以 `allCommands()` 为准，当前为 `/new`、`/model`、`/memory search`、`/compact`、`/config`、`/help`。
+- 已注册入口以 `allCommands()` 为准，当前为 `/new`、`/model`、`/memory`、`/compact`、`/config`、`/help`。
 
 当前未暴露的 IPC 能力：
 
@@ -387,7 +387,7 @@ type GuardConfirmParams struct {
 - `/trigger ...`
 - `/skill ...`
 - `/usage`
-- `/memory facts/status`
+- `/memory search|facts|status`
 
 这些不属于当前 TUI MVP。
 
@@ -712,7 +712,7 @@ TUI 需要 daemon 提供的展示数据：
 | `agent.guard_confirm` | Guard confirm overlay（tool/risk/reason/suggestion/params） |
 | `agent.guardReply` | TUI 回传 Guard approve/reject |
 | `session.compact_result` | compact 面板 |
-| `memory.search_result` | Chat 中显示记忆搜索结果 |
+| `memory.list_result` | Chat 中显示 active memory 列表 |
 | `session.restore_message` | Resume 恢复历史消息 |
 | `session.restore_input` | Resume 恢复未发送输入 |
 

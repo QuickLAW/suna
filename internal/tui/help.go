@@ -113,7 +113,7 @@ func (t *TUI) renderHelpContent() string {
 		t.commandLine("/model [name]", "tui.command.model.desc"),
 		t.commandLine("/compact", "tui.command.compact.desc"),
 		t.commandLine("/config", "tui.command.config.desc"),
-		t.commandLine("/memory search <q>", "tui.command.memory.desc"),
+		t.commandLine("/memory", "tui.command.memory.desc"),
 		"",
 		styleHL.Render(t.tr("tui.help.copy_text")),
 		t.helpLine("Ctrl+Y", "tui.help.copy_mode"),
