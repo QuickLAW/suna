@@ -58,10 +58,13 @@ type TUI struct {
 	menu   list.Model
 
 	showToolDetail      bool
+	showReasoningDetail bool
 	phase               phase
 	phaseStart          time.Time
 	activeTools         map[string]*toolEntry
 	toolStartTimes      map[string]time.Time
+	currentToolBlock    *toolBlock
+	selectedToolID      string
 	lastAssistantText   string
 	welcomeCursor       int
 	configCursor        int
@@ -107,6 +110,7 @@ type TUI struct {
 
 type guardConfirmView struct {
 	id         string
+	toolCallID string
 	tool       string
 	params     map[string]any
 	risk       string
@@ -232,6 +236,8 @@ func (t *TUI) runAgent(input string) tea.Cmd {
 	t.startLLMWait()
 	t.activeTools = make(map[string]*toolEntry)
 	t.toolStartTimes = make(map[string]time.Time)
+	t.currentToolBlock = nil
+	t.selectedToolID = ""
 	return tea.Batch(t.sendMessageCmd(input), t.sp.Tick)
 }
 
@@ -369,22 +375,28 @@ func (t *TUI) handleIPCNotification(notif ipcNotification) {
 		}
 		displayName := toolDisplayName(p.Tool)
 		intent := p.Intent
-		params := ""
-		if len(p.Params) > 0 {
-			params = formatToolParams(p.Params)
-		}
+		block := t.ensureToolBlock()
+		parentID, localID := parseSubtaskToolID(id)
 		t.lastAssistantText = ""
 		te := &toolEntry{
-			id:      id,
-			rawName: p.Tool,
-			name:    displayName,
-			intent:  intent,
-			params:  params,
-			summary: toolParamSummary(p.Tool, p.Params),
-			status:  toolRunning,
+			id:        id,
+			localID:   localID,
+			parentID:  parentID,
+			rawName:   p.Tool,
+			name:      displayName,
+			intent:    intent,
+			params:    formatToolParams(p.Params),
+			paramsRaw: p.Params,
+			summary:   toolParamSummary(p.Tool, p.Params),
+			status:    toolRunning,
+			startedAt: time.Now(),
 		}
 		t.activeTools[id] = te
-		t.toolStartTimes[id] = time.Now()
+		t.toolStartTimes[id] = te.startedAt
+		block.add(te)
+		if t.selectedToolID == "" {
+			t.selectedToolID = id
+		}
 	case ipc.NotifyToolEnd:
 		var p ipc.ToolEndParams
 		json.Unmarshal(notif.params, &p)
@@ -398,6 +410,9 @@ func (t *TUI) handleIPCNotification(notif ipcNotification) {
 				te.duration = time.Since(start)
 				delete(t.toolStartTimes, id)
 			}
+			te.endedAt = time.Now()
+			te.resultTruncated = p.ResultTruncated
+			te.resultBytes = p.ResultBytes
 			if p.Error {
 				te.status = toolError
 				te.result = p.Result
@@ -405,10 +420,8 @@ func (t *TUI) handleIPCNotification(notif ipcNotification) {
 				te.status = toolDone
 				te.result = p.Result
 			}
-			t.messages = append(t.messages, chatMsg{role: "tool", content: te})
-			delete(t.activeTools, id)
 		}
-		if len(t.activeTools) == 0 {
+		if !t.hasRunningTools() {
 			t.phase = phaseLLM
 			t.phaseStart = time.Now()
 			t.lastAssistantText = ""
@@ -424,7 +437,7 @@ func (t *TUI) handleIPCNotification(notif ipcNotification) {
 	case ipc.NotifyGuardConfirm:
 		var p ipc.GuardConfirmParams
 		json.Unmarshal(notif.params, &p)
-		t.pendingGuard = &guardConfirmView{id: p.ID, tool: p.Tool, params: p.Params, risk: p.Risk, reason: p.Reason, suggestion: p.Suggestion}
+		t.pendingGuard = &guardConfirmView{id: p.ID, toolCallID: p.ToolCallID, tool: p.Tool, params: p.Params, risk: p.Risk, reason: p.Reason, suggestion: p.Suggestion}
 		t.guardCursor = 1
 		t.loading = false
 		t.phase = phaseIdle
@@ -457,15 +470,7 @@ func (t *TUI) handleIPCNotification(notif ipcNotification) {
 		if len(p.Memories) == 0 {
 			t.messages = append(t.messages, chatMsg{role: "system", content: t.i18n.T("memory.not_found")})
 		} else {
-			var lines []string
-			for _, m := range p.Memories {
-				core := ""
-				if m.IsCore {
-					core = " core"
-				}
-				lines = append(lines, fmt.Sprintf("  [%s%s:%d] %s", m.Kind, core, m.Priority, m.Content))
-			}
-			t.messages = append(t.messages, chatMsg{role: "system", content: strings.Join(lines, "\n")})
+			t.messages = append(t.messages, chatMsg{role: "panel", content: t.renderMemoryList(p.Memories)})
 		}
 	case ipc.NotifySessionRestoreMsg:
 		var p struct {

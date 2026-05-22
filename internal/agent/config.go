@@ -1,4 +1,4 @@
-package core
+package agent
 
 import (
 	"fmt"
@@ -28,7 +28,6 @@ type ConfigModel struct {
 	Strengths     []string
 }
 
-// Config 返回当前 daemon 正在使用的配置快照，调用方不得修改其内容。
 func (a *Agent) Config() *config.Config {
 	a.configMu.RLock()
 	defer a.configMu.RUnlock()
@@ -58,8 +57,6 @@ func (a *Agent) ReloadConfigFromDiskIfNeeded() (*config.Config, error) {
 	return a.cfg.Clone(), nil
 }
 
-// UpdateConfig 是 daemon 侧配置写入口。TUI 只能通过 IPC 调用这里，避免 UI 直接读写核心配置。
-// 模型配置更新后会立即重建 Router，因此 active_model 在当前 daemon 中即时生效。
 func (a *Agent) UpdateConfig(params ConfigSetParams) (*config.Config, error) {
 	a.configMu.Lock()
 	defer a.configMu.Unlock()
@@ -150,7 +147,6 @@ func (a *Agent) UpdateConfig(params ConfigSetParams) (*config.Config, error) {
 }
 
 func (a *Agent) reloadRouterLocked(cfg *config.Config) error {
-	// 模型配置变更必须立即反映到 daemon 内存态，否则 TUI 激活模型会“写了但不生效”。
 	if len(cfg.Models) == 0 || cfg.ActiveModel == "" {
 		a.router = nil
 		a.compressor = memory.NewCompressor(nil)
@@ -161,8 +157,14 @@ func (a *Agent) reloadRouterLocked(cfg *config.Config) error {
 		return err
 	}
 	a.router = router
+	if a.prompts != nil {
+		router.SetPrompts(a.prompts)
+	}
 	if p := router.DefaultProvider(); p != nil {
 		a.compressor = memory.NewCompressor(p)
+		if a.prompts != nil {
+			a.compressor.SetPrompts(a.prompts)
+		}
 	}
 	return nil
 }

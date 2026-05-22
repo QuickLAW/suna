@@ -127,7 +127,7 @@ func (t *TUI) updateModelPicker(key string) (tea.Model, tea.Cmd) {
 }
 
 func (t *TUI) handleMemory(parts []string) tea.Cmd {
-	if len(parts) == 1 || (len(parts) >= 2 && parts[1] == "list") {
+	if len(parts) == 1 {
 		return t.listMemoryCmd()
 	}
 	t.messages = append(t.messages, chatMsg{role: "system", content: t.i18n.T("memory.list_hint")})

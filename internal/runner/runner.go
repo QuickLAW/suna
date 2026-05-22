@@ -1,0 +1,316 @@
+package runner
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/alanchenchen/suna/internal/memory"
+	"github.com/alanchenchen/suna/internal/model"
+	"github.com/alanchenchen/suna/internal/tool"
+)
+
+func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
+	var result Result
+	if r.Router == nil {
+		return result, fmt.Errorf("no model configured, please add a model in config")
+	}
+	if req.Working == nil {
+		return result, fmt.Errorf("working memory is required")
+	}
+	if req.ModelRef == "" {
+		return result, fmt.Errorf("model ref is required")
+	}
+	if req.ModelID == "" {
+		req.ModelID = req.ModelRef
+	}
+	if req.Purpose == "" {
+		req.Purpose = "chat"
+	}
+	if req.MaxTokens <= 0 {
+		req.MaxTokens = 4096
+	}
+	if req.StreamTimeout <= 0 {
+		req.StreamTimeout = 120 * time.Second
+	}
+
+	turns := 0
+	toolCallsExecuted := 0
+
+	for {
+		if ctx.Err() != nil {
+			return result, ctx.Err()
+		}
+		if req.MaxTurns > 0 && turns >= req.MaxTurns {
+			return result, fmt.Errorf("max turns exceeded (%d)", req.MaxTurns)
+		}
+		turns++
+
+		messages := req.Working.Messages()
+		if req.Messages != nil {
+			messages = req.Messages(ctx)
+		}
+		tools := buildToolDefs(req)
+		completionReq := &model.CompletionRequest{
+			Model:     req.ModelID,
+			Purpose:   req.Purpose,
+			RequestID: uuid.New().String(),
+			System:    req.System,
+			Messages:  messages,
+			Tools:     tools,
+			MaxTokens: req.MaxTokens,
+		}
+
+		if r.Sink != nil {
+			r.Sink.Status("waiting_llm")
+		}
+		ch, err := r.Router.Complete(ctx, req.ModelRef, completionReq)
+		if err != nil {
+			return result, err
+		}
+
+		fullContent, toolCalls, usage, err := r.readStream(ctx, ch, req)
+		if err != nil {
+			return result, err
+		}
+		if usage != nil {
+			result.Usage = usage
+			if r.UsageSink != nil {
+				r.UsageSink.RecordUsage(ctx, req.ModelID, usage)
+			}
+		}
+
+		if fullContent != "" || len(toolCalls) > 0 {
+			fullContent = r.processCapabilities(ctx, req.Working, fullContent)
+			if fullContent != "" && r.Hooks.OnAssistantText != nil {
+				r.Hooks.OnAssistantText(ctx, fullContent)
+			}
+			if len(toolCalls) == 0 {
+				req.Working.AddMessage(model.NewTextMessage(model.RoleAssistant, fullContent))
+			}
+		}
+
+		if len(toolCalls) == 0 {
+			result.FinalText = fullContent
+			result.ContextWindow = r.contextWindow(req.ModelRef)
+			return result, nil
+		}
+
+		preparedCalls, cleanToolCalls := r.prepareToolCalls(toolCalls, fullContent)
+		assistantMsg := model.Message{
+			Role:        model.RoleAssistant,
+			TextContent: fullContent,
+			Content:     []model.ContentBlock{{Type: model.ContentText, Text: fullContent}},
+			ToolCalls:   cleanToolCalls,
+		}
+		req.Working.AddMessage(assistantMsg)
+
+		for _, pc := range preparedCalls {
+			result.HadToolCall = true
+			if r.Sink != nil {
+				r.Sink.ToolCall(ToolCallEvent{ID: pc.tc.ID, Name: pc.tc.Name, Params: pc.params, Intent: pc.intent})
+			}
+		}
+		if req.MaxToolCalls > 0 && toolCallsExecuted+len(preparedCalls) > req.MaxToolCalls {
+			return result, fmt.Errorf("max tool calls exceeded (%d)", req.MaxToolCalls)
+		}
+		toolCallsExecuted += len(preparedCalls)
+
+		results := r.executeToolCalls(ctx, preparedCalls)
+		for _, execResult := range results {
+			if r.Sink != nil {
+				r.Sink.ToolResult(ToolResultEvent{ID: execResult.tc.ID, Name: execResult.tc.Name, Result: execResult.result.Content, Error: execResult.result.IsError})
+			}
+			if execResult.result.IsError {
+				result.HadToolError = true
+			}
+		}
+
+		for _, execResult := range results {
+			req.Working.AddMessage(model.Message{
+				Role:        model.RoleTool,
+				ToolCallID:  execResult.tc.ID,
+				TextContent: execResult.result.Content,
+				Content:     []model.ContentBlock{{Type: model.ContentText, Text: execResult.result.Content}},
+			})
+			if r.Hooks.OnToolResult != nil {
+				r.Hooks.OnToolResult(execResult.tc.Name, execResult.result)
+			}
+		}
+
+		if req.AutoCompress {
+			r.autoCompact(ctx, req.Working, r.contextWindow(req.ModelRef))
+		}
+	}
+}
+
+func (r *Runner) readStream(ctx context.Context, ch <-chan model.Chunk, req Request) (string, []model.ToolCall, *model.Usage, error) {
+	var fullContent string
+	var toolCalls []model.ToolCall
+	var lastUsage *model.Usage
+	timer := time.NewTimer(req.StreamTimeout)
+	defer timer.Stop()
+
+	for {
+		select {
+		case chunk, ok := <-ch:
+			if !ok {
+				return fullContent, toolCalls, lastUsage, nil
+			}
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(req.StreamTimeout)
+			if ctx.Err() != nil {
+				return fullContent, toolCalls, lastUsage, ctx.Err()
+			}
+			if chunk.Error != "" {
+				return fullContent, toolCalls, lastUsage, fmt.Errorf("%s", chunk.Error)
+			}
+			if chunk.ReasoningContent != "" && req.EmitReasoning && r.Sink != nil {
+				r.Sink.Reasoning(chunk.ReasoningContent)
+			}
+			if chunk.Content != "" {
+				fullContent += chunk.Content
+				if req.EmitStream && r.Sink != nil {
+					r.Sink.Stream(chunk.Content)
+				}
+			}
+			if len(chunk.ToolCalls) > 0 {
+				toolCalls = append(toolCalls, chunk.ToolCalls...)
+			}
+			if chunk.Usage != nil {
+				lastUsage = chunk.Usage
+			}
+			if chunk.Done {
+				return fullContent, toolCalls, lastUsage, nil
+			}
+		case <-timer.C:
+			return fullContent, toolCalls, lastUsage, fmt.Errorf("LLM stream timeout (120s), try Esc to cancel")
+		case <-ctx.Done():
+			return fullContent, toolCalls, lastUsage, ctx.Err()
+		}
+	}
+}
+
+func (r *Runner) processCapabilities(ctx context.Context, working *memory.WorkingMemory, content string) string {
+	if r.Hooks.Capabilities == nil || content == "" {
+		return content
+	}
+	cleaned, loaded := r.Hooks.Capabilities.ProcessLoadMarkers(content)
+	if len(loaded) == 0 || cleaned == content {
+		return content
+	}
+	for _, name := range loaded {
+		if prompt, ok := r.Hooks.Capabilities.LoadSkill(name); ok {
+			working.AddMessage(model.NewTextMessage(model.RoleSystem, fmt.Sprintf("[Capability: %s]\n%s", name, prompt)))
+		}
+	}
+	_ = ctx
+	return cleaned
+}
+
+func (r *Runner) prepareToolCalls(toolCalls []model.ToolCall, fullContent string) ([]preparedToolCall, []model.ToolCall) {
+	toolIntent := extractToolIntent(fullContent)
+	preparedCalls := make([]preparedToolCall, 0, len(toolCalls))
+	cleanToolCalls := make([]model.ToolCall, 0, len(toolCalls))
+	for _, tc := range toolCalls {
+		params := model.ParseToolCallArguments(tc.Arguments)
+		intent := ""
+		if r.Hooks.CleanToolParams != nil {
+			params, intent = r.Hooks.CleanToolParams(tc.Name, params)
+		}
+		if intent == "" {
+			intent = toolIntent
+		}
+		cleanTC := tc
+		if b, err := json.Marshal(params); err == nil {
+			cleanTC.Arguments = string(b)
+		}
+		preparedCalls = append(preparedCalls, preparedToolCall{tc: cleanTC, params: params, intent: intent})
+		cleanToolCalls = append(cleanToolCalls, cleanTC)
+	}
+	return preparedCalls, cleanToolCalls
+}
+
+func (r *Runner) executeToolCalls(ctx context.Context, calls []preparedToolCall) []toolExecResult {
+	resultCh := make(chan toolExecResult, len(calls))
+	for i, pc := range calls {
+		go func(index int, pc preparedToolCall) {
+			res := tool.ErrorResult("tool executor not configured")
+			if r.Executor != nil {
+				res = r.Executor.ExecuteTool(ctx, pc.tc.ID, pc.tc.Name, pc.params)
+			}
+			resultCh <- toolExecResult{index: index, tc: pc.tc, result: res}
+		}(i, pc)
+	}
+	results := make([]toolExecResult, len(calls))
+	for i := 0; i < len(calls); i++ {
+		r := <-resultCh
+		results[r.index] = r
+	}
+	return results
+}
+
+func (r *Runner) contextWindow(modelRef string) int {
+	if r.Router == nil {
+		return 128000
+	}
+	p, err := r.Router.Provider(modelRef)
+	if err != nil || p == nil {
+		return 128000
+	}
+	return p.ContextWindow()
+}
+
+func buildToolDefs(req Request) []model.ToolDef {
+	if req.ToolDefs != nil {
+		return req.ToolDefs()
+	}
+	if req.Tools == nil {
+		return nil
+	}
+	tools := req.Tools.All()
+	defs := make([]model.ToolDef, 0, len(tools))
+	for _, t := range tools {
+		defs = append(defs, model.ToolDef{Name: t.Name(), Description: t.Description(), Parameters: withIntentParameter(t.Parameters())})
+	}
+	return defs
+}
+
+func withIntentParameter(params map[string]any) map[string]any {
+	props, ok := params["properties"].(map[string]any)
+	if !ok {
+		props = map[string]any{}
+		params["properties"] = props
+	}
+	props["intent"] = map[string]any{
+		"type":        "string",
+		"description": "Natural-language reason for this tool call. Explain what you are trying to accomplish for the user. Do not put file contents, secrets, or raw parameters here.",
+	}
+	return params
+}
+
+func extractToolIntent(fullContent string) string {
+	text := strings.TrimSpace(fullContent)
+	if text == "" {
+		return ""
+	}
+	sentences := strings.FieldsFunc(text, func(r rune) bool {
+		return r == '.' || r == '。' || r == '\n'
+	})
+	for i := len(sentences) - 1; i >= 0; i-- {
+		s := strings.TrimSpace(sentences[i])
+		if s != "" {
+			return s
+		}
+	}
+	return ""
+}

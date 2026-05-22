@@ -84,7 +84,8 @@ func (t *TUI) renderHelpOverlay(width int) string {
 		styleHL.Render(t.tr("tui.help.more")),
 		"  " + styleBrand.Render("Shift+Enter") + styleDim.Render(" ") + t.tr("tui.key.newline"),
 		"  " + styleBrand.Render("Ctrl+Y") + styleDim.Render(" ") + t.tr("tui.key.copy_mode"),
-		"  " + styleBrand.Render("Ctrl+T") + styleDim.Render(" ") + t.tr("tui.key.detail"),
+		"  " + styleBrand.Render("Ctrl+T") + styleDim.Render(" ") + t.tr("tui.key.tool_detail"),
+		"  " + styleBrand.Render("Ctrl+R") + styleDim.Render(" ") + t.tr("tui.key.reasoning_detail"),
 		"  " + styleBrand.Render("PgUp/PgDn") + styleDim.Render(" ") + t.tr("tui.key.scroll_up") + "/" + t.tr("tui.key.scroll_down"),
 	}
 	body := strings.Join(common, "\n") + "\n\n" + strings.Join(commands, "\n") + "\n\n" + strings.Join(more, "\n")
@@ -101,6 +102,10 @@ func maxLineWidth(s string) int {
 }
 
 func (t *TUI) renderHelpContent() string {
+	commands := []string{styleHL.Render(t.tr("tui.help.commands"))}
+	for _, c := range t.allCommands() {
+		commands = append(commands, t.commandLine(c.cmd, c.descKey))
+	}
 	sections := []string{
 		styleHL.Render(t.tr("tui.help.chat_basics")),
 		t.helpLine("Enter", "tui.help.chat_send"),
@@ -108,16 +113,16 @@ func (t *TUI) renderHelpContent() string {
 		t.helpLine("Esc", "tui.help.chat_back"),
 		t.helpLine("PgUp/PgDn", "tui.help.chat_scroll"),
 		"",
-		styleHL.Render(t.tr("tui.help.commands")),
-		t.commandLine("/new", "tui.command.new.desc"),
-		t.commandLine("/model [name]", "tui.command.model.desc"),
-		t.commandLine("/compact", "tui.command.compact.desc"),
-		t.commandLine("/config", "tui.command.config.desc"),
-		t.commandLine("/memory", "tui.command.memory.desc"),
+		strings.Join(commands, "\n"),
 		"",
 		styleHL.Render(t.tr("tui.help.copy_text")),
 		t.helpLine("Ctrl+Y", "tui.help.copy_mode"),
 		t.helpLine("Esc", "tui.help.copy_exit"),
+		"",
+		styleHL.Render(t.tr("tui.help.details")),
+		t.helpLine("Ctrl+T", "tui.help.tool_detail"),
+		t.helpLine("↑/↓", "tui.help.tool_switch"),
+		t.helpLine("Ctrl+R", "tui.help.reasoning_detail"),
 		"",
 		styleHL.Render(t.tr("tui.help.config")),
 		t.helpText("tui.help.config_menu"),

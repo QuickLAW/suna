@@ -2,7 +2,7 @@
 
 > 最后更新: 2026-05-21
 > 本文档以当前 `internal/tui` 实现为准，描述已经可用的 TUI 行为、仍需保留的设计约束，以及尚未实现的功能。
-> 范围只包含 TUI 前端视觉、布局、交互和 IPC 展示数据，不定义 daemon/core 业务逻辑。
+> 范围只包含 TUI 前端视觉、布局、交互和 IPC 展示数据，不定义 daemon/agent 业务逻辑。
 
 ---
 
@@ -31,8 +31,8 @@ TUI 现在已经能跑通基本使用流：启动后进入 Welcome，进入 Chat
 | Welcome 菜单 | 已实现 | `welcome.go` | `New`、`Resume`、`Config`、`Help`，状态区显示版本 |
 | Chat 布局 | 已实现 | `chat_render.go` | mini pet 顶栏、viewport、textarea、命令建议、底栏、复制模式提示 |
 | 流式回答 | 已实现 | `app.go`, `chat.go` | `agent.stream` 追加 assistant 内容 |
-| Reasoning/Thinking | 已实现 | `app.go`, `chat.go` | 默认折叠，`Ctrl+T` 展开 |
-| Tool 展示 | 已实现 | `app.go`, `chat.go`, `chat_render.go` | running/done/error，归入 Suna 回合，详情最多展示 10 行结果 |
+| Reasoning/Thinking | 已实现 | `app.go`, `chat.go` | 默认折叠，`Ctrl+R` 展开 |
+| Tool 展示 | 已实现 | `app.go`, `chat.go`, `chat_render.go`, `tool_view.go` | running/done/error，归入 Suna 回合，`Ctrl+T` 打开 tool detail overlay |
 | AskUser 选项 | 已实现 | `app.go`, `chat.go` | options 为 `[]string`，支持上下选择、Enter、数字输入、自定义答案 |
 | Slash command | 已实现 | `commands.go` | `/new`, `/model`, `/memory`, `/compact`, `/config`, `/help` |
 | Model picker | 已实现 | `commands.go`, `chat_render.go` | `/model` 无参数时打开列表 |
@@ -255,8 +255,8 @@ token status bar / copy mode hint
 |---|---|
 | user | inline 用户消息，原样文本，不走 Markdown |
 | assistant | 标题 `Suna` + Glamour Markdown |
-| reasoning | 归入当前 `Suna` 信息块，Thinking box 默认折叠，`Ctrl+T` 展开，展开时走 Markdown |
-| tool | 归入当前 `Suna` 信息块，running/done/error 行，`Ctrl+T` 展示参数和最多 10 行结果 |
+| reasoning | 归入当前 `Suna` 信息块，Thinking box 默认折叠，`Ctrl+R` 展开，展开时走 Markdown |
+| tool | 归入当前 `Suna` 信息块，默认只显示 intent 和错误摘要；`Ctrl+T` 打开当前选中 tool 详情 |
 | system | dim 色系统消息 |
 | error | error 色错误消息 |
 
@@ -264,7 +264,7 @@ Suna 回合分组规则：
 
 - 连续的 `reasoning`、`tool`、`assistant` 都属于同一个 `Suna` 信息块，只渲染一次 `Suna` 标题。
 - 用户消息和后续 `Suna` 信息块之间保留空行，避免 thinking/tool 贴在用户消息下方造成归属不清。
-- `Thinking box`、tool 行、running tool 行和 assistant 正文都相对 `Suna` 标题向内缩进，形成清楚层级。
+- `Thinking box`、tool tree、running tool 行和 assistant 正文都相对 `Suna` 标题向内缩进，形成清楚层级。
 - `system` 和 `error` 不并入 `Suna` 信息块，会打断当前 Suna 回合。
 
 ### Loading 和阶段
@@ -288,8 +288,21 @@ Current status line：
 - `phaseFirstLLM` 显示等待 LLM。
 - `phaseLLM` 显示正在回复。
 - `phaseThinking` 显示思考中，但不额外插入空 thinking box。
-- 有 running tool 时优先显示 `Executing tool... tool(summary)`。
+- 有 running tool 时优先显示 `Executing tool... intent`。
 - 历史 reasoning/tool 事件仍保留在 Suna 回合里，运行中只强调“当前正在做什么”。
+- Tool 展示使用并发状态模型：`tool_start` 创建 running 项，`tool_end` 更新 done/error，不等待前一个 tool 完成。
+- Subtask 内部 tool 通过 `spawn:<parentToolCallID>:<subToolCallID>` 归到父 spawn 下，渲染为树形结构。
+- 主聊天流不渲染完整 params/result，避免频繁展开导致 viewport 重排卡顿。
+- Tool error 必须在主线展示短错误摘要；完整 params/result 只在详情面板展示。
+- Tool detail 使用 overlay 面板，不再插入聊天流；overlay 显示当前类型、当前位置、tool、intent、params/result，并提示 `↑/↓ switch · Ctrl+T/Esc close`。
+- 聊天主线不显示选中箭头，避免 overlay 打开后 chat 与详情焦点混淆。
+- `spawn` 在主线标记为 `Subtask · ...`，subtask 内部工具只显示自身 intent，并依靠树结构表达归属。
+- Subtask detail 优先展示 `model`、`tools`、`task`，普通工具 detail 展示完整 params。
+- Loading 状态只显示工具执行中和 running 数量，不再拼接当前 tool name/intent，避免和 tool tree 重复。
+- Tool/subtask 固定 UI 文案走 i18n；主线只在父 spawn 显示 `Subtask` 标识，子工具依靠树结构表达归属，不重复加 `Subtask tool`。
+- Tool detail overlay 底部提示根据当前位置动态显示 `previous`/`next`，首项不显示 previous，末项不显示 next。
+- Tool detail overlay 限制内容高度，避免 result 过长撑破 box；完整展示仍以 IPC 16KB 上限和后续滚动/详情机制为准。
+- Guard confirm payload 携带 `tool_call_id`；用户 reject 后，TUI 立即把对应 tool 标为 error，而不是只追加系统消息。
 
 ### AskUser Options
 
@@ -353,7 +366,7 @@ type GuardConfirmParams struct {
 
 ### 命令
 
-当前 TUI 有 6 个 slash command 入口：
+当前 TUI 有这些 slash command 入口：
 
 | 命令 | 行为 |
 |---|---|
@@ -370,6 +383,7 @@ type GuardConfirmParams struct {
 
 - 输入以 `/` 开头且第一个空格前仍在命令位置时显示。
 - 最多显示 4 项。
+- 命令建议可以只显示匹配的前几项；完整命令清单必须在 Help 页面展示。
 - `↑↓` 选择，`Enter` 接受。
 - `Tab` 不用于命令建议。
 - Chat help overlay 只展示常用操作、常用命令和少量更多操作，不再默认铺开完整快捷键清单。
@@ -379,7 +393,7 @@ type GuardConfirmParams struct {
 
 - 只有命中已注册命令入口时才作为 TUI 本地命令处理。
 - 未注册的 `/...` 输入会作为普通用户消息发送给 agent，不再显示 unknown command 错误。
-- 已注册入口以 `allCommands()` 为准，当前为 `/new`、`/model`、`/memory`、`/compact`、`/config`、`/help`。
+- 已注册入口以 `allCommands()` 为准，Help 页面直接从该列表生成，避免指令文档遗漏。
 
 当前未暴露的 IPC 能力：
 
@@ -398,7 +412,8 @@ type GuardConfirmParams struct {
 | `Enter` | 发送；有命令建议时接受建议；有 AskUser options 且输入为空时确认当前选项 |
 | `Shift+Enter` / `Alt+Enter` | 换行 |
 | `Esc` | 关闭 help；运行中则 cancel；输入为空则回 Welcome；输入非空则清空输入 |
-| `Ctrl+T` | 展开/收起 tool 和 thinking 详情 |
+| `Ctrl+T` | 打开/关闭 tool detail overlay；overlay 中 `↑/↓` 切换 tool |
+| `Ctrl+R` | 展开/收起 reasoning/thinking 详情 |
 | `Ctrl+Y` | 进入/退出 copy mode；copy mode 下关闭鼠标捕获，可用终端原生拖拽选择文本 |
 | `PgUp` | viewport 上滚 |
 | `PgDown` | viewport 下滚 |
@@ -677,7 +692,8 @@ Help 有两个形态：
 | `Ctrl+C` | 退出 | 退出 | 退出 | 退出 |
 | `↑↓` | 移动菜单 | 命令建议或 AskUser options | 移动列表/表单焦点/确认按钮 | - |
 | `j/k` | 移动菜单 | model picker 中可用 | 移动列表 | - |
-| `Ctrl+T` | - | 展开/收起 tool/thinking | - | - |
+| `Ctrl+T` | - | 打开/关闭 tool detail overlay | - | - |
+| `Ctrl+R` | - | 展开/收起 reasoning/thinking | - | - |
 | `Ctrl+Y` | - | 进入/退出 copy mode | - | - |
 | `PgUp/PgDown` | - | viewport 半页滚动 | - | Help viewport 半页滚动 |
 | `?` / `F1` | Help 页面 | help overlay | help overlay | - |
@@ -707,6 +723,8 @@ TUI 需要 daemon 提供的展示数据：
 | `memory.list_result` | Chat 中显示 active memory 列表 |
 | `session.restore_message` | Resume 恢复历史消息 |
 | `session.restore_input` | Resume 恢复未发送输入 |
+
+`agent.tool_end.result` 是 UI 展示内容，不是 agent 内部完整 tool result。daemon 会把该字段限制到 16KB；如果结果被截断，payload 会带 `result_truncated=true` 和 `result_bytes=<原始字节数>`。完整 tool result 仍保留在 agent/runner/LLM 上下文中。
 
 已打通的关键结构：
 

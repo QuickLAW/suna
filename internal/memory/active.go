@@ -87,8 +87,9 @@ func (s *MemoryStore) BuildBrief(ctx context.Context, userID, query string) (str
 	if err != nil || len(mems) == 0 {
 		return "", nil, err
 	}
-	// 召回不依赖 embedding/LLM。active memory 总量被限制在 30 条以内，
-	// 所以用 core + priority + 简单关键词匹配即可，宁可少召回也不把无关记忆塞进上下文。
+	// 召回不依赖 embedding/LLM。active memory 总量被限制在 30 条以内，注入也最多 5 条，
+	// 所以选择 core + priority + 简单关键词匹配排序后的前几条。不要用硬阈值过滤普通记忆，
+	// 否则中文短问句很容易因为关键词不完全匹配而漏掉已提取的稳定偏好。
 	selected := selectMemories(mems, query)
 	if len(selected) == 0 {
 		return "", nil, nil
@@ -223,9 +224,6 @@ func selectMemories(mems []UserMemory, query string) []UserMemory {
 	}
 	out := make([]UserMemory, 0, limit)
 	for i := 0; i < limit; i++ {
-		if scored[i].Score < 40 && !scored[i].Memory.IsCore {
-			continue
-		}
 		out = append(out, scored[i].Memory)
 	}
 	return out

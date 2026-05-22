@@ -118,10 +118,12 @@ type ToolStartParams struct {
 }
 
 type ToolEndParams struct {
-	ID     string `json:"id"`
-	Tool   string `json:"tool"`
-	Result string `json:"result"`
-	Error  bool   `json:"error,omitempty"`
+	ID              string `json:"id"`
+	Tool            string `json:"tool"`
+	Result          string `json:"result"`
+	Error           bool   `json:"error,omitempty"`
+	ResultTruncated bool   `json:"result_truncated,omitempty"`
+	ResultBytes     int    `json:"result_bytes,omitempty"`
 }
 
 // AskUserParams 向用户提问
@@ -133,6 +135,7 @@ type AskUserParams struct {
 
 type GuardConfirmParams struct {
 	ID         string         `json:"id"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
 	Tool       string         `json:"tool"`
 	Params     map[string]any `json:"params"`
 	Risk       string         `json:"risk"`

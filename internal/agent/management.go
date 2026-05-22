@@ -1,4 +1,4 @@
-package core
+package agent
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"github.com/alanchenchen/suna/internal/capability"
 	"github.com/alanchenchen/suna/internal/memory"
 	"github.com/alanchenchen/suna/internal/model"
+	"github.com/alanchenchen/suna/internal/runner"
 )
 
 func (a *Agent) MemoryStats(ctx context.Context) (active, core, queued int) {
@@ -62,9 +63,7 @@ func (a *Agent) PopLastUserMessage() {
 	}
 }
 
-func (a *Agent) WorkingTokens() int {
-	return a.working.EstimatedTokens()
-}
+func (a *Agent) WorkingTokens() int { return a.working.EstimatedTokens() }
 
 func (a *Agent) ListMemory(ctx context.Context) ([]memory.UserMemory, error) {
 	if a.memories == nil {
@@ -89,33 +88,13 @@ func (a *Agent) ReloadCapabilities() error {
 }
 
 func (a *Agent) Compact(ctx context.Context) (int, int, int, int, int, error) {
-	msgs := a.working.Messages()
-	if len(msgs) <= 10 {
-		return 0, 0, 0, 0, 0, fmt.Errorf("too few messages to compress (%d)", len(msgs))
-	}
-	before := a.working.EstimatedTokens()
-	compressed, summary, compErr := a.compressor.CompressHistory(ctx, msgs)
-	if compErr != nil {
-		return 0, 0, 0, 0, 0, compErr
-	}
-	if summary == "" {
-		return 0, 0, 0, 0, 0, fmt.Errorf("compression produced no summary")
-	}
-	turnsCompressed := len(msgs) - len(compressed)
-	if turnsCompressed < 0 {
-		turnsCompressed = 0
-	}
-	a.working.SetMessages(compressed)
-	after := a.working.EstimatedTokens()
-
-	truncated := 0
-	for _, m := range msgs {
-		if m.Role == model.RoleTool && len(m.Text()) > 50*1024 {
-			truncated++
-		}
+	r := &runner.Runner{Router: a.router, Compressor: a.compressor}
+	before, after, turnsCompressed, truncated, err := r.Compact(ctx, a.working)
+	if err != nil {
+		return 0, 0, 0, 0, 0, err
 	}
 	contextWindow := 128000
-	if p, err := a.router.Provider(""); err == nil && p != nil {
+	if p, err := a.router.Provider(a.router.ActiveRef()); err == nil && p != nil {
 		contextWindow = p.ContextWindow()
 	}
 	return before, after, contextWindow, turnsCompressed, truncated, nil
@@ -179,14 +158,12 @@ func (a *Agent) WorkingMessages() []model.Message {
 func (a *Agent) Close() {
 	a.closeOnce.Do(func() {
 		a.closed = true
-
 		if a.extractQueue != nil {
 			a.extractQueue.Close()
 		}
 		if a.extractWorker != nil {
 			a.extractWorker.Wait()
 		}
-
 		if a.store != nil {
 			a.store.Close()
 		}

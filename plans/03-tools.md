@@ -1,6 +1,6 @@
 # 03 — 核心工具 (固定 9 个)
 
-Suna 当前对模型暴露 9 个固定工具定义：7 个 registry tools（readfile/listdir/readhttp/exec/writefile/editfile/writehttp）+ 2 个 core built-ins（askuser/spawn）。`askuser` 和 `spawn` 由 core 特殊处理，不注册到通用 tool registry。所有更高级的能力通过 skill 系统学习获得。
+Suna 当前对模型暴露 9 个固定工具定义：7 个 registry tools（readfile/listdir/readhttp/exec/writefile/editfile/writehttp）+ 2 个 agent built-ins（askuser/spawn）。`askuser` 和 `spawn` 由 `internal/agent` 特殊处理，不注册到通用 tool registry。所有更高级的能力通过 skill 系统学习获得。
 
 工具返回在实现上统一为 `tool.Result{Content string, IsError bool, Truncated bool}`。下面的“返回”描述以当前 LLM 实际看到的文本内容为准；`truncated` 是内部结构化标记，不代表每个工具都会返回 JSON 对象。
 
@@ -30,7 +30,7 @@ Act (行动) — 必须经过 Guard 审查
 
 Communicate (协作) — 特殊处理
   AskUser     向用户提问/确认 (不经过 Guard)
-  Spawn       委派 sub-agent (仅 main agent 可用，不经过 Guard)
+  Spawn       委派 subtask (仅 main agent 可用，不经过 Guard)
 ```
 
 Exec 归类为 Act 的原因：Exec 可以执行任何命令，包括删除、安装、网络操作。Guard 通过 `isReadOnlyCommand` 白名单机制，将 grep/ls/cat 等只读命令快速放行（零 LLM 审查成本），其余命令走完整审查流程。
@@ -209,51 +209,56 @@ options 参数:
 ### Spawn
 
 ```
-功能: 创建 sub agent 执行子任务 (仅 main agent)
+功能: 创建 subtask 执行子任务 (仅 main agent)
 参数: {
   task: string,              // 必填
-  model: string,             // 必填: sub-agent 使用的模型 ref (provider/model)
-  tools: [string],           // 必填: sub-agent 可用工具列表
+  model: string,             // 必填: subtask 使用的模型 ref (provider/model)
+  tools: [string],           // 必填: subtask 可用工具列表
   timeout?: int,             // 默认 300 秒
-  context?: string,          // 传给 sub agent 的额外上下文
+  context?: string,          // 传给 subtask 的额外上下文
   system?: string            // 可选 fallback；正常由 spawn_system.md 模板生成
 }
 返回: JSON 文本 { result: string, success: bool, status: string }
 
 不经过 Guard:
-  sub agent 内部的 Act 操作仍然经过 Guard
+  subtask 内部的 Act 操作仍然经过 Guard
   Spawn 本身只是创建了一个受限的执行环境
 
 工具权限:
-  tools 参数必填，指定 sub agent 可用的工具列表
+  tools 参数必填，指定 subtask 可用的工具列表
   没有"默认工具集" — 缺少 tools 会返回错误，让 main LLM 重选
-  Exec 在 sub agent 中仍然经过 Guard 审查（含 isReadOnlyCommand 快速放行）
-  sub-agent 禁止授予 askuser 和 spawn — 防止交互逃逸和嵌套
+  Exec 在 subtask 中仍然经过 Guard 审查（含 isReadOnlyCommand 快速放行）
+  subtask 禁止授予 askuser 和 spawn — 防止交互逃逸和嵌套
   daemon 校验每个 tool name: 空/不存在/spawn/askuser 都返回 tool error
 
 模型选择:
-  model 必填，指定 sub-agent 使用的模型 ref
+  model 必填，指定 subtask 使用的模型 ref
   daemon 校验 model ref 是否为已配置模型
   model 为空或非法 → 返回 tool error，main LLM 重新选择
 
 系统提示词:
-  sub-agent 使用独立 spawn_system.md，不继承 main system.md
+  subtask 使用独立 spawn_system.md，不继承 main system.md
   spawn_system.md 只含 task/env/tools/context/rules
-  通过 systemPromptOverride 机制注入
+  通过 runner request 的 System 字段注入
 
 超时:
   默认 300 秒
-  sub agent 超时后自动终止，返回超时错误
+  subtask 超时后自动终止，返回超时错误
 
 并发:
   Main 可以同时发起多个 Spawn
-  每个 sub agent 独立 goroutine 运行
+  每个 subtask 独立 goroutine 运行
   Main 等待所有 sub 完成后汇总
 
 Guard 策略:
-  sub-agent 继承主 Guard policy、blocked/allowed、audit DB
-  sub-agent 通过 newGuardForSession() 创建带 mode 的 Guard
+  subtask 使用全局 Guard policy、blocked/allowed、audit DB
+  需要用户确认时通过 main agent 事件流暂停并等待确认
   smart mode 下可使用同一 LLM reviewer
+
+事件与 usage:
+  subtask 不对外发送 stream/reasoning
+  subtask 的 tool call/tool result 通过 main agent 事件流转发给 TUI
+  subtask 的 usage 计入 main session
 ```
 
 ## 工具定义的 JSON Schema
@@ -278,6 +283,19 @@ Guard 策略:
     - 忽略多余内容
 
 这是上下文管理的第一道防线。
+
+IPC 展示层额外限制:
+  - agent/runner/LLM 内部保留完整 tool.Result.Content
+  - daemon 发送 agent.tool_end 给 UI 时，只对 result 做 16KB 展示级限制
+  - 超过 16KB 时，result 只包含前 16KB 的 UTF-8 安全文本
+  - agent.tool_end 同时携带 result_truncated 和 result_bytes
+  - UI 根据字段自行决定如何展示截断状态
+
+Tool intent 展示:
+  - tool_start.intent 是 UI 主线展示的首要文本，用来让用户第一眼知道 agent 正在做什么
+  - params/result 默认不在聊天主线展开，只进入详情面板
+  - tool error 需要在主线显示短错误摘要
+  - Guard reject 视为该 tool 失败，UI 应把对应 tool 标为 error
 ```
 
 ## 多模态输入

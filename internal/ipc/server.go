@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/alanchenchen/suna/internal/agent"
 	"github.com/alanchenchen/suna/internal/config"
-	"github.com/alanchenchen/suna/internal/core"
 	"github.com/alanchenchen/suna/internal/logging"
 	"github.com/alanchenchen/suna/internal/memory"
 )
@@ -31,7 +31,7 @@ Server Daemon 端 JSON-RPC 2.0 服务器。
   - AskUser: Agent 阻塞在 Reply channel → TUI 通过 agent.askReply 回传
 */
 type Server struct {
-	agent  *core.Agent
+	agent  *agent.Agent
 	daemon DaemonAPI
 
 	// activeConn 当前正在接收 Agent 事件的连接
@@ -48,7 +48,7 @@ type Server struct {
 
 // DaemonAPI Daemon 暴露给 Server 的接口
 type DaemonAPI interface {
-	Agent() *core.Agent
+	Agent() *agent.Agent
 	ConnectionCount() int
 	ProviderName() string
 	ModelName() string
@@ -58,7 +58,7 @@ type DaemonAPI interface {
 	Uptime() time.Duration
 }
 
-func NewServer(agent *core.Agent, daemon DaemonAPI) *Server {
+func NewServer(agent *agent.Agent, daemon DaemonAPI) *Server {
 	return &Server{
 		agent:  agent,
 		daemon: daemon,
@@ -140,7 +140,7 @@ func (s *Server) handleConfigSet(ctx context.Context, conn Conn, req Request) {
 		s.sendError(conn, req.ID, ErrInvalidParams, err.Error())
 		return
 	}
-	updated, err := s.agent.UpdateConfig(core.ConfigSetParams{
+	updated, err := s.agent.UpdateConfig(agent.ConfigSetParams{
 		Action:      configActionToCore(params.Action),
 		ModelRef:    params.ModelRef,
 		ActiveModel: params.ActiveModel,
@@ -148,7 +148,7 @@ func (s *Server) handleConfigSet(ctx context.Context, conn Conn, req Request) {
 		Locale:      params.Locale,
 		Theme:       params.Theme,
 		GuardMode:   params.GuardMode,
-		Model: core.ConfigModel{
+		Model: agent.ConfigModel{
 			Provider:      params.Model.Provider,
 			Model:         params.Model.Model,
 			BaseURL:       params.Model.BaseURL,
@@ -205,21 +205,22 @@ func (s *Server) handleSendMessage(ctx context.Context, conn Conn, req Request) 
 		events := s.agent.Run(ctx, content)
 		for evt := range events {
 			switch evt.Type {
-			case core.EventStream:
+			case agent.EventStream:
 				s.Send(ctx, conn, NotifyStream, StreamParams{Chunk: evt.Content})
-			case core.EventReasoning:
+			case agent.EventReasoning:
 				s.Send(ctx, conn, NotifyReasoning, StreamParams{Chunk: evt.Content})
-			case core.EventToolCall:
+			case agent.EventToolCall:
 				logging.Info("agent", "tool_call", logging.Event{"conn_id": conn.ID(), "tool": evt.ToolName, "intent": evt.ToolIntent})
 				s.Send(ctx, conn, NotifyToolStart, ToolStartParams{
 					ID: evt.ToolCallID, Tool: evt.ToolName, Params: evt.ToolParams, Intent: evt.ToolIntent,
 				})
-			case core.EventToolResult:
-				logging.Info("agent", "tool_result", logging.Event{"conn_id": conn.ID(), "tool": evt.ToolName, "tool_error": evt.ToolError, "result_chars": len(evt.ToolResult)})
+			case agent.EventToolResult:
+				display := limitIPCToolResult(evt.ToolResult)
+				logging.Info("agent", "tool_result", logging.Event{"conn_id": conn.ID(), "tool": evt.ToolName, "tool_error": evt.ToolError, "result_chars": len(evt.ToolResult), "display_truncated": display.Truncated})
 				s.Send(ctx, conn, NotifyToolEnd, ToolEndParams{
-					ID: evt.ToolCallID, Tool: evt.ToolName, Result: evt.ToolResult, Error: evt.ToolError,
+					ID: evt.ToolCallID, Tool: evt.ToolName, Result: display.Text, Error: evt.ToolError, ResultTruncated: display.Truncated, ResultBytes: display.Bytes,
 				})
-			case core.EventAskUser:
+			case agent.EventAskUser:
 				// 生成 askID，注册 pending，推送给 TUI
 				askID := conn.ID() + "_" + fmt.Sprintf("%d", time.Now().UnixNano())
 				if evt.Reply != nil {
@@ -230,16 +231,16 @@ func (s *Server) handleSendMessage(ctx context.Context, conn Conn, req Request) 
 					Options:  evt.Options,
 					ID:       askID,
 				})
-			case core.EventGuardConfirm:
+			case agent.EventGuardConfirm:
 				guardID := conn.ID() + "_guard_" + fmt.Sprintf("%d", time.Now().UnixNano())
 				if evt.Reply != nil {
 					s.pendingGuards.Store(guardID, evt.Reply)
 				}
 				s.Send(ctx, conn, NotifyGuardConfirm, GuardConfirmParams{
-					ID: guardID, Tool: evt.GuardTool, Params: evt.GuardParams,
+					ID: guardID, ToolCallID: evt.GuardToolCallID, Tool: evt.GuardTool, Params: evt.GuardParams,
 					Risk: evt.GuardRisk, Reason: evt.GuardReason, Suggestion: evt.GuardSuggestion,
 				})
-			case core.EventStatus:
+			case agent.EventStatus:
 				if strings.HasPrefix(evt.Content, "error:") || evt.Content == "cancelled" {
 					logging.Error("agent", "run_failed", fmt.Errorf("%s", evt.Content), logging.Event{"conn_id": conn.ID(), "duration_ms": time.Since(started).Milliseconds()})
 					s.Send(ctx, conn, NotifyStream, StreamParams{Chunk: evt.Content, Done: true})

@@ -34,6 +34,9 @@ func (t *TUI) viewChat() string {
 	if t.pendingGuard != nil {
 		content = overlayBlock(content, t.renderGuardOverlay(t.width))
 	}
+	if t.showToolDetail {
+		content = overlayBlock(content, t.renderToolDetailOverlay(t.width))
+	}
 	if t.showHelp {
 		content = overlayBlock(content, t.renderHelpOverlay(t.width))
 	}
@@ -260,21 +263,6 @@ func (t *TUI) chatTopMeta() string {
 		ctx = fmtTok(ctxTokens)
 	}
 	return styleHL.Render(truncateRunes(modelRef, max(10, t.width/3))) + strings.Repeat(" ", 4) + styleDim.Render("ctx "+ctx+"/"+fmtTok(t.contextWindow))
-}
-
-func styleToolCallLabel(te *toolEntry) string {
-	return styleToolPill.Render(plainToolCallLabel(te))
-}
-
-func plainToolCallLabel(te *toolEntry) string {
-	summary := strings.TrimSpace(te.intent)
-	if summary == "" {
-		summary = strings.TrimSpace(te.summary)
-	}
-	if summary != "" {
-		return te.name + "(" + truncateRunes(summary, 42) + ")"
-	}
-	return te.name
 }
 
 func toolParamSummary(name string, params map[string]any) string {

@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/alanchenchen/suna/internal/agent"
 	"github.com/alanchenchen/suna/internal/config"
-	"github.com/alanchenchen/suna/internal/core"
 	"github.com/alanchenchen/suna/internal/ipc"
 )
 
@@ -32,7 +32,7 @@ Daemon 是 sunad 守护进程的核心结构。
 */
 type Daemon struct {
 	cfg       *config.Config
-	agent     *core.Agent
+	agent     *agent.Agent
 	server    *ipc.Server
 	transport ipc.Transport
 
@@ -44,7 +44,7 @@ type Daemon struct {
 
 // New 创建 Daemon 实例
 func New(cfg *config.Config) (*Daemon, error) {
-	agent, err := core.NewAgent(cfg)
+	agent, err := agent.NewAgent(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create agent: %w", err)
 	}
@@ -168,7 +168,7 @@ func (d *Daemon) SendToConn(ctx context.Context, connID string, method string, p
 }
 
 // Agent 返回 agent 实例（供 IPC Server 调用）
-func (d *Daemon) Agent() *core.Agent {
+func (d *Daemon) Agent() *agent.Agent {
 	return d.agent
 }
 

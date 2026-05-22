@@ -1,0 +1,45 @@
+package agent
+
+type EventType int
+
+const (
+	EventStream EventType = iota
+	EventReasoning
+	EventToolCall
+	EventToolResult
+	EventStatus
+	EventAskUser
+	EventGuardConfirm
+)
+
+type Event struct {
+	Type EventType
+
+	Content string
+
+	ToolName   string
+	ToolCallID string
+	ToolParams map[string]any
+	ToolIntent string
+
+	ToolResult string
+	ToolError  bool
+
+	Question string
+	Options  []string
+	Reply    chan string
+
+	GuardToolCallID string
+	GuardTool       string
+	GuardParams     map[string]any
+	GuardRisk       string
+	GuardReason     string
+	GuardSuggestion string
+
+	InputTokens   int
+	OutputTokens  int
+	CachedTokens  int
+	ContextTokens int
+	ContextWindow int
+	HasUsage      bool
+}

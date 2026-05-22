@@ -45,15 +45,27 @@ const (
 )
 
 type toolEntry struct {
-	id       string
-	name     string
-	rawName  string
-	intent   string
-	params   string
-	summary  string
-	status   toolStatus
-	duration time.Duration
-	result   string
+	id              string
+	localID         string
+	parentID        string
+	name            string
+	rawName         string
+	intent          string
+	params          string
+	paramsRaw       map[string]any
+	summary         string
+	status          toolStatus
+	startedAt       time.Time
+	endedAt         time.Time
+	duration        time.Duration
+	result          string
+	resultTruncated bool
+	resultBytes     int
+}
+
+type toolBlock struct {
+	entries map[string]*toolEntry
+	order   []string
 }
 
 type commandSpec struct {
@@ -84,6 +96,8 @@ func (t *TUI) initChatComponents() tea.Cmd {
 	t.phase = phaseIdle
 	t.activeTools = make(map[string]*toolEntry)
 	t.toolStartTimes = make(map[string]time.Time)
+	t.currentToolBlock = nil
+	t.selectedToolID = ""
 
 	t.syncContent()
 	t.layoutChat()
@@ -126,9 +140,9 @@ func (t *TUI) syncContent() {
 			renderSunaHeader()
 			sb.WriteString(t.renderThinkingBox(content, false))
 		case "tool":
-			if te, ok := msg.content.(*toolEntry); ok {
+			if v, ok := msg.content.(*toolBlock); ok {
 				renderSunaHeader()
-				sb.WriteString(t.renderToolEntry(te))
+				sb.WriteString(t.renderToolBlock(v))
 			}
 		case "error":
 			content, _ := msg.content.(string)
@@ -137,6 +151,10 @@ func (t *TUI) syncContent() {
 		case "restore_summary":
 			content, _ := msg.content.(string)
 			sb.WriteString("\n" + t.renderRestoreSummaryBox(content) + "\n")
+			inSunaBlock = false
+		case "panel":
+			content, _ := msg.content.(string)
+			sb.WriteString("\n" + content + "\n")
 			inSunaBlock = false
 		default:
 			content, _ := msg.content.(string)
@@ -167,7 +185,6 @@ func (t *TUI) syncContent() {
 		renderSunaHeader()
 		sb.WriteString(t.renderCurrentStatusLine())
 	}
-
 	t.vp.SetContent(sb.String())
 	if followBottom {
 		t.vp.GotoBottom()
@@ -189,21 +206,21 @@ func (t *TUI) renderThinkingBox(content string, running bool) string {
 	if running && display == "" {
 		display = t.tr("status.thinking")
 	}
-	if !t.showToolDetail && !running {
+	if !t.showReasoningDetail && !running {
 		display = extractLastSentence(display)
 		if display == "" {
 			display = t.tr("tui.chat.thought_done")
 		}
-		display += "    [Ctrl+T " + t.tr("tui.key.detail") + "]"
+		display += "    [Ctrl+R " + t.tr("tui.key.reasoning_detail") + "]"
 	}
-	if t.showToolDetail {
+	if t.showReasoningDetail {
 		display = RenderMarkdown(strings.TrimSpace(content), inner)
 	}
 	lines := strings.Split(strings.TrimRight(display, "\n"), "\n")
-	if running && !t.showToolDetail && len(lines) > 8 {
+	if running && !t.showReasoningDetail && len(lines) > 8 {
 		lines = append([]string{"..."}, lines[len(lines)-8:]...)
 	}
-	if t.showToolDetail && len(lines) > 15 {
+	if t.showReasoningDetail && len(lines) > 15 {
 		if running {
 			lines = append([]string{"..."}, lines[len(lines)-15:]...)
 		} else {
@@ -235,8 +252,8 @@ func (t *TUI) renderCurrentStatusLine() string {
 }
 
 func (t *TUI) currentStatusLabel() string {
-	if te, ok := t.currentRunningTool(); ok {
-		return t.tr("status.exec_tool") + " " + plainToolCallLabel(te)
+	if n := t.runningToolCount(); n > 0 {
+		return fmt.Sprintf("%s · %d running", t.tr("status.exec_tool"), n)
 	}
 	switch t.phase {
 	case phaseFirstLLM:
@@ -250,71 +267,6 @@ func (t *TUI) currentStatusLabel() string {
 	default:
 		return ""
 	}
-}
-
-func (t *TUI) currentRunningTool() (*toolEntry, bool) {
-	var selected *toolEntry
-	var selectedStart time.Time
-	for _, te := range t.activeTools {
-		if te.status != toolRunning {
-			continue
-		}
-		start := t.toolStartTimes[te.id]
-		if selected == nil || start.Before(selectedStart) || (start.Equal(selectedStart) && te.name < selected.name) {
-			selected = te
-			selectedStart = start
-		}
-	}
-	if selected == nil {
-		return nil, false
-	}
-	return selected, true
-}
-
-func (t *TUI) renderToolEntry(te *toolEntry) string {
-	var statusIcon string
-	var dur string
-	if te.duration > 0 {
-		dur = fmt.Sprintf(" %.1fs", te.duration.Seconds())
-	}
-	switch te.status {
-	case toolDone:
-		statusIcon = styleToolOk.Render("✓")
-	case toolError:
-		statusIcon = styleToolErr.Render("✗")
-	default:
-		statusIcon = styleToolDim.Render("·")
-	}
-	line := fmt.Sprintf("    %s %s%s", statusIcon, styleToolCallLabel(te), dur)
-	if t.showToolDetail {
-		if strings.TrimSpace(te.intent) != "" {
-			line += "\n      " + styleDim.Render(t.tr("tui.tool.intent"))
-			for _, wrapped := range wrapLine(te.intent, max(20, t.width-10)) {
-				line += "\n      " + styleToolDim.Render(wrapped)
-			}
-		}
-		if te.params != "" {
-			line += "\n      " + styleDim.Render(t.tr("tui.tool.params"))
-			for _, l := range strings.Split(te.params, "\n") {
-				for _, wrapped := range wrapLine(l, max(20, t.width-10)) {
-					line += "\n      " + styleToolDim.Render(wrapped)
-				}
-			}
-		}
-		if te.result != "" {
-			line += "\n      " + styleDim.Render(t.tr("tui.tool.result"))
-			resultLines := strings.Split(te.result, "\n")
-			if len(resultLines) > 10 {
-				resultLines = append(resultLines[:10], "...")
-			}
-			for _, l := range resultLines {
-				for _, wrapped := range wrapLine(l, max(20, t.width-10)) {
-					line += "\n      " + styleToolDim.Render(wrapped)
-				}
-			}
-		}
-	}
-	return line + "\n"
 }
 
 func (t *TUI) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -372,6 +324,11 @@ func (t *TUI) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 			t.layoutChat()
 			return t, nil
 		case ks == "esc":
+			if t.showToolDetail {
+				t.showToolDetail = false
+				t.syncContent()
+				return t, nil
+			}
 			if t.showHelp {
 				t.showHelp = false
 				return t, nil
@@ -392,6 +349,16 @@ func (t *TUI) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return t, t.ta.Focus()
 		case ks == "ctrl+t":
 			t.showToolDetail = !t.showToolDetail
+			if t.showToolDetail && t.selectedToolID == "" {
+				ids := t.visibleToolIDs()
+				if len(ids) > 0 {
+					t.selectedToolID = ids[0]
+				}
+			}
+			t.syncContent()
+			return t, nil
+		case ks == "ctrl+r":
+			t.showReasoningDetail = !t.showReasoningDetail
 			t.syncContent()
 			return t, nil
 		case ks == "pgup":
@@ -401,7 +368,10 @@ func (t *TUI) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 			t.vp.HalfPageDown()
 			return t, nil
 		case ks == "up":
-			if len(t.cmdSuggestions) > 0 {
+			if t.showToolDetail {
+				t.moveSelectedTool(-1)
+				t.syncContent()
+			} else if len(t.cmdSuggestions) > 0 {
 				if t.cmdSuggestionIdx > 0 {
 					t.cmdSuggestionIdx--
 				}
@@ -413,7 +383,10 @@ func (t *TUI) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return t, nil
 		case ks == "down":
-			if len(t.cmdSuggestions) > 0 {
+			if t.showToolDetail {
+				t.moveSelectedTool(1)
+				t.syncContent()
+			} else if len(t.cmdSuggestions) > 0 {
 				if t.cmdSuggestionIdx < len(t.cmdSuggestions)-1 {
 					t.cmdSuggestionIdx++
 				}
@@ -501,8 +474,9 @@ func (t *TUI) submitGuardDecision(decision string) tea.Cmd {
 		return nil
 	}
 	id := t.pendingGuard.id
+	guardToolID := t.pendingGuard.toolCallID
 	if decision == "reject" {
-		t.messages = append(t.messages, chatMsg{role: "system", content: t.tr("tui.guard.rejected")})
+		t.markToolRejected(guardToolID)
 	}
 	t.pendingGuard = nil
 	t.guardCursor = 0
@@ -518,15 +492,38 @@ func (t *TUI) resetPhase() {
 	t.phaseStart = time.Time{}
 	t.activeTools = make(map[string]*toolEntry)
 	t.toolStartTimes = make(map[string]time.Time)
+	t.currentToolBlock = nil
+}
+
+func (t *TUI) moveSelectedTool(delta int) {
+	ids := t.visibleToolIDs()
+	if len(ids) == 0 {
+		return
+	}
+	idx := 0
+	for i, id := range ids {
+		if id == t.selectedToolID {
+			idx = i
+			break
+		}
+	}
+	idx += delta
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(ids) {
+		idx = len(ids) - 1
+	}
+	t.selectedToolID = ids[idx]
 }
 
 func (t *TUI) allCommands() []commandSpec {
 	return []commandSpec{
 		{"/new", "tui.command.new.desc"},
-		{"/compact", "tui.command.compact.desc"},
-		{"/config", "tui.command.config.desc"},
 		{"/model", "tui.command.model.desc"},
 		{"/memory", "tui.command.memory.desc"},
+		{"/compact", "tui.command.compact.desc"},
+		{"/config", "tui.command.config.desc"},
 		{"/help", "tui.command.help.desc"},
 	}
 }
