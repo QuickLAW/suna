@@ -155,6 +155,7 @@ type CompactResult struct {
 	TurnsCompressed  int `json:"turns_compressed"`
 	SummaryTokens    int `json:"summary_tokens"`
 	TruncatedOutputs int `json:"truncated_outputs"`
+	Noop             bool `json:"noop,omitempty"`
 }
 
 type AskUserReply struct {

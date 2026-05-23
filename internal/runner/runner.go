@@ -55,6 +55,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			messages = req.Messages(ctx)
 		}
 		tools := buildToolDefs(req)
+		contextWindow := r.contextWindow(req.ModelRef)
 		completionReq := &model.CompletionRequest{
 			Model:     req.ModelID,
 			Purpose:   req.Purpose,
@@ -63,6 +64,17 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			Messages:  messages,
 			Tools:     tools,
 			MaxTokens: req.MaxTokens,
+		}
+		if req.AutoCompress {
+			r.compactForRequest(ctx, req.Working, completionReq, contextWindow)
+			messages = req.Working.Messages()
+			if req.Messages != nil {
+				messages = req.Messages(ctx)
+			}
+			completionReq.Messages = messages
+			if shouldCompactRequest(completionReq, contextWindow) {
+				return result, fmt.Errorf("context remains too large after compaction (%d tokens estimated, %d token safe limit); start a new session or reduce the current input", estimateRequestTokens(completionReq), int(float64(contextWindow)*contextSafetyThreshold))
+			}
 		}
 
 		if r.Sink != nil {
@@ -142,9 +154,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			}
 		}
 
-		if req.AutoCompress {
-			r.autoCompact(ctx, req.Working, r.contextWindow(req.ModelRef))
-		}
 	}
 }
 

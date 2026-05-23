@@ -235,7 +235,7 @@ func (s *service) handleCompact(ctx context.Context, sink protocol.EventSink) (a
 	if err != nil {
 		return nil, protocolError{code: -32603, message: err.Error()}
 	}
-	result := protocol.CompactResult{BeforeTokens: before, AfterTokens: after, ContextWindow: contextWindow, TurnsCompressed: turnsCompressed, SummaryTokens: (before - after) / 2, TruncatedOutputs: truncated}
+	result := protocol.CompactResult{BeforeTokens: before, AfterTokens: after, ContextWindow: contextWindow, TurnsCompressed: turnsCompressed, SummaryTokens: (before - after) / 2, TruncatedOutputs: truncated, Noop: turnsCompressed == 0}
 	emit(ctx, sink, protocol.NotifyCompactResult, result)
 	return map[string]string{"status": "ok"}, nil
 }

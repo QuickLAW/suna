@@ -279,30 +279,48 @@ Subtask 不能创建嵌套 subtask（工具列表不含 Spawn）。
 ### 何时压缩
 
 ```
-触发条件: 估算 token 数 > 上下文窗口 × 80%
+自动触发条件:
+  完整 LLM 请求估算 token 数 > 上下文窗口 × 80%
+
+完整 LLM 请求包括:
+  - system prompt
+  - active memory / internal context 注入
+  - working memory messages
+  - tool schemas
+  - max output reserve (请求 MaxTokens，默认 4096)
 
 不触发:
-  - 刚开始对话
+  - 完整请求未超过 80% 安全阈值
+  - 手动 compact 且 working memory 不超过最近保留上限
 
-自动压缩由 runner 统一处理；main 和 subtask 都可以启用。手动 compact 也通过 runner 的 `Compact` 入口触发。
+自动压缩发生在每次发起 LLM 请求前，由 runner 统一处理；main 和 subtask 都可以启用。手动 compact 通过 runner 的 `Compact` 入口触发。
 ```
 
 ### 如何压缩
 
 ```
-Layer 1: 工具输出截断
-  工具返回超过阈值时，只保留前 N 行 + "... (truncated, X lines total)"
+压缩对象:
+  只压缩 working memory。
+  不压缩 system prompt、active memory、tool schemas 或 max output reserve。
 
-Layer 2: 历史消息摘要
-  超过 10 轮的部分，调用 active_model 压缩为 working memory 摘要
-  压缩摘要只服务当前会话瘦身，不进入长期历史库
+自动 compact:
+  1. 先构造完整候选 LLM 请求并估算 token。
+  2. 超过 80% 安全阈值时，计算 fixed cost:
+       system prompt + tool schemas + max output reserve + 非 working 注入消息。
+  3. 用剩余预算一次性决定保留多少 recent working messages。
+       最多保留最近 10 条；预算不足时保留更少；至少保留最新 1 条。
+  4. 将 recent 之前的 working memory prefix 压缩成一条 system summary。
+  5. 重建完整请求后再次估算。
+       如果仍超过安全阈值，直接返回明确错误，不继续撞 provider context limit。
 
-Layer 3: 对话结构保留
-  即使压缩了内容，骨架要保留:
-  - 用户发起了什么请求
-  - agent 做了哪些关键操作
-  - 哪些操作成功/失败
-  - 当前进展到哪一步
+手动 compact:
+  - 默认 prefix compact + 保留最近最多 10 条原始 working messages。
+  - 如果 working memory 不超过 10 条，视为 no-op，不报错。
+
+摘要内容:
+  压缩摘要只服务当前会话瘦身，不进入长期 user_memory。
+  summary 必须保留任务目标、明确约束、当前状态、关键决策、重要工具结果、未完成事项和下一步。
+  丢弃长日志、原始输出、重复推理、过期假设和礼貌性填充。
 ```
 
 关键区别：Suna 不追求完整历史回溯。压缩后的细节可能被丢弃，只有对未来交互有长期价值的偏好、习惯、纠错和约束会进入 active memory。

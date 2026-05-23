@@ -123,6 +123,71 @@ updated_at           更新时间
 
 `memory_queue` 是临时队列。主链路只负责写入，daemon 负责批量消费。
 
+## Working Memory Compact
+
+Working memory 是当前 agent 会话内发送给模型的短期上下文。它包含用户消息、assistant 消息、tool call/result、运行时 system summary 等，但不等同于完整 LLM 请求。完整请求还包括 system prompt、active memory 注入、tool schemas 和 max output reserve。
+
+Compact 的目标是避免当前会话上下文超过模型窗口，不是保存长期历史，也不是更新 `user_memory`。
+
+### 自动 compact
+
+自动 compact 在每次 LLM 请求发出前执行 preflight 检测：
+
+```
+estimated_request_tokens =
+  system prompt
+  + active memory / internal context 注入
+  + working memory messages
+  + tool schemas
+  + max output reserve
+
+触发条件:
+  estimated_request_tokens > context_window * 0.8
+```
+
+触发后只压缩 working memory：
+
+```
+1. 计算不可压缩开销：system prompt、tool schemas、max output reserve、非 working 注入消息。
+2. 用剩余预算选择 recent working messages suffix。
+   - 最多保留最近 10 条原始消息。
+   - 预算不足时保留更少。
+   - 至少保留最新 1 条，避免当前请求被压掉。
+3. 将 suffix 之前的 prefix 一次性压成一条 system summary。
+4. 重建完整请求并重新估算。
+5. 如果仍超过安全阈值，返回明确错误，提示新建会话或减少当前输入。
+```
+
+自动 compact 最多只额外发起一次 summary 请求，不做多轮重试压缩，避免延迟、成本和摘要漂移。
+
+### 手动 compact
+
+手动 `/compact` 是用户显式整理当前上下文，策略固定且可预测：
+
+```
+working memory > 10 条消息:
+  prefix -> summary
+  recent -> 保留最近最多 10 条原始消息
+
+working memory <= 10 条消息:
+  no-op，不报错，并在 TUI 中说明暂无可压缩内容
+```
+
+手动 compact 不需要根据完整请求预算动态计算 recent 数量，因为它不是为了立即避免某次请求超限，而是用户主动瘦身上下文。
+
+### compact 后的状态
+
+Compact 成功后，agent 的 working memory 会立即变为：
+
+```
+system: Conversation summary: <压缩摘要>
+recent working messages...
+```
+
+TUI 的聊天 transcript 不会被替换或删除。旧聊天仍保留在界面中供用户回看，但模型后续只基于 compact 后的 summary + recent messages 继续。
+
+`conversation_state.last_messages` 只保存 compact 后 working memory 中仍保留的可见 user/assistant 纯文本消息。compact 生成的 system summary、tool call/result 和 raw 结构不会写入恢复快照。因此恢复会话不是完整历史回放，而是最近可见对话的轻量恢复。
+
 ### 写入时机
 
 主链路按显著性写入：

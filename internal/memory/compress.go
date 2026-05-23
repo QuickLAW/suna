@@ -11,10 +11,9 @@ import (
 
 const (
 	compressThreshold   = 0.8
-	keepRecentTurns     = 10
+	KeepRecentTurns     = 10
 	maxToolOutputLines  = 500
 	maxToolOutputBytes  = 50 * 1024
-	AutoCompactMinTurns = 6
 )
 
 type Compressor struct {
@@ -69,11 +68,29 @@ func truncateUTF8(s string, maxBytes int) string {
 }
 
 func (c *Compressor) CompressHistory(ctx context.Context, messages []model.Message) ([]model.Message, string, error) {
-	if len(messages) <= keepRecentTurns {
+	return c.CompressHistoryKeeping(ctx, messages, KeepRecentTurns)
+}
+
+func (c *Compressor) CompressHistoryKeeping(ctx context.Context, messages []model.Message, keepRecent int) ([]model.Message, string, error) {
+	if len(messages) == 0 {
 		return messages, "", nil
 	}
 
-	keepStart := len(messages) - keepRecentTurns
+	keep := keepRecent
+	if keep <= 0 {
+		keep = KeepRecentTurns
+	}
+	if len(messages) <= keep {
+		keep = len(messages) - 1
+	}
+	if keep < 1 {
+		keep = 1
+	}
+
+	keepStart := len(messages) - keep
+	if keepStart <= 0 {
+		return messages, "", nil
+	}
 	compressRegion := messages[:keepStart]
 	keepRegion := messages[keepStart:]
 

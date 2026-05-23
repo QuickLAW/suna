@@ -13,10 +13,10 @@
 
 ## High
 
-### ✅ 压缩轮数不一致
+### ✅ 压缩保留口径不一致
 - 01-architecture.md: "超过 20 轮的部分压缩"
 - 06-memory.md: "保留区: 最近 10 轮"
-- **已修复**: 统一为 10 轮
+- **已修复**: 当前口径为 working memory 消息数；手动 compact 保留最近最多 10 条消息，自动 compact 按完整请求预算决定 recent suffix。
 
 ### ✅ Guard TOML 格式不一致
 - 04-guard.md: `[[guard.blocked]]` (数组表)
@@ -87,7 +87,7 @@
 - 补充 H1 提取 name 逻辑
 
 ### ✅ 06-memory.md 压缩阈值
-- 压缩区/保留区统一为 10 轮
+- 当前口径已更新为：自动 compact 检测完整 LLM 请求的 80% 安全阈值；手动 compact 保留最近最多 10 条 working messages。
 
 ### ✅ 06-memory.md embedding 大小
 - 统一为 ~4-8KB (取决于维度)
