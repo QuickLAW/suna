@@ -20,7 +20,7 @@ type configRow struct{ kind, name, label, value string }
 
 func (r configRow) selectable() bool {
 	switch r.kind {
-	case "section", "general_language", "general_theme", "general_guard", "general_workspace", "open_config_dir", "add_model", "edit_model", "activate_model", "delete_model", "check_model", "model", "empty":
+	case "section", "general_language", "general_theme", "general_guard", "general_workspace", "open_config_dir", "add_model", "edit_model", "edit_reasoning", "activate_model", "delete_model", "check_model", "model", "empty":
 		return true
 	default:
 		return false
@@ -116,9 +116,11 @@ func (t *TUI) configDetailRows() []configRow {
 		{"info", "", t.tr("tui.config.provider.api_key"), apiKey},
 		{"info", "", t.tr("tui.config.provider.model"), modelStatusMark(mc, t.isActiveModelRef(mc.Ref())) + " " + mc.Model},
 		{"info", "", t.tr("tui.config.provider.context_window"), contextDisplay(mc)},
+		{"info", "", t.tr("tui.config.reasoning"), t.reasoningDisplay(mc)},
 		{"info", "", t.tr("tui.config.last_check"), lastCheck},
 		{"info", "", "", ""},
 		{"edit_model", "", "  " + t.tr("tui.config.edit_model"), ""},
+		{"edit_reasoning", "", "  " + t.tr("tui.config.edit_reasoning"), ""},
 	}
 	if !t.isActiveModelRef(mc.Ref()) {
 		rows = append(rows, configRow{"activate_model", mc.Ref(), "  " + t.tr("tui.config.activate_model"), ""})
@@ -154,6 +156,10 @@ func (t *TUI) handleConfigAction(rows []configRow) tea.Cmd {
 		if mc, ok := t.modelByRef(t.configDetailRef); ok {
 			t.openProviderForm(t.configDetailRef, &mc)
 			return t.configInputs[t.configInputFocus].Focus()
+		}
+	case "edit_reasoning":
+		if mc, ok := t.modelByRef(t.configDetailRef); ok {
+			t.openReasoning(mc)
 		}
 	case "activate_model":
 		return t.activateModelRef(row.name)
@@ -389,7 +395,7 @@ func (t *TUI) selectedConfigModel(rows []configRow) (string, bool) {
 func (t *TUI) configModelsSnapshot() []tuiModelConfig {
 	models := make([]tuiModelConfig, 0, len(t.configState.Models))
 	for _, cm := range t.configState.Models {
-		models = append(models, tuiModelConfig{Provider: cm.Provider, Model: cm.Model, BaseURL: cm.BaseURL, ContextWindow: cm.ContextWindow, Strengths: cm.Strengths, HasAPIKey: cm.HasAPIKey})
+		models = append(models, tuiModelConfig{Provider: cm.Provider, Model: cm.Model, BaseURL: cm.BaseURL, ContextWindow: cm.ContextWindow, Strengths: cm.Strengths, Reasoning: cm.Reasoning, HasAPIKey: cm.HasAPIKey})
 	}
 	return models
 }
@@ -415,6 +421,10 @@ func (t *TUI) isActiveModelRef(ref string) bool {
 }
 
 func (t *TUI) viewConfig() string {
+	if t.configReasoningOpen {
+		base := t.viewConfigPage()
+		return overlayBlock(base, t.viewReasoning())
+	}
 	if t.configKindOpen {
 		base := t.viewConfigPage()
 		return overlayBlock(base, t.viewProviderKind())
@@ -499,6 +509,9 @@ func (t *TUI) configHelp(rows []configRow) string {
 	if t.configDeleteConfirm != "" {
 		return ""
 	}
+	if t.configReasoningOpen {
+		return ""
+	}
 	if t.configCursor >= 0 && t.configCursor < len(rows) {
 		switch rows[t.configCursor].kind {
 		case "section":
@@ -519,6 +532,8 @@ func (t *TUI) configHelp(rows []configRow) string {
 			return t.tr("tui.config.help_model_row")
 		case "edit_model":
 			return t.tr("tui.config.help_edit_model")
+		case "edit_reasoning":
+			return t.tr("tui.config.help_reasoning")
 		case "activate_model":
 			return t.tr("tui.config.help_activate_model")
 		case "check_model":
@@ -666,27 +681,9 @@ func (t *TUI) modelSummary(mc tuiModelConfig) string {
 	return strings.Join(parts, " · ")
 }
 
-func modelStatusMark(mc tuiModelConfig, active bool) string {
-	if !mc.HasAPIKey || mc.Model == "" || (mc.Provider != "openai" && mc.Provider != "anthropic" && mc.BaseURL == "") {
-		return "!"
-	}
-	if active {
-		return "◉"
-	}
-	return "○"
-}
-
-func (t *TUI) modelNeedsAttention(mc tuiModelConfig) bool {
-	return !mc.HasAPIKey || mc.Model == "" || (mc.Provider != "openai" && mc.Provider != "anthropic" && mc.BaseURL == "")
-}
-
 func (t *TUI) displayEndpoint(endpoint string) string {
 	if endpoint == "" {
-		return t.tr("tui.config.endpoint_default")
+		return t.tr("tui.config.missing")
 	}
 	return endpoint
-}
-
-func contextDisplay(mc tuiModelConfig) string {
-	return fmtTok(defaultContextWindow(mc))
 }

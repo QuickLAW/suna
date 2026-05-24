@@ -261,6 +261,13 @@ func (t *TUI) chatTopMeta() string {
 		model = "-"
 	}
 	modelRef := provider + "/" + model
+	reasoning := ""
+	if mc, ok := t.activeConfigModel(); ok {
+		reasoning = t.reasoningDisplay(mc)
+	}
+	if reasoning != "" {
+		modelRef += " · " + reasoning
+	}
 	if t.contextWindow <= 0 {
 		return styleHL.Render(modelRef)
 	}

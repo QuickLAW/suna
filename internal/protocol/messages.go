@@ -92,12 +92,13 @@ type ConfigParams struct {
 }
 
 type ConfigModel struct {
-	Provider      string   `json:"provider"`
-	Model         string   `json:"model"`
-	BaseURL       string   `json:"base_url,omitempty"`
-	ContextWindow int      `json:"context_window,omitempty"`
-	Strengths     []string `json:"strengths,omitempty"`
-	HasAPIKey     bool     `json:"has_api_key,omitempty"`
+	Provider      string         `json:"provider"`
+	Model         string         `json:"model"`
+	BaseURL       string         `json:"base_url,omitempty"`
+	ContextWindow int            `json:"context_window,omitempty"`
+	Strengths     []string       `json:"strengths,omitempty"`
+	Reasoning     map[string]any `json:"reasoning,omitempty"`
+	HasAPIKey     bool           `json:"has_api_key,omitempty"`
 }
 
 type ConfigSetParams struct {

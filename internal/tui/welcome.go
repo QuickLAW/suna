@@ -226,6 +226,11 @@ func (t *TUI) renderWelcomeInfo() string {
 		fmt.Sprintf("%-8s %s", t.tr("tui.status.version"), styleHL.Render(appVersion)),
 		fmt.Sprintf("%-8s %s", t.tr("tui.status.model"), styleHL.Render(provider+"/"+model)),
 	}
+	if mc, ok := t.activeConfigModel(); ok {
+		if reasoning := t.reasoningDisplay(mc); reasoning != "" {
+			rows = append(rows, fmt.Sprintf("%-8s %s", t.tr("tui.config.reasoning"), styleHL.Render(reasoning)))
+		}
+	}
 	if s.UsageToday != nil {
 		usage := fmt.Sprintf("↑%s ↓%s", fmtTok(s.UsageToday.InputTokens), fmtTok(s.UsageToday.OutputTokens))
 		rows = append(rows, fmt.Sprintf("%-8s %s", t.tr("tui.status.usage"), styleHL.Render(usage)))

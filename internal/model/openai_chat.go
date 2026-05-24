@@ -5,177 +5,112 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"sort"
 	"time"
 
-	"github.com/sashabaranov/go-openai"
+	openai "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
 )
 
 type OpenAIChatProvider struct {
-	client        *openai.Client
+	client        openai.Client
 	model         string
 	contextWindow int
-	httpClient    *http.Client
 }
 
 func NewOpenAIChatProvider(apiKey, baseURL, model string, contextWindow int) *OpenAIChatProvider {
-	cfg := openai.DefaultConfig(apiKey)
+	httpClient := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}}
+	opts := []option.RequestOption{option.WithAPIKey(apiKey), option.WithHTTPClient(httpClient)}
 	if baseURL != "" {
-		cfg.BaseURL = baseURL
+		opts = append(opts, option.WithBaseURL(baseURL))
 	}
-
-	httpClient := &http.Client{}
-	httpClient.Transport = &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
-	cfg.HTTPClient = httpClient
-
-	client := openai.NewClientWithConfig(cfg)
-	return &OpenAIChatProvider{
-		client:        client,
-		model:         model,
-		contextWindow: contextWindow,
-		httpClient:    httpClient,
-	}
+	return &OpenAIChatProvider{client: openai.NewClient(opts...), model: model, contextWindow: contextWindow}
 }
 
 func (p *OpenAIChatProvider) Complete(ctx context.Context, req *CompletionRequest) (<-chan Chunk, error) {
+	params := openai.ChatCompletionNewParams{
+		Model:       openai.ChatModel(p.resolveModel(req.Model)),
+		Messages:    p.buildMessages(req),
+		MaxTokens:   openai.Int(int64(p.resolveMaxTokens(req.MaxTokens))),
+		Temperature: openai.Float(p.resolveTemperature(req.Temperature)),
+		StreamOptions: openai.ChatCompletionStreamOptionsParam{
+			IncludeUsage: openai.Bool(true),
+		},
+	}
+	if tools := p.buildTools(req.Tools); len(tools) > 0 {
+		params.Tools = tools
+	}
+	opts, err := reasoningRequestOptions(req.Reasoning, chatGeneratedKeys())
+	if err != nil {
+		return nil, err
+	}
+
 	ch := make(chan Chunk, 64)
-
-	messages := p.buildMessages(req)
-	tools := p.buildTools(req.Tools)
-
 	go func() {
 		defer close(ch)
 		started := time.Now()
-
-		stream, err := p.client.CreateChatCompletionStream(ctx, openai.ChatCompletionRequest{
-			Model:         p.resolveModel(req.Model),
-			Messages:      messages,
-			Tools:         tools,
-			MaxTokens:     p.resolveMaxTokens(req.MaxTokens),
-			Temperature:   float32(p.resolveTemperature(req.Temperature)),
-			Stream:        true,
-			StreamOptions: &openai.StreamOptions{IncludeUsage: true},
-		})
-		if err != nil {
-			logLLMFailure(req, err, loggingFields(started, nil))
-			ch <- Chunk{Done: true, Error: err.Error()}
-			return
-		}
+		stream := p.client.Chat.Completions.NewStreaming(ctx, params, opts...)
 		defer stream.Close()
 
-		var toolCallsAcc map[int]*openai.ToolCall
-		var usage Usage
-		var sawStop bool
-
-		for {
-			resp, err := stream.Recv()
-			if err == io.EOF {
-				fields := loggingFields(started, &usage)
-				fields["tool_calls"] = len(toolCallsAcc)
-				logLLMSuccess(req, fields)
-				if len(toolCallsAcc) > 0 {
-					ch <- Chunk{
-						ToolCalls: p.accumulateToolCalls(toolCallsAcc),
-						Done:      false,
-					}
-				}
-				if usage.InputTokens > 0 || usage.OutputTokens > 0 {
-					ch <- Chunk{Done: true, Usage: &usage}
-				} else {
-					ch <- Chunk{Done: true}
-				}
-				return
+		var usage *Usage
+		var toolCallsAcc map[int]*chatToolCallAccum
+		for stream.Next() {
+			chunk := stream.Current()
+			if chunk.JSON.Usage.Valid() {
+				u := chunk.Usage
+				usage = &Usage{InputTokens: int(u.PromptTokens), OutputTokens: int(u.CompletionTokens), TotalTokens: int(u.TotalTokens), CachedTokens: int(u.PromptTokensDetails.CachedTokens)}
 			}
-			if err != nil {
-				logLLMFailure(req, err, loggingFields(started, &usage))
-				ch <- Chunk{Done: true, Error: fmt.Sprintf("stream error: %v", err)}
-				return
-			}
-
-			if resp.Usage != nil {
-				usage.InputTokens = resp.Usage.PromptTokens
-				usage.OutputTokens = resp.Usage.CompletionTokens
-				usage.TotalTokens = resp.Usage.TotalTokens
-				if resp.Usage.PromptTokensDetails != nil {
-					usage.CachedTokens = resp.Usage.PromptTokensDetails.CachedTokens
-				}
-			}
-
-			if len(resp.Choices) == 0 {
-				if sawStop && (usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.TotalTokens > 0) {
-					ch <- Chunk{Done: true, Usage: &usage}
-					return
-				}
+			if len(chunk.Choices) == 0 {
 				continue
 			}
-			choice := resp.Choices[0]
-
+			choice := chunk.Choices[0]
 			if choice.Delta.Content != "" {
 				ch <- Chunk{Content: choice.Delta.Content, Done: false}
 			}
-
-			if choice.Delta.ReasoningContent != "" {
-				ch <- Chunk{ReasoningContent: choice.Delta.ReasoningContent, Done: false}
+			if reasoning := chatReasoningContent(choice.Delta); reasoning != "" {
+				ch <- Chunk{ReasoningContent: reasoning, Done: false}
 			}
-
-			for _, tc := range choice.Delta.ToolCalls {
-				if toolCallsAcc == nil {
-					toolCallsAcc = make(map[int]*openai.ToolCall)
-				}
-				idx := 0
-				if tc.Index != nil {
-					idx = *tc.Index
-				}
-				existing, ok := toolCallsAcc[idx]
-				if !ok {
-					toolCallsAcc[idx] = &openai.ToolCall{
-						ID:   tc.ID,
-						Type: tc.Type,
-						Function: openai.FunctionCall{
-							Name:      tc.Function.Name,
-							Arguments: tc.Function.Arguments,
-						},
-					}
-				} else {
-					if tc.ID != "" {
-						existing.ID = tc.ID
-					}
-					if tc.Function.Name != "" {
-						existing.Function.Name = tc.Function.Name
-					}
-					if tc.Function.Arguments != "" {
-						existing.Function.Arguments += tc.Function.Arguments
-					}
-				}
-			}
-
-			if choice.FinishReason == "tool_calls" || choice.FinishReason == "stop" {
-				if len(toolCallsAcc) > 0 {
-					ch <- Chunk{
-						ToolCalls: p.accumulateToolCalls(toolCallsAcc),
-						Done:      false,
-					}
-					toolCallsAcc = nil
-				}
-				if choice.FinishReason == "stop" {
-					sawStop = true
-					if usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.TotalTokens > 0 {
-						ch <- Chunk{Done: true, Usage: &usage}
-						return
-					}
-				}
-			}
+			mergeChatToolDeltas(choice.Delta.ToolCalls, &toolCallsAcc)
 		}
+		if err := stream.Err(); err != nil {
+			logLLMFailure(req, err, loggingFields(started, usage))
+			ch <- Chunk{Done: true, Error: err.Error()}
+			return
+		}
+		toolCalls := accumulateChatToolCalls(toolCallsAcc)
+		fields := loggingFields(started, usage)
+		fields["tool_calls"] = len(toolCalls)
+		logLLMSuccess(req, fields)
+		if len(toolCalls) > 0 {
+			ch <- Chunk{ToolCalls: toolCalls, Done: false}
+		}
+		if usage != nil {
+			ch <- Chunk{Done: true, Usage: usage}
+			return
+		}
+		ch <- Chunk{Done: true}
 	}()
-
 	return ch, nil
 }
 
-func (p *OpenAIChatProvider) EstimateTokens(text string) int {
-	return len(text) / 4
+func chatGeneratedKeys() map[string]bool {
+	return map[string]bool{"model": true, "messages": true, "max_tokens": true, "temperature": true, "stream": true, "stream_options": true, "tools": true}
 }
+
+func chatReasoningContent(delta openai.ChatCompletionChunkChoiceDelta) string {
+	field, ok := delta.JSON.ExtraFields["reasoning_content"]
+	if !ok || !field.Valid() {
+		return ""
+	}
+	var value string
+	if err := json.Unmarshal([]byte(field.Raw()), &value); err != nil {
+		return ""
+	}
+	return value
+}
+
+func (p *OpenAIChatProvider) EstimateTokens(text string) int { return len(text) / 4 }
 
 func (p *OpenAIChatProvider) ContextWindow() int {
 	if p.contextWindow > 0 {
@@ -205,63 +140,60 @@ func (p *OpenAIChatProvider) resolveTemperature(t float64) float64 {
 	return 0.7
 }
 
-func (p *OpenAIChatProvider) buildMessages(req *CompletionRequest) []openai.ChatCompletionMessage {
-	msgs := make([]openai.ChatCompletionMessage, 0, len(req.Messages)+1)
+func (p *OpenAIChatProvider) buildMessages(req *CompletionRequest) []openai.ChatCompletionMessageParamUnion {
+	msgs := make([]openai.ChatCompletionMessageParamUnion, 0, len(req.Messages)+1)
 	if req.System != "" {
-		msgs = append(msgs, openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleSystem,
-			Content: req.System,
-		})
+		msgs = append(msgs, openai.SystemMessage(req.System))
 	}
 	for _, m := range req.Messages {
-		msg := openai.ChatCompletionMessage{
-			Role: string(m.Role),
+		switch m.Role {
+		case RoleUser:
+			msgs = append(msgs, buildChatUserMessage(m))
+		case RoleAssistant:
+			msgs = append(msgs, buildChatAssistantMessage(m))
+		case RoleTool:
+			msgs = append(msgs, openai.ToolMessage(m.Text(), m.ToolCallID))
 		}
-		if len(m.ToolCalls) > 0 {
-			msg.ToolCalls = make([]openai.ToolCall, len(m.ToolCalls))
-			for i, tc := range m.ToolCalls {
-				msg.ToolCalls[i] = openai.ToolCall{
-					ID:   tc.ID,
-					Type: openai.ToolTypeFunction,
-					Function: openai.FunctionCall{
-						Name:      tc.Name,
-						Arguments: tc.Arguments,
-					},
-				}
-			}
-		}
-		if m.ToolCallID != "" {
-			msg.ToolCallID = m.ToolCallID
-		}
-		if len(m.Content) > 0 {
-			var textParts []string
-			var multi []openai.ChatMessagePart
-			for _, c := range m.Content {
-				switch c.Type {
-				case ContentText:
-					textParts = append(textParts, c.Text)
-					multi = append(multi, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: c.Text})
-				case ContentImage:
-					if imageURL := openAIImageURL(c); imageURL != "" {
-						multi = append(multi, openai.ChatMessagePart{
-							Type:     openai.ChatMessagePartTypeImageURL,
-							ImageURL: &openai.ChatMessageImageURL{URL: imageURL},
-						})
-					}
-				}
-			}
-			if hasImagePart(m.Content) {
-				// Chat Completions 的多模态 content 必须是 part 数组；纯文本仍用 string content 提高兼容性。
-				msg.MultiContent = multi
-			} else {
-				msg.Content = joinStrings(textParts, "\n")
-			}
-		} else if m.TextContent != "" {
-			msg.Content = m.TextContent
-		}
-		msgs = append(msgs, msg)
 	}
 	return msgs
+}
+
+func buildChatUserMessage(m Message) openai.ChatCompletionMessageParamUnion {
+	if !hasImagePart(m.Content) {
+		return openai.UserMessage(m.Text())
+	}
+	parts := make([]openai.ChatCompletionContentPartUnionParam, 0, len(m.Content))
+	for _, c := range m.Content {
+		switch c.Type {
+		case ContentText:
+			if c.Text != "" {
+				parts = append(parts, openai.TextContentPart(c.Text))
+			}
+		case ContentImage:
+			if imageURL := openAIImageURL(c); imageURL != "" {
+				parts = append(parts, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: imageURL}))
+			}
+		}
+	}
+	return openai.UserMessage(parts)
+}
+
+func buildChatAssistantMessage(m Message) openai.ChatCompletionMessageParamUnion {
+	msg := openai.AssistantMessage(m.Text())
+	if len(m.ToolCalls) == 0 || msg.OfAssistant == nil {
+		return msg
+	}
+	msg.OfAssistant.ToolCalls = make([]openai.ChatCompletionMessageToolCallUnionParam, 0, len(m.ToolCalls))
+	for _, tc := range m.ToolCalls {
+		msg.OfAssistant.ToolCalls = append(msg.OfAssistant.ToolCalls, openai.ChatCompletionMessageToolCallUnionParam{OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
+			ID: tc.ID,
+			Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
+				Name:      tc.Name,
+				Arguments: tc.Arguments,
+			},
+		}})
+	}
+	return msg
 }
 
 func hasImagePart(blocks []ContentBlock) bool {
@@ -287,26 +219,43 @@ func openAIImageURL(block ContentBlock) string {
 	return "data:" + mimeType + ";base64," + block.MediaB64
 }
 
-func (p *OpenAIChatProvider) buildTools(tools []ToolDef) []openai.Tool {
+func (p *OpenAIChatProvider) buildTools(tools []ToolDef) []openai.ChatCompletionToolUnionParam {
 	if len(tools) == 0 {
 		return nil
 	}
-	result := make([]openai.Tool, len(tools))
-	for i, t := range tools {
-		params, _ := json.Marshal(t.Parameters)
-		result[i] = openai.Tool{
-			Type: openai.ToolTypeFunction,
-			Function: &openai.FunctionDefinition{
-				Name:        t.Name,
-				Description: t.Description,
-				Parameters:  json.RawMessage(params),
-			},
-		}
+	result := make([]openai.ChatCompletionToolUnionParam, 0, len(tools))
+	for _, t := range tools {
+		result = append(result, openai.ChatCompletionFunctionTool(openai.FunctionDefinitionParam{Name: t.Name, Description: openai.String(t.Description), Parameters: openai.FunctionParameters(t.Parameters)}))
 	}
 	return result
 }
 
-func (p *OpenAIChatProvider) accumulateToolCalls(acc map[int]*openai.ToolCall) []ToolCall {
+type chatToolCallAccum struct{ ID, Name, Arguments string }
+
+func mergeChatToolDeltas(toolCalls []openai.ChatCompletionChunkChoiceDeltaToolCall, acc *map[int]*chatToolCallAccum) {
+	for _, tc := range toolCalls {
+		if *acc == nil {
+			*acc = make(map[int]*chatToolCallAccum)
+		}
+		idx := int(tc.Index)
+		existing, ok := (*acc)[idx]
+		if !ok {
+			existing = &chatToolCallAccum{}
+			(*acc)[idx] = existing
+		}
+		if tc.ID != "" {
+			existing.ID = tc.ID
+		}
+		if tc.Function.Name != "" {
+			existing.Name = tc.Function.Name
+		}
+		if tc.Function.Arguments != "" {
+			existing.Arguments += tc.Function.Arguments
+		}
+	}
+}
+
+func accumulateChatToolCalls(acc map[int]*chatToolCallAccum) []ToolCall {
 	indexes := make([]int, 0, len(acc))
 	for idx := range acc {
 		indexes = append(indexes, idx)
@@ -315,22 +264,14 @@ func (p *OpenAIChatProvider) accumulateToolCalls(acc map[int]*openai.ToolCall) [
 	result := make([]ToolCall, 0, len(acc))
 	for _, idx := range indexes {
 		tc := acc[idx]
-		result = append(result, ToolCall{
-			ID:        tc.ID,
-			Name:      tc.Function.Name,
-			Arguments: tc.Function.Arguments,
-		})
-	}
-	return result
-}
-
-func joinStrings(parts []string, sep string) string {
-	result := ""
-	for i, s := range parts {
-		if i > 0 {
-			result += sep
+		if tc.Name == "" {
+			continue
 		}
-		result += s
+		id := tc.ID
+		if id == "" {
+			id = fmt.Sprintf("call_%d", idx)
+		}
+		result = append(result, ToolCall{ID: id, Name: tc.Name, Arguments: tc.Arguments})
 	}
 	return result
 }

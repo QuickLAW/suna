@@ -80,14 +80,15 @@ type ToolDef struct {
 
 // CompletionRequest 是 provider 的统一请求格式，对应设计文档中的 Model Router 输出。
 type CompletionRequest struct {
-	Model       string    `json:"model"`
-	Purpose     string    `json:"purpose,omitempty"`
-	RequestID   string    `json:"request_id,omitempty"`
-	System      string    `json:"system,omitempty"`
-	Messages    []Message `json:"messages"`
-	Tools       []ToolDef `json:"tools,omitempty"`
-	MaxTokens   int       `json:"max_tokens,omitempty"`
-	Temperature float64   `json:"temperature,omitempty"`
+	Model       string         `json:"model"`
+	Purpose     string         `json:"purpose,omitempty"`
+	RequestID   string         `json:"request_id,omitempty"`
+	System      string         `json:"system,omitempty"`
+	Messages    []Message      `json:"messages"`
+	Tools       []ToolDef      `json:"tools,omitempty"`
+	MaxTokens   int            `json:"max_tokens,omitempty"`
+	Temperature float64        `json:"temperature,omitempty"`
+	Reasoning   map[string]any `json:"reasoning,omitempty"`
 }
 
 // Chunk 是 provider 流式输出的原子片段；Error 非空时调用方必须停止并按失败处理。

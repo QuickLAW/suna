@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -16,8 +17,8 @@ type AnthropicProvider struct {
 	contextWindow int
 }
 
-func NewAnthropicProvider(apiKey, model string, contextWindow int) *AnthropicProvider {
-	client := anthropic.NewClient(option.WithAPIKey(apiKey))
+func NewAnthropicProvider(apiKey, baseURL, model string, contextWindow int) *AnthropicProvider {
+	client := anthropic.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseURL))
 	return &AnthropicProvider{
 		client:        &client,
 		model:         model,
@@ -57,6 +58,11 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 		}
 		if len(tools) > 0 {
 			params.Tools = tools
+		}
+		if err := p.applyReasoning(&params, req.Reasoning); err != nil {
+			logLLMFailure(req, err, loggingFields(started, nil))
+			ch <- Chunk{Done: true, Error: err.Error()}
+			return
 		}
 
 		msg, err := p.client.Messages.New(ctx, params)
@@ -99,6 +105,55 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 	}()
 
 	return ch, nil
+}
+
+func (p *AnthropicProvider) applyReasoning(params *anthropic.MessageNewParams, reasoning map[string]any) error {
+	if len(reasoning) == 0 {
+		return nil
+	}
+	if len(reasoning) != 1 {
+		return fmt.Errorf("anthropic reasoning supports only thinking")
+	}
+	raw, ok := reasoning["thinking"]
+	if !ok {
+		return fmt.Errorf("anthropic reasoning supports only thinking")
+	}
+	thinking, ok := raw.(map[string]any)
+	if !ok {
+		return fmt.Errorf("anthropic thinking must be an object")
+	}
+	switch fmt.Sprint(thinking["type"]) {
+	case "enabled":
+		budget, ok := numericInt64(thinking["budget_tokens"])
+		if !ok {
+			return fmt.Errorf("anthropic thinking.budget_tokens is required")
+		}
+		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(budget)
+	case "disabled":
+		disabled := anthropic.NewThinkingConfigDisabledParam()
+		params.Thinking = anthropic.ThinkingConfigParamUnion{OfDisabled: &disabled}
+	case "adaptive":
+		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{}}
+	default:
+		return fmt.Errorf("anthropic thinking.type is invalid")
+	}
+	return nil
+}
+
+func numericInt64(v any) (int64, bool) {
+	switch n := v.(type) {
+	case int:
+		return int64(n), true
+	case int64:
+		return n, true
+	case float64:
+		return int64(n), true
+	case json.Number:
+		i, err := n.Int64()
+		return i, err == nil
+	default:
+		return 0, false
+	}
 }
 
 func (p *AnthropicProvider) EstimateTokens(text string) int {

@@ -58,3 +58,36 @@ func TestSaveKeepsGuardWorkspace(t *testing.T) {
 		t.Fatalf("saved config missing workspace: %s", string(data))
 	}
 }
+
+func TestReasoningRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	workspace := filepath.Join(dir, "workspace")
+	if err := os.Mkdir(workspace, 0755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	cfg := &Config{
+		ActiveModel: "openai/gpt-5",
+		Models: []ModelConfig{{
+			Provider: "openai",
+			Model:    "gpt-5",
+			Reasoning: map[string]any{
+				"reasoning": map[string]any{"effort": "high"},
+			},
+		}},
+		Guard:   GuardConfig{Mode: "ask", Workspace: workspace},
+		UI:      UIConfig{Theme: "auto", Locale: "en"},
+		DataDir: dir,
+	}
+	if err := cfg.Save(path); err != nil {
+		t.Fatalf("Save error: %v", err)
+	}
+	var loaded Config
+	if err := LoadTOML(path, &loaded); err != nil {
+		t.Fatalf("LoadTOML error: %v", err)
+	}
+	got := loaded.Models[0].Reasoning["reasoning"].(map[string]any)["effort"]
+	if got != "high" {
+		t.Fatalf("reasoning effort = %#v", got)
+	}
+}

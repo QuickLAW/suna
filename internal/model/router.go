@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/alanchenchen/suna/internal/config"
@@ -70,9 +71,13 @@ func (r *Router) ActiveRef() string {
 func (r *Router) Complete(ctx context.Context, ref string, req *CompletionRequest) (<-chan Chunk, error) {
 	r.mu.RLock()
 	p, ok := r.providers[ref]
+	mc := r.models[ref]
 	r.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("model %q not found", ref)
+	}
+	if req != nil && len(req.Reasoning) == 0 && len(mc.Reasoning) > 0 {
+		req.Reasoning = mc.Reasoning
 	}
 	if err := r.rateLimit.Wait(ctx, ref); err != nil {
 		return nil, err
@@ -114,14 +119,15 @@ func createProvider(mc config.ModelConfig) (Provider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve API key: %w", err)
 	}
+	if strings.TrimSpace(mc.BaseURL) == "" {
+		return nil, fmt.Errorf("provider %q requires base_url", mc.Provider)
+	}
 	switch {
 	case mc.IsAnthropic():
-		return NewAnthropicProvider(apiKey, mc.Model, mc.ContextWindow), nil
+		return NewAnthropicProvider(apiKey, mc.BaseURL, mc.Model, mc.ContextWindow), nil
 	case mc.IsOpenAI():
-		// 内置 openai 固定走官方 Responses API；不要把自定义 base_url 混进这条路径。
-		return NewOpenAIResponsesProvider(apiKey, mc.Model, mc.ContextWindow), nil
+		return NewOpenAIResponsesProvider(apiKey, mc.BaseURL, mc.Model, mc.ContextWindow), nil
 	default:
-		// 其他 provider 视为 OpenAI-compatible，走 Chat Completions 协议并要求配置 base_url。
 		return NewOpenAIChatProvider(apiKey, mc.BaseURL, mc.Model, mc.ContextWindow), nil
 	}
 }

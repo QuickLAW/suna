@@ -27,6 +27,7 @@ type ConfigModel struct {
 	BaseURL       string
 	ContextWindow int
 	Strengths     []string
+	Reasoning     map[string]any
 }
 
 func (a *Agent) Config() *config.Config {
@@ -67,7 +68,7 @@ func (a *Agent) UpdateConfig(params ConfigSetParams) (*config.Config, error) {
 	}
 	switch params.Action {
 	case "upsert_model":
-		mc := config.ModelConfig{Provider: params.Model.Provider, Model: params.Model.Model, BaseURL: params.Model.BaseURL, ContextWindow: params.Model.ContextWindow, Strengths: append([]string(nil), params.Model.Strengths...)}
+		mc := config.ModelConfig{Provider: params.Model.Provider, Model: params.Model.Model, BaseURL: params.Model.BaseURL, ContextWindow: params.Model.ContextWindow, Strengths: append([]string(nil), params.Model.Strengths...), Reasoning: cloneMap(params.Model.Reasoning)}
 		if mc.Provider == "" || mc.Model == "" {
 			return nil, fmt.Errorf("provider and model are required")
 		}
@@ -148,6 +149,17 @@ func (a *Agent) UpdateConfig(params ConfigSetParams) (*config.Config, error) {
 		a.configModTime = info.ModTime()
 	}
 	return cfg, nil
+}
+
+func cloneMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func (a *Agent) reloadRouterLocked(cfg *config.Config) error {

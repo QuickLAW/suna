@@ -14,8 +14,8 @@
 
 ```
 模型通信 (2):
-  github.com/sashabaranov/go-openai          # OpenAI SDK (覆盖 GLM/Qwen/Kimi/DeepSeek)
-  github.com/anthropics/anthropic-sdk-go      # Anthropic SDK
+  github.com/openai/openai-go/v3              # OpenAI Responses + OpenAI-compatible Chat SDK
+  github.com/anthropics/anthropic-sdk-go      # Anthropic Messages SDK
 
 能力扩展 (待引入):
   github.com/mark3labs/mcp-go                 # MCP Client (Phase 3)
@@ -177,7 +177,7 @@ suna/
 │   │   ├── agent_tools.go       # 工具执行逻辑 + spawn 校验 + confirmGuard
 │   ├── model/                   # 多模型抽象 + 路由
 │   │   ├── provider.go          # Provider 接口 + 消息/工具定义
-│   │   ├── openai_responses.go  # OpenAI 官方 Responses API 适配
+│   │   ├── openai_responses.go  # OpenAI Responses 协议适配
 │   │   ├── openai_chat.go       # OpenAI-compatible Chat Completions 适配
 │   │   ├── anthropic.go         # anthropic-sdk-go 适配
 │   │   ├── router.go            # 路由工具函数 (RouteWithLLM 已移除)
@@ -298,6 +298,7 @@ strengths = ["快速响应", "轻量任务"]
 [[models]]
 provider = "anthropic"
 model = "claude-sonnet-4-20250514"
+base_url = "https://api.anthropic.com"
 strengths = ["复杂推理", "长文写作", "代码审查"]
 
 [[models]]
@@ -309,7 +310,20 @@ strengths = ["前端生成", "多模态", "图片理解"]
 [[models]]
 provider = "openai"
 model = "gpt-4o"
+base_url = "https://api.openai.com/v1"
 strengths = ["通用", "多模态"]
+
+[[models]]
+provider = "deepseek"
+model = "deepseek-v4-pro"
+base_url = "https://api.deepseek.com/v1"
+strengths = ["推理", "代码"]
+
+[models.reasoning]
+reasoning_effort = "max"
+
+[models.reasoning.thinking]
+type = "enabled"
 
 [guard]
 mode = "ask"                      # readonly | ask | auto | smart (默认 ask)
@@ -346,11 +360,12 @@ command = "echo checking"
 | `active_model` | string | 否 | 第一个 `[[models]]` | 当前 daemon 默认模型，格式为 `provider/model`，必须能匹配某个模型配置。 |
 | `max_model_rps` | int | 否 | `15` | 每个模型 ref 的请求限速，用于避免 subtask 并发打爆供应商。 |
 | `[[models]]` | array | 是 | 无 | 至少需要一个模型，否则 daemon/TUI 进入配置向导。 |
-| `models.provider` | string | 是 | 无 | provider 名称，也是 `credentials.toml` 里 API key 的分组名。 |
+| `models.provider` | string | 是 | 无 | provider 协议名，也是 `credentials.toml` 里 API key 的分组名。`openai` 表示 OpenAI Responses 协议，`anthropic` 表示 Anthropic Messages 协议，其它名称表示 OpenAI-compatible Chat Completions 协议。 |
 | `models.model` | string | 是 | 无 | 模型 ID。模型 ref 为 `provider/model`。 |
-| `models.base_url` | string | 否 | 空 | OpenAI-compatible Chat Completions endpoint；`openai` 官方 Responses API 和 `anthropic` 可留空。 |
+| `models.base_url` | string | 是 | 无 | 该 provider 协议实际请求的 endpoint。daemon/core 不内置官方 URL，不读取 SDK 默认 endpoint；TUI 只在新建 `openai`/`anthropic` 时预填官方 URL，用户可改为中转站。 |
 | `models.context_window` | int | 否 | `anthropic` 为 `200000`，其它 provider 为 `128000` | 上下文窗口，用于顶栏展示和 compact 判断；TUI 会按 provider 显示默认值/placeholder，但未填写时不会自动写入 `config.toml`。 |
 | `models.strengths` | string[] | 否 | 空 | TUI 展示模型擅长项。 |
+| `models.reasoning` | object | 否 | 空 | 思考相关请求字段组。daemon/core 不理解 preset；provider 请求时将顶层字段注入最终 request body，并禁止覆盖已生成字段。TUI preset 负责生成该对象。 |
 | `[guard].mode` | string | 否 | `ask` | `readonly` / `ask` / `auto` / `smart`。具体决策见 `plans/04-guard.md`。 |
 | `[guard].workspace` | string | 否 | 空 | workspace 硬边界；非空时必须是存在目录。除 `askuser`/`spawn` 外所有 tool 都先过 Guard，文件类路径和 `exec.cwd`/明显命令路径解析到 workspace 外会直接 reject；`exec` shell 变量展开无法安全检查时也会 reject。优先级高于 allowed、auto、LLM review 和用户确认。 |
 | `[[guard.blocked]]` | array | 否 | 空 | 用户自定义硬拦截规则，追加到内置 blocked rules 后。 |
@@ -407,14 +422,14 @@ api_key = "..."
 api_key = "..."
 ```
 
-注意：`models.provider` 必须和 `credentials.toml` 的 table 名一致，否则 `ResolveAPIKey()` 会返回缺失 key。`provider = "openai"` 是保留值，固定走 OpenAI Responses API；任意其他非 `anthropic` provider 都按 OpenAI-compatible Chat Completions 调用，并需要 `base_url`。
+注意：`models.provider` 必须和 `credentials.toml` 的 table 名一致，否则 `ResolveAPIKey()` 会返回缺失 key。`provider` 是协议适配器语义，不是官方厂商 endpoint：`openai` 走 OpenAI Responses 协议，`anthropic` 走 Anthropic Messages 协议，其它 provider 走 OpenAI-compatible Chat Completions 协议。所有模型都必须显式配置 `base_url`。
 
 ## 当前实现状态
 
 | 模块 | 状态 | 当前能力 | 主要缺口 |
 |---|---|---|---|
 | Daemon / Protocol/Transport | Usable MVP | protocol schema、local transport、stream/config/session/guard 事件 | 多客户端边界和错误恢复仍需加强 |
-| Model | Usable MVP | OpenAI Responses、OpenAI-compatible Chat 与 Anthropic provider；图片输入、tool calling、usage/context 透传；OpenAI/OpenAI-compatible 支持 streaming，Anthropic 当前非 streaming | provider ping、Anthropic usage/reasoning 映射和高级路由策略不完整 |
+| Model | Usable MVP | OpenAI Responses、OpenAI-compatible Chat 与 Anthropic provider；图片输入、tool calling、usage/context 透传；OpenAI/OpenAI-compatible 支持 streaming；`models.reasoning` 支持 TUI preset 与自定义注入；Anthropic 当前非 streaming | provider ping 和高级路由策略不完整 |
 | Core Agent | Usable MVP | agent loop、provider-dependent streaming、tool call 并发执行、AskUser、Spawn、session 管理 | 更细的取消/并发边界和长期任务恢复 |
 | Tools | Usable MVP | read/list/readhttp/exec/write/edit/writehttp/askuser/spawn | Windows 命令翻译层仍是后续项 |
 | Guard | Usable MVP | `readonly` / `ask` / `auto` / `smart`、硬拦截、风险分级、TUI confirm、LLM review | rules 编辑 UI、modify 参数改写、渐进信任未完成 |

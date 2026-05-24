@@ -1,80 +1,87 @@
 package model
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"strings"
 	"time"
+
+	openai "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/responses"
 )
 
-const openAIResponsesURL = "https://api.openai.com/v1/responses"
-
 type OpenAIResponsesProvider struct {
-	apiKey        string
+	client        openai.Client
 	model         string
 	contextWindow int
-	httpClient    *http.Client
 }
 
-func NewOpenAIResponsesProvider(apiKey, model string, contextWindow int) *OpenAIResponsesProvider {
-	return &OpenAIResponsesProvider{
-		apiKey:        apiKey,
-		model:         model,
-		contextWindow: contextWindow,
-		httpClient: &http.Client{Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
-		}},
-	}
+func NewOpenAIResponsesProvider(apiKey, baseURL, model string, contextWindow int) *OpenAIResponsesProvider {
+	httpClient := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}}
+	client := openai.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseURL), option.WithHTTPClient(httpClient))
+	return &OpenAIResponsesProvider{client: client, model: model, contextWindow: contextWindow}
 }
 
 func (p *OpenAIResponsesProvider) Complete(ctx context.Context, req *CompletionRequest) (<-chan Chunk, error) {
-	ch := make(chan Chunk, 64)
-	body, err := p.buildRequest(req)
+	params := responses.ResponseNewParams{
+		Model:             responses.ResponsesModel(p.resolveModel(req.Model)),
+		Input:             responses.ResponseNewParamsInputUnion{OfInputItemList: p.buildInput(req)},
+		MaxOutputTokens:   openai.Int(int64(p.resolveMaxTokens(req.MaxTokens))),
+		Temperature:       openai.Float(p.resolveTemperature(req.Temperature)),
+		ParallelToolCalls: openai.Bool(true),
+	}
+	if req.System != "" {
+		params.Instructions = openai.String(req.System)
+	}
+	if tools := p.buildTools(req.Tools); len(tools) > 0 {
+		params.Tools = tools
+	}
+	opts, err := reasoningRequestOptions(req.Reasoning, responsesGeneratedKeys())
 	if err != nil {
 		return nil, err
 	}
 
+	ch := make(chan Chunk, 64)
 	go func() {
 		defer close(ch)
 		started := time.Now()
+		stream := p.client.Responses.NewStreaming(ctx, params, opts...)
+		defer stream.Close()
 
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, openAIResponsesURL, bytes.NewReader(body))
-		if err != nil {
-			logLLMFailure(req, err, loggingFields(started, nil))
-			ch <- Chunk{Done: true, Error: err.Error()}
-			return
+		var usage *Usage
+		toolCallsByID := map[string]*ToolCall{}
+		var toolCallOrder []string
+
+		for stream.Next() {
+			event := stream.Current()
+			switch event.Type {
+			case "response.output_text.delta":
+				if event.Delta != "" {
+					ch <- Chunk{Content: event.Delta, Done: false}
+				}
+			case "response.function_call_arguments.delta", "response.function_call_arguments.done", "response.output_item.done", "response.output_item.added":
+				mergeResponseToolCall(event, toolCallsByID, &toolCallOrder)
+			case "response.completed":
+				u := event.Response.Usage
+				if event.JSON.Response.Valid() {
+					usage = &Usage{InputTokens: int(u.InputTokens), OutputTokens: int(u.OutputTokens), CachedTokens: int(u.InputTokensDetails.CachedTokens), TotalTokens: int(u.TotalTokens)}
+					collectResponseOutputToolCalls(event.Response.Output, toolCallsByID, &toolCallOrder)
+				}
+			case "error":
+				err := fmt.Errorf("responses error: %s", event.Message)
+				logLLMFailure(req, err, loggingFields(started, usage))
+				ch <- Chunk{Done: true, Error: err.Error()}
+				return
+			}
 		}
-		httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
-		httpReq.Header.Set("Content-Type", "application/json")
-
-		resp, err := p.httpClient.Do(httpReq)
-		if err != nil {
-			logLLMFailure(req, err, loggingFields(started, nil))
-			ch <- Chunk{Done: true, Error: err.Error()}
-			return
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			err := responseStatusError(resp)
-			logLLMFailure(req, err, loggingFields(started, nil))
-			ch <- Chunk{Done: true, Error: err.Error()}
-			return
-		}
-
-		usage, toolCalls, err := p.readResponseStream(resp.Body, ch)
-		if err != nil {
+		if err := stream.Err(); err != nil {
 			logLLMFailure(req, err, loggingFields(started, usage))
 			ch <- Chunk{Done: true, Error: err.Error()}
 			return
 		}
-
+		toolCalls := orderedResponseToolCalls(toolCallsByID, toolCallOrder)
 		fields := loggingFields(started, usage)
 		fields["tool_calls"] = len(toolCalls)
 		logLLMSuccess(req, fields)
@@ -87,37 +94,20 @@ func (p *OpenAIResponsesProvider) Complete(ctx context.Context, req *CompletionR
 		}
 		ch <- Chunk{Done: true}
 	}()
-
 	return ch, nil
 }
 
-func (p *OpenAIResponsesProvider) EstimateTokens(text string) int {
-	return len(text) / 4
+func responsesGeneratedKeys() map[string]bool {
+	return map[string]bool{"model": true, "input": true, "max_output_tokens": true, "temperature": true, "parallel_tool_calls": true, "instructions": true, "tools": true, "stream": true}
 }
+
+func (p *OpenAIResponsesProvider) EstimateTokens(text string) int { return len(text) / 4 }
 
 func (p *OpenAIResponsesProvider) ContextWindow() int {
 	if p.contextWindow > 0 {
 		return p.contextWindow
 	}
 	return 128000
-}
-
-func (p *OpenAIResponsesProvider) buildRequest(req *CompletionRequest) ([]byte, error) {
-	payload := map[string]any{
-		"model":               p.resolveModel(req.Model),
-		"input":               p.buildInput(req),
-		"max_output_tokens":   p.resolveMaxTokens(req.MaxTokens),
-		"temperature":         p.resolveTemperature(req.Temperature),
-		"stream":              true,
-		"parallel_tool_calls": true,
-	}
-	if req.System != "" {
-		payload["instructions"] = req.System
-	}
-	if tools := p.buildTools(req.Tools); len(tools) > 0 {
-		payload["tools"] = tools
-	}
-	return json.Marshal(payload)
 }
 
 func (p *OpenAIResponsesProvider) resolveModel(m string) string {
@@ -141,210 +131,92 @@ func (p *OpenAIResponsesProvider) resolveTemperature(t float64) float64 {
 	return 0.7
 }
 
-func (p *OpenAIResponsesProvider) buildInput(req *CompletionRequest) []map[string]any {
-	input := make([]map[string]any, 0, len(req.Messages)+len(req.Messages))
+func (p *OpenAIResponsesProvider) buildInput(req *CompletionRequest) responses.ResponseInputParam {
+	input := make(responses.ResponseInputParam, 0, len(req.Messages)*2)
 	for _, m := range req.Messages {
 		switch m.Role {
 		case RoleUser:
-			input = append(input, map[string]any{"role": "user", "content": p.buildInputContent(m)})
+			input = append(input, responses.ResponseInputItemParamOfMessage(p.buildInputContent(m), responses.EasyInputMessageRoleUser))
 		case RoleAssistant:
-			if len(m.ToolCalls) == 0 {
-				input = append(input, map[string]any{"role": "assistant", "content": p.buildOutputContent(m)})
-				continue
-			}
-			// Responses API 中 function_call 是独立 input item，不挂在 assistant message 字段上。
 			if text := m.Text(); text != "" {
-				input = append(input, map[string]any{"role": "assistant", "content": p.buildOutputContent(m)})
+				input = append(input, responses.ResponseInputItemParamOfMessage(text, responses.EasyInputMessageRoleAssistant))
 			}
 			for _, tc := range m.ToolCalls {
-				input = append(input, map[string]any{
-					"type":      "function_call",
-					"call_id":   tc.ID,
-					"name":      tc.Name,
-					"arguments": tc.Arguments,
-				})
+				input = append(input, responses.ResponseInputItemParamOfFunctionCall(tc.Arguments, tc.ID, tc.Name))
 			}
 		case RoleTool:
-			input = append(input, map[string]any{
-				"type":    "function_call_output",
-				"call_id": m.ToolCallID,
-				"output":  m.Text(),
-			})
+			input = append(input, responses.ResponseInputItemParamOfFunctionCallOutput(m.ToolCallID, m.Text()))
 		}
 	}
 	return input
 }
 
-func (p *OpenAIResponsesProvider) buildInputContent(m Message) []map[string]any {
-	blocks := make([]map[string]any, 0, len(m.Content))
+func (p *OpenAIResponsesProvider) buildInputContent(m Message) responses.ResponseInputMessageContentListParam {
+	blocks := make(responses.ResponseInputMessageContentListParam, 0, len(m.Content))
 	for _, c := range m.Content {
 		switch c.Type {
 		case ContentText:
 			if c.Text != "" {
-				blocks = append(blocks, map[string]any{"type": "input_text", "text": c.Text})
+				blocks = append(blocks, responses.ResponseInputContentParamOfInputText(c.Text))
 			}
 		case ContentImage:
 			if imageURL := openAIImageURL(c); imageURL != "" {
-				// Responses API 的图片统一使用 input_image.image_url；base64 由 openAIImageURL 转为 data URL。
-				blocks = append(blocks, map[string]any{"type": "input_image", "image_url": imageURL})
+				img := responses.ResponseInputContentParamOfInputImage(responses.ResponseInputImageDetailAuto)
+				img.OfInputImage.ImageURL = openai.String(imageURL)
+				blocks = append(blocks, img)
 			}
 		}
 	}
 	if len(blocks) == 0 && m.TextContent != "" {
-		blocks = append(blocks, map[string]any{"type": "input_text", "text": m.TextContent})
+		blocks = append(blocks, responses.ResponseInputContentParamOfInputText(m.TextContent))
 	}
 	return blocks
 }
 
-func (p *OpenAIResponsesProvider) buildOutputContent(m Message) []map[string]any {
-	text := m.Text()
-	if text == "" {
-		return nil
-	}
-	return []map[string]any{{"type": "output_text", "text": text}}
-}
-
-func (p *OpenAIResponsesProvider) buildTools(tools []ToolDef) []map[string]any {
+func (p *OpenAIResponsesProvider) buildTools(tools []ToolDef) []responses.ToolUnionParam {
 	if len(tools) == 0 {
 		return nil
 	}
-	result := make([]map[string]any, 0, len(tools))
+	result := make([]responses.ToolUnionParam, 0, len(tools))
 	for _, t := range tools {
-		result = append(result, map[string]any{
-			"type":        "function",
-			"name":        t.Name,
-			"description": t.Description,
-			"parameters":  t.Parameters,
-		})
+		result = append(result, responses.ToolParamOfFunction(t.Name, t.Parameters, false))
+		if result[len(result)-1].OfFunction != nil {
+			result[len(result)-1].OfFunction.Description = openai.String(t.Description)
+		}
 	}
 	return result
 }
 
-func (p *OpenAIResponsesProvider) readResponseStream(body io.Reader, ch chan<- Chunk) (*Usage, []ToolCall, error) {
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 1024), 1024*1024*16)
-
-	var usage *Usage
-	toolCallsByID := map[string]*ToolCall{}
-	var toolCallOrder []string
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, ":") {
-			continue
-		}
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "[DONE]" {
-			break
-		}
-
-		var event responseStreamEvent
-		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			return usage, nil, fmt.Errorf("decode responses stream: %w", err)
-		}
-		if event.Error != nil {
-			return usage, nil, fmt.Errorf("responses error: %s", event.Error.Message)
-		}
-		if event.Type == "response.output_text.delta" && event.Delta != "" {
-			ch <- Chunk{Content: event.Delta, Done: false}
-		}
-		if strings.Contains(event.Type, "function_call") {
-			mergeResponseToolCall(event, toolCallsByID, &toolCallOrder)
-		}
-		if event.Response != nil && event.Response.Usage != nil {
-			usage = event.Response.Usage.toUsage()
-			collectResponseOutputToolCalls(event.Response.Output, toolCallsByID, &toolCallOrder)
+func mergeResponseToolCall(event responses.ResponseStreamEventUnion, calls map[string]*ToolCall, order *[]string) {
+	if event.Type == "response.output_item.added" || event.Type == "response.output_item.done" {
+		if event.Item.Type == "function_call" {
+			upsertResponseToolCall(calls, order, event.Item.ID, event.Item.CallID, event.Item.Name, event.Item.Arguments.OfString, false)
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return usage, nil, fmt.Errorf("read responses stream: %w", err)
+	if event.Type == "response.function_call_arguments.delta" && event.Delta != "" {
+		upsertResponseToolCall(calls, order, event.ItemID, "", "", event.Delta, true)
 	}
+	if event.Type == "response.function_call_arguments.done" {
+		upsertResponseToolCall(calls, order, event.ItemID, "", event.Name, event.Arguments, false)
+	}
+}
 
-	toolCalls := make([]ToolCall, 0, len(toolCallOrder))
-	for _, id := range toolCallOrder {
-		if tc := toolCallsByID[id]; tc != nil && tc.Name != "" {
+func collectResponseOutputToolCalls(items []responses.ResponseOutputItemUnion, calls map[string]*ToolCall, order *[]string) {
+	for _, item := range items {
+		if item.Type == "function_call" {
+			upsertResponseToolCall(calls, order, item.ID, item.CallID, item.Name, item.Arguments.OfString, false)
+		}
+	}
+}
+
+func orderedResponseToolCalls(calls map[string]*ToolCall, order []string) []ToolCall {
+	toolCalls := make([]ToolCall, 0, len(order))
+	for _, id := range order {
+		if tc := calls[id]; tc != nil && tc.Name != "" {
 			toolCalls = append(toolCalls, *tc)
 		}
 	}
-	return usage, toolCalls, nil
-}
-
-type responseStreamEvent struct {
-	Type        string                    `json:"type"`
-	Delta       string                    `json:"delta"`
-	ItemID      string                    `json:"item_id"`
-	OutputIndex int                       `json:"output_index"`
-	Name        string                    `json:"name"`
-	Arguments   string                    `json:"arguments"`
-	CallID      string                    `json:"call_id"`
-	Item        *responseOutputItem       `json:"item"`
-	Response    *responseCompletedPayload `json:"response"`
-	Error       *responseErrorPayload     `json:"error"`
-}
-
-type responseCompletedPayload struct {
-	Output []responseOutputItem  `json:"output"`
-	Usage  *responseUsagePayload `json:"usage"`
-}
-
-type responseOutputItem struct {
-	Type      string `json:"type"`
-	ID        string `json:"id"`
-	CallID    string `json:"call_id"`
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
-}
-
-type responseUsagePayload struct {
-	InputTokens         int                        `json:"input_tokens"`
-	OutputTokens        int                        `json:"output_tokens"`
-	TotalTokens         int                        `json:"total_tokens"`
-	InputTokensDetails  responseInputTokenDetails  `json:"input_tokens_details"`
-	OutputTokensDetails responseOutputTokenDetails `json:"output_tokens_details"`
-}
-
-type responseInputTokenDetails struct {
-	CachedTokens int `json:"cached_tokens"`
-}
-
-type responseOutputTokenDetails struct {
-	ReasoningTokens int `json:"reasoning_tokens"`
-}
-
-type responseErrorPayload struct {
-	Message string `json:"message"`
-}
-
-func (u responseUsagePayload) toUsage() *Usage {
-	return &Usage{
-		InputTokens:  u.InputTokens,
-		OutputTokens: u.OutputTokens,
-		CachedTokens: u.InputTokensDetails.CachedTokens,
-		TotalTokens:  u.TotalTokens,
-	}
-}
-
-func mergeResponseToolCall(event responseStreamEvent, calls map[string]*ToolCall, order *[]string) {
-	if event.Item != nil && event.Item.Type == "function_call" {
-		upsertResponseToolCall(calls, order, event.Item.ID, event.Item.CallID, event.Item.Name, event.Item.Arguments, false)
-	}
-	if event.Type == "response.function_call_arguments.delta" && event.Delta != "" {
-		upsertResponseToolCall(calls, order, event.ItemID, event.CallID, event.Name, event.Delta, true)
-	}
-	if event.Type == "response.function_call_arguments.done" {
-		upsertResponseToolCall(calls, order, event.ItemID, event.CallID, event.Name, event.Arguments, false)
-	}
-}
-
-func collectResponseOutputToolCalls(items []responseOutputItem, calls map[string]*ToolCall, order *[]string) {
-	for _, item := range items {
-		if item.Type == "function_call" {
-			upsertResponseToolCall(calls, order, item.ID, item.CallID, item.Name, item.Arguments, false)
-		}
-	}
+	return toolCalls
 }
 
 func upsertResponseToolCall(calls map[string]*ToolCall, order *[]string, itemID, callID, name, args string, appendArgs bool) {
@@ -364,18 +236,12 @@ func upsertResponseToolCall(calls map[string]*ToolCall, order *[]string, itemID,
 	if name != "" {
 		tc.Name = name
 	}
+	if callID != "" {
+		tc.ID = callID
+	}
 	if appendArgs {
 		tc.Arguments += args
 	} else if args != "" {
 		tc.Arguments = args
 	}
-}
-
-func responseStatusError(resp *http.Response) error {
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-	message := strings.TrimSpace(string(body))
-	if message == "" {
-		message = resp.Status
-	}
-	return fmt.Errorf("openai responses error: %s", message)
 }

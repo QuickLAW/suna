@@ -28,6 +28,7 @@ type tuiModelConfig struct {
 	BaseURL       string
 	ContextWindow int
 	Strengths     []string
+	Reasoning     map[string]any
 	HasAPIKey     bool
 }
 
@@ -93,6 +94,9 @@ func defaultContextWindow(mc tuiModelConfig) int {
 }
 
 func (t *TUI) updateConfig(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if t.configReasoningOpen {
+		return t.updateReasoning(msg)
+	}
 	if t.configKindOpen {
 		return t.updateProviderKind(msg)
 	}
@@ -348,13 +352,13 @@ func (t *TUI) initProviderForm(mc *tuiModelConfig) {
 		switch t.configProviderKind {
 		case "openai":
 			values[0] = "openai"
+			values[3] = "https://api.openai.com/v1"
 			placeholders[1] = "gpt-4o-mini"
-			placeholders[3] = t.tr("tui.config.endpoint_default")
 		case "anthropic":
 			values[0] = "anthropic"
+			values[3] = "https://api.anthropic.com"
 			placeholders[1] = "claude-sonnet-4-20250514"
 			placeholders[4] = "200000"
-			placeholders[3] = t.tr("tui.config.endpoint_default")
 		default:
 			values[0] = ""
 		}
@@ -414,6 +418,9 @@ func (t *TUI) saveProviderForm() tea.Cmd {
 		},
 	}
 	params.Model.Strengths = splitCSV(v.Strengths)
+	if existing, ok := t.modelByRef(t.configEditingName); ok {
+		params.Model.Reasoning = existing.Reasoning
+	}
 	if t.configSetupMode {
 		params.ActiveModel = v.Provider + "/" + v.Model
 	}
@@ -437,14 +444,12 @@ func (t *TUI) validateProviderForm(v providerFormValues) error {
 	if t.configSetupMode && v.APIKey == "" {
 		return fmt.Errorf("%s", t.tr("tui.error.api_key_required"))
 	}
-	if v.Endpoint != "" {
-		u, err := url.Parse(v.Endpoint)
-		if err != nil || u.Scheme == "" || u.Host == "" {
-			return fmt.Errorf("%s", t.tr("tui.error.invalid_endpoint"))
-		}
-	}
-	if v.Provider != "openai" && v.Provider != "anthropic" && v.Endpoint == "" {
+	if v.Endpoint == "" {
 		return fmt.Errorf("%s", t.tr("tui.error.endpoint_required"))
+	}
+	u, err := url.Parse(v.Endpoint)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("%s", t.tr("tui.error.invalid_endpoint"))
 	}
 	if v.ContextWindow != "" {
 		ctx, err := strconv.Atoi(v.ContextWindow)

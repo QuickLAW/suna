@@ -29,10 +29,24 @@ func (c *Config) Clone() *Config {
 	}
 	cp := *c
 	cp.Models = append([]ModelConfig(nil), c.Models...)
+	for i := range cp.Models {
+		cp.Models[i].Reasoning = cloneMap(cp.Models[i].Reasoning)
+	}
 	cp.Guard.Blocked = append([]GuardRule(nil), c.Guard.Blocked...)
 	cp.Guard.Allowed = append([]GuardAllowRule(nil), c.Guard.Allowed...)
 	cp.Hooks = append([]HookConfig(nil), c.Hooks...)
 	return &cp
+}
+
+func cloneMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // DefaultMaxModelRPS 是每个模型 ref 的默认请求限速，避免 subtask 并发打爆供应商。
@@ -46,12 +60,13 @@ func (c *Config) GetMaxModelRPS() int {
 }
 
 type ModelConfig struct {
-	Provider      string   `toml:"provider"`
-	Model         string   `toml:"model"`
-	BaseURL       string   `toml:"base_url,omitempty"`
-	ContextWindow int      `toml:"context_window,omitempty"`
-	Strengths     []string `toml:"strengths,omitempty"`
-	APIKey        string   `toml:"-"`
+	Provider      string         `toml:"provider"`
+	Model         string         `toml:"model"`
+	BaseURL       string         `toml:"base_url,omitempty"`
+	ContextWindow int            `toml:"context_window,omitempty"`
+	Strengths     []string       `toml:"strengths,omitempty"`
+	Reasoning     map[string]any `toml:"reasoning,omitempty"`
+	APIKey        string         `toml:"-"`
 }
 
 // GuardConfig 保存本地安全规则配置，对应 plans/04-guard.md。
@@ -323,13 +338,3 @@ func (mc ModelConfig) ResolveAPIKey() (string, error) {
 
 func (mc ModelConfig) IsAnthropic() bool { return mc.Provider == "anthropic" }
 func (mc ModelConfig) IsOpenAI() bool    { return mc.Provider == "openai" }
-
-func (mc ModelConfig) EffectiveBaseURL() string {
-	if mc.BaseURL != "" {
-		return mc.BaseURL
-	}
-	if mc.Provider == "openai" {
-		return ""
-	}
-	return mc.BaseURL
-}
