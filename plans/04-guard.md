@@ -234,7 +234,6 @@ Windows:
 [guard]
 mode = "ask"
 workspace = ""                            # 空表示不限制；非空时必须是存在目录
-review_model = "fast"                    # 用哪个模型做 LLM 审查
 
 # 用户自定义拦截 (追加到内置规则之上)
 [[guard.blocked]]

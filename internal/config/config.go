@@ -54,13 +54,12 @@ type ModelConfig struct {
 	APIKey        string   `toml:"-"`
 }
 
-// GuardConfig 保存本地安全规则和可选 LLM 审查模型配置，对应 plans/04-guard.md。
+// GuardConfig 保存本地安全规则配置，对应 plans/04-guard.md。
 type GuardConfig struct {
-	Mode        string           `toml:"mode,omitempty"`
-	Workspace   string           `toml:"workspace,omitempty"`
-	ReviewModel string           `toml:"review_model"`
-	Blocked     []GuardRule      `toml:"blocked"`
-	Allowed     []GuardAllowRule `toml:"allowed"`
+	Mode      string           `toml:"mode,omitempty"`
+	Workspace string           `toml:"workspace,omitempty"`
+	Blocked   []GuardRule      `toml:"blocked"`
+	Allowed   []GuardAllowRule `toml:"allowed"`
 }
 
 func (g GuardConfig) ModeOrDefault() string {

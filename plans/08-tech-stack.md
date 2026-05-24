@@ -308,7 +308,6 @@ strengths = ["前端生成", "多模态", "图片理解"]
 [guard]
 mode = "ask"                      # readonly | ask | auto | smart (默认 ask)
 workspace = ""                     # 空表示不限制；非空时拦截 workspace 外本地文件/exec 操作
-review_model = ""                  # 预留；当前 LLM review 使用 active_model
 
 # 内置规则已覆盖危险操作 (rm -rf /, rmdir /s /q 等，按 OS 区分)
 # 以下为用户自定义规则，追加到内置规则之上
@@ -348,7 +347,6 @@ command = "echo checking"
 | `models.strengths` | string[] | 否 | 空 | TUI 展示模型擅长项。 |
 | `[guard].mode` | string | 否 | `ask` | `readonly` / `ask` / `auto` / `smart`。具体决策见 `plans/04-guard.md`。 |
 | `[guard].workspace` | string | 否 | 空 | workspace 硬边界；非空时必须是存在目录。除 `askuser`/`spawn` 外所有 tool 都先过 Guard，文件类路径和 `exec.cwd`/明显命令路径解析到 workspace 外会直接 reject；`exec` shell 变量展开无法安全检查时也会 reject。优先级高于 allowed、auto、LLM review 和用户确认。 |
-| `[guard].review_model` | string | 否 | 空 | 预留字段；当前 LLM review 实际使用 active model。 |
 | `[[guard.blocked]]` | array | 否 | 空 | 用户自定义硬拦截规则，追加到内置 blocked rules 后。 |
 | `guard.blocked.pattern` | string | 是 | 无 | Go regexp，匹配命令、路径或 URL。 |
 | `guard.blocked.reason` | string | 否 | 空 | 拦截原因，显示在 Guard 决策错误信息中。 |
