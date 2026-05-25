@@ -5,13 +5,12 @@ import (
 	"encoding/json"
 )
 
-// Category 表示工具行为类别，用于 Guard 和 UI 展示区分感知、行动、沟通类工具。
+// Category 表示 registry 工具行为类别，用于 Guard 和 UI 展示区分感知、行动类工具。
 type Category int
 
 const (
 	Perceive Category = iota
 	Act
-	Communicate
 )
 
 // Result 是工具执行结果；IsError 必须准确反映工具是否失败，避免 Agent 误判执行状态。
@@ -51,7 +50,8 @@ type Tool interface {
 	Execute(ctx context.Context, params map[string]any) Result
 }
 
-// Registry 保存 daemon 当前可用的工具集合，Agent 每轮从这里生成模型 tool schema。
+// Registry 保存 daemon 当前可用的普通工具集合，Agent 每轮从这里生成模型 tool schema。
+// askuser/spawn 是 agent built-ins，依赖主 agent 事件流和动态 schema，不注册到这里。
 type Registry struct {
 	tools map[string]Tool
 }
@@ -88,37 +88,4 @@ func (r *Registry) Names() []string {
 		names = append(names, n)
 	}
 	return names
-}
-
-// ToolsForAgent 返回可暴露给主 Agent 的工具集合，spawn 可按调用场景显式开关。
-func (r *Registry) ToolsForAgent(includeSpawn bool) []Tool {
-	tools := make([]Tool, 0, len(r.tools))
-	for _, t := range r.tools {
-		if !includeSpawn && t.Name() == "spawn" {
-			continue
-		}
-		tools = append(tools, t)
-	}
-	return tools
-}
-
-// ToolDefs 将工具接口转换为通用 function-call schema。
-func ToolDefs(tools []Tool) []map[string]any {
-	defs := make([]map[string]any, len(tools))
-	for i, t := range tools {
-		defs[i] = map[string]any{
-			"type": "function",
-			"function": map[string]any{
-				"name":        t.Name(),
-				"description": t.Description(),
-				"parameters":  t.Parameters(),
-			},
-		}
-	}
-	return defs
-}
-
-// AsModelTools 保留 Registry 语义入口，供需要从 registry 直接导出 schema 的调用方使用。
-func (r *Registry) AsModelTools(tools []Tool) []map[string]any {
-	return ToolDefs(tools)
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/alanchenchen/suna/internal/config"
 	"github.com/alanchenchen/suna/internal/guard"
 	"github.com/alanchenchen/suna/internal/logging"
+	"github.com/alanchenchen/suna/internal/media"
 	"github.com/alanchenchen/suna/internal/memory"
 	"github.com/alanchenchen/suna/internal/model"
 	"github.com/alanchenchen/suna/internal/prompt"
@@ -30,6 +31,7 @@ type Agent struct {
 	working      *memory.WorkingMemory
 	sessions     *memory.SessionStore
 	memories     *memory.MemoryStore
+	mediaStore   *media.Store
 	conversation *memory.ConversationStore
 	compressor   *memory.Compressor
 	prompts      *prompt.Loader
@@ -47,6 +49,9 @@ type Agent struct {
 	configMu      sync.RWMutex
 	configModTime time.Time
 	runMu         sync.Mutex
+	// currentInputBlocks 只在单次 Agent.Run 内保存当前用户消息的轻量媒体引用，供 spawn.input_images 显式转交给 subtask。
+	// 这里不能保存到跨轮状态；Run 结束必须清空，避免附件引用被误当作历史上下文继续使用。
+	currentInputBlocks []model.ContentBlock
 
 	cancelMu sync.Mutex
 	cancelFn context.CancelFunc
@@ -54,9 +59,10 @@ type Agent struct {
 
 func NewAgent(cfg *config.Config) (*Agent, error) {
 	var router *model.Router
+	mediaStore := media.NewStore(media.DefaultRoot())
 	if len(cfg.Models) > 0 && cfg.ActiveModel != "" {
 		var err error
-		router, err = model.NewRouter(cfg)
+		router, err = model.NewRouter(cfg, mediaStore)
 		if err != nil {
 			return nil, fmt.Errorf("init router: %w", err)
 		}
@@ -109,6 +115,7 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 		working:       memory.NewWorkingMemory(),
 		sessions:      sessions,
 		memories:      memories,
+		mediaStore:    mediaStore,
 		conversation:  conversation,
 		compressor:    memory.NewCompressor(extractProvider),
 		prompts:       prompts,
@@ -170,8 +177,10 @@ func (a *Agent) Run(ctx context.Context, input Input) <-chan Event {
 		}
 
 		a.working.AddMessage(userMessage)
+		a.currentInputBlocks = cloneContentBlocks(userMessage.Content)
 		// 多模态 raw media 只允许参与当前 agent run；run 结束后立即替换为轻量 metadata，避免进入下一轮上下文或会话快照。
 		defer func() {
+			a.currentInputBlocks = nil
 			a.replaceLastUserMessage(inputText, storedUserMessage)
 			a.saveConversationState(runCtx)
 		}()
@@ -208,10 +217,7 @@ func (a *Agent) Run(ctx context.Context, input Input) <-chan Event {
 			return
 		}
 
-		a.replaceLastUserMessage(inputText, storedUserMessage)
-
 		a.enqueueMemoryEvent(runCtx, model.RoleAssistant, res.FinalText, res.HadToolCall, res.HadToolError, false, false)
-		a.saveConversationState(runCtx)
 		done := Event{Type: EventStatus, Content: "done", ContextWindow: res.ContextWindow}
 		if res.Usage != nil {
 			done.HasUsage = true

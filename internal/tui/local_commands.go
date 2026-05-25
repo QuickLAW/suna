@@ -79,6 +79,30 @@ func (t *TUI) configGetCmd() tea.Cmd {
 	}
 }
 
+func (t *TUI) attachmentStatusCmd() tea.Cmd {
+	return func() tea.Msg {
+		if t.localCli == nil {
+			return nil
+		}
+		if err := t.localCli.AttachmentStatus(); err != nil {
+			return ipcErrorNotification("config.error", err)
+		}
+		return nil
+	}
+}
+
+func (t *TUI) attachmentClearCmd() tea.Cmd {
+	return func() tea.Msg {
+		if t.localCli == nil {
+			return ipcErrorNotification("config.error", fmt.Errorf("%s", t.tr("error.not_connected")))
+		}
+		if err := t.localCli.AttachmentClear(); err != nil {
+			return ipcErrorNotification("config.error", err)
+		}
+		return nil
+	}
+}
+
 func (t *TUI) sendMessageCmd(input string, attachments []attachmentItem) tea.Cmd {
 	return func() tea.Msg {
 		// 所有 transport 写请求都必须放在 tea.Cmd 中执行，避免快捷键处理阻塞 Update 主循环。

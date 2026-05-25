@@ -21,7 +21,7 @@
 |------|-------------|----------|------|------|
 | **语言** | TypeScript (Node) | TypeScript (Node) | Go | ✅ 差异化优势 |
 | **多模型** | 仅 Anthropic | 多模型 + failover | 多模型 + 智能路由 | ✅ Suna 路由更智能 |
-| **核心工具** | Read/Write/Edit/Bash/Glob/Grep + MCP | exec/read/write/edit/browser/canvas + MCP | 固定 9 个 tool definitions；MCP 未接入 | ⚠️ 缺 glob/grep 原生工具 |
+| **核心工具** | Read/Write/Edit/Bash/Glob/Grep + MCP | exec/read/write/edit/browser/canvas + MCP | 7 个 registry tools + 2 个 agent built-ins；MCP 未接入 | ⚠️ 缺 glob/grep 原生工具 |
 | **权限模型** | allow/deny + yolo 模式 | allow/deny + sandbox + exec approvals | LLM 审查 + 硬规则；渐进信任未实现 | ✅ Suna 创新点 |
 | **多渠道** | Terminal/VSCode/Desktop/Web/JetBrains | 25+ 消息平台 + macOS/iOS/Android | TUI + (远期 WebSocket) | ❌ I/O 渠道少 |
 | **能力系统** | CLAUDE.md + Skills + auto memory | SKILL.md + Plugin (npm) | 当前 SKILL.md declarative loading；JS/MCP 为目标设计 | ✅ 学习能力是差异化 |

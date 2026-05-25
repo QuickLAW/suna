@@ -168,7 +168,7 @@ func (a *Agent) reloadRouterLocked(cfg *config.Config) error {
 		a.compressor = memory.NewCompressor(nil)
 		return nil
 	}
-	router, err := model.NewRouter(cfg)
+	router, err := model.NewRouter(cfg, a.mediaStore)
 	if err != nil {
 		return err
 	}

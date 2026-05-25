@@ -124,6 +124,7 @@ func (t *TUI) handleWelcomeAction(action welcomeAction) tea.Cmd {
 		}
 		t.mode = "chat"
 		t.messages = []chatMsg{}
+		t.attachments = nil
 		t.resetConversationStats()
 		t.resetPhase()
 		if t.localCli != nil {

@@ -63,15 +63,15 @@ Provider 负责双向转换：
 
 ### 多模态图片输入
 
-Suna 内部统一使用 `model.ContentBlock` 表示图片，Provider 层按协议转换：
+Suna 内部统一使用 `model.ContentBlock` + `MediaRef` 表示图片。agent、runner、subtask 只传轻量引用，Provider 层在请求构造时通过 media resolver 临时转换：
 
 | Provider | 图片结构 |
 |---|---|
-| `openai` Responses | `input_image.image_url`，base64 图片先转为 `data:image/...;base64,...` |
-| OpenAI-compatible Chat | `content[]` 中的 `image_url.url`，base64 图片同样使用 data URL |
-| `anthropic` | `image.source`，URL 使用 `type=url`，base64 使用 `type=base64` + `media_type` + `data` |
+| `openai` Responses | `input_image.image_url`；URL 直传，本地 path/attachment 临时转 data URL |
+| OpenAI-compatible Chat | `content[]` 中的 `image_url.url`；URL 直传，本地 path/attachment 临时转 data URL |
+| `anthropic` | `image.source`；URL 使用 `type=url`，本地 path/attachment 临时转 `type=base64` |
 
-当前实际支持图片输入；`ContentAudio` 只是预留类型，尚未映射到各 provider 协议。
+当前实际支持图片输入；audio/video/document 不在当前实现范围。
 
 ## Provider 类型
 
@@ -236,7 +236,8 @@ Available models for spawned subtasks:
   "required": ["task", "model", "tools"],
   "properties": {
     "model": {"type": "string", "description": "Exact model ref"},
-    "tools": {"type": "array", "items": {"type": "string", "enum": ["readfile", "listdir", "exec"]}}
+    "tools": {"type": "array", "items": {"type": "string", "enum": ["readfile", "listdir", "exec"]}},
+    "input_images": {"type": "array", "items": {"type": "integer"}}
   }
 }
 ```
@@ -244,9 +245,10 @@ Available models for spawned subtasks:
 daemon 只做校验和执行：
 
 - `model` 为空或不是已配置 ref → tool error。
-- `tools` 为空或包含不存在工具 → tool error。
+- `tools` 缺失或包含不存在工具 → tool error；`tools=[]` 表示纯模型 subtask。
 - `spawn` 和 `askuser` 不能授予 subtask。
 - subtask 只看到授权 tools 的 tool schema。
+- `input_images` 只引用当前用户消息图片索引，daemon 不接受 base64/path/url 作为 spawn 参数。
 
 ### strengths 偏好标签
 

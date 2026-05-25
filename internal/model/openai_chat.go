@@ -17,21 +17,26 @@ type OpenAIChatProvider struct {
 	client        openai.Client
 	model         string
 	contextWindow int
+	media         MediaResolver
 }
 
-func NewOpenAIChatProvider(apiKey, baseURL, model string, contextWindow int) *OpenAIChatProvider {
+func NewOpenAIChatProvider(apiKey, baseURL, model string, contextWindow int, mediaResolver MediaResolver) *OpenAIChatProvider {
 	httpClient := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}}
 	opts := []option.RequestOption{option.WithAPIKey(apiKey), option.WithHTTPClient(httpClient)}
 	if baseURL != "" {
 		opts = append(opts, option.WithBaseURL(baseURL))
 	}
-	return &OpenAIChatProvider{client: openai.NewClient(opts...), model: model, contextWindow: contextWindow}
+	return &OpenAIChatProvider{client: openai.NewClient(opts...), model: model, contextWindow: contextWindow, media: mediaResolver}
 }
 
 func (p *OpenAIChatProvider) Complete(ctx context.Context, req *CompletionRequest) (<-chan Chunk, error) {
+	messages, err := p.buildMessages(ctx, req)
+	if err != nil {
+		return nil, err
+	}
 	params := openai.ChatCompletionNewParams{
 		Model:       openai.ChatModel(p.resolveModel(req.Model)),
-		Messages:    p.buildMessages(req),
+		Messages:    messages,
 		MaxTokens:   openai.Int(int64(p.resolveMaxTokens(req.MaxTokens))),
 		Temperature: openai.Float(p.resolveTemperature(req.Temperature)),
 		StreamOptions: openai.ChatCompletionStreamOptionsParam{
@@ -140,7 +145,7 @@ func (p *OpenAIChatProvider) resolveTemperature(t float64) float64 {
 	return 0.7
 }
 
-func (p *OpenAIChatProvider) buildMessages(req *CompletionRequest) []openai.ChatCompletionMessageParamUnion {
+func (p *OpenAIChatProvider) buildMessages(ctx context.Context, req *CompletionRequest) ([]openai.ChatCompletionMessageParamUnion, error) {
 	msgs := make([]openai.ChatCompletionMessageParamUnion, 0, len(req.Messages)+1)
 	if req.System != "" {
 		msgs = append(msgs, openai.SystemMessage(req.System))
@@ -148,19 +153,23 @@ func (p *OpenAIChatProvider) buildMessages(req *CompletionRequest) []openai.Chat
 	for _, m := range req.Messages {
 		switch m.Role {
 		case RoleUser:
-			msgs = append(msgs, buildChatUserMessage(m))
+			msg, err := p.buildChatUserMessage(ctx, m)
+			if err != nil {
+				return nil, err
+			}
+			msgs = append(msgs, msg)
 		case RoleAssistant:
 			msgs = append(msgs, buildChatAssistantMessage(m))
 		case RoleTool:
 			msgs = append(msgs, openai.ToolMessage(m.Text(), m.ToolCallID))
 		}
 	}
-	return msgs
+	return msgs, nil
 }
 
-func buildChatUserMessage(m Message) openai.ChatCompletionMessageParamUnion {
+func (p *OpenAIChatProvider) buildChatUserMessage(ctx context.Context, m Message) (openai.ChatCompletionMessageParamUnion, error) {
 	if !hasImagePart(m.Content) {
-		return openai.UserMessage(m.Text())
+		return openai.UserMessage(m.Text()), nil
 	}
 	parts := make([]openai.ChatCompletionContentPartUnionParam, 0, len(m.Content))
 	for _, c := range m.Content {
@@ -170,12 +179,16 @@ func buildChatUserMessage(m Message) openai.ChatCompletionMessageParamUnion {
 				parts = append(parts, openai.TextContentPart(c.Text))
 			}
 		case ContentImage:
-			if imageURL := openAIImageURL(c); imageURL != "" {
+			imageURL, err := p.openAIImageURL(ctx, c)
+			if err != nil {
+				return openai.ChatCompletionMessageParamUnion{}, err
+			}
+			if imageURL != "" {
 				parts = append(parts, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: imageURL}))
 			}
 		}
 	}
-	return openai.UserMessage(parts)
+	return openai.UserMessage(parts), nil
 }
 
 func buildChatAssistantMessage(m Message) openai.ChatCompletionMessageParamUnion {
@@ -198,25 +211,32 @@ func buildChatAssistantMessage(m Message) openai.ChatCompletionMessageParamUnion
 
 func hasImagePart(blocks []ContentBlock) bool {
 	for _, b := range blocks {
-		if b.Type == ContentImage && (b.MediaURL != "" || b.MediaB64 != "") {
+		if b.Type == ContentImage && b.Media != nil {
 			return true
 		}
 	}
 	return false
 }
 
-func openAIImageURL(block ContentBlock) string {
-	if block.MediaURL != "" {
-		return block.MediaURL
+func (p *OpenAIChatProvider) openAIImageURL(ctx context.Context, block ContentBlock) (string, error) {
+	if block.Media == nil || p.media == nil {
+		return "", fmt.Errorf("image media resolver is unavailable")
 	}
-	if block.MediaB64 == "" {
-		return ""
+	resolved, err := p.media.Resolve(ctx, *block.Media, ResolveAsBase64)
+	if err != nil {
+		return "", err
 	}
-	mimeType := block.MimeType
+	if resolved.URL != "" {
+		return resolved.URL, nil
+	}
+	if resolved.Base64 == "" {
+		return "", fmt.Errorf("resolved image is empty")
+	}
+	mimeType := resolved.MimeType
 	if mimeType == "" {
 		mimeType = "image/png"
 	}
-	return "data:" + mimeType + ";base64," + block.MediaB64
+	return "data:" + mimeType + ";base64," + resolved.Base64, nil
 }
 
 func (p *OpenAIChatProvider) buildTools(tools []ToolDef) []openai.ChatCompletionToolUnionParam {

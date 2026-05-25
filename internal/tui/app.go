@@ -102,6 +102,7 @@ type TUI struct {
 	modelPickerCursor     int
 	daemonStatus          protocol.DaemonStatusParams
 	configState           protocol.ConfigParams
+	attachmentStatus      protocol.AttachmentStatusResult
 
 	streamStart      time.Time
 	sessionInputTok  int
@@ -163,7 +164,7 @@ func (t *TUI) doQuit() {
 
 func (t *TUI) Init() tea.Cmd {
 	return func() tea.Msg {
-		return tea.Batch(t.daemonStatusCmd(), t.configGetCmd())()
+		return tea.Batch(t.daemonStatusCmd(), t.configGetCmd(), t.attachmentStatusCmd())()
 	}
 }
 
@@ -503,7 +504,7 @@ func (t *TUI) handleLocalNotification(notif localNotification) {
 		if p.Content != "" {
 			t.setInputValue(p.Content)
 		}
-	case "daemon.full_status":
+	case protocol.NotifyDaemonFullStatus:
 		json.Unmarshal(notif.params, &t.daemonStatus)
 		if t.daemonStatus.Provider != "" {
 			t.providerName = t.daemonStatus.Provider
@@ -520,7 +521,7 @@ func (t *TUI) handleLocalNotification(notif localNotification) {
 		if t.daemonStatus.ContextTokens > 0 {
 			t.contextTokens = t.daemonStatus.ContextTokens
 		}
-	case "config.state":
+	case protocol.NotifyConfigState:
 		json.Unmarshal(notif.params, &t.configState)
 		t.configError = ""
 		if t.configState.Locale != "" {
@@ -573,5 +574,8 @@ func (t *TUI) handleLocalNotification(notif localNotification) {
 		}
 		json.Unmarshal(notif.params, &p)
 		t.configError = p.Message
+	case protocol.MethodAttachmentStatus:
+		json.Unmarshal(notif.params, &t.attachmentStatus)
+		t.configError = ""
 	}
 }

@@ -21,16 +21,50 @@ type ContentBlockType string
 const (
 	ContentText  ContentBlockType = "text"
 	ContentImage ContentBlockType = "image"
-	ContentAudio ContentBlockType = "audio"
 )
 
-// ContentBlock 是模型消息的最小内容单元，为后续图片/音频输入保留结构。
+type MediaKind string
+
+const (
+	MediaPath       MediaKind = "path"
+	MediaURL        MediaKind = "url"
+	MediaAttachment MediaKind = "attachment"
+)
+
+// MediaRef 是消息中的大媒体引用。它只保存轻量来源信息，真实 base64 只允许在 provider 请求阶段临时生成。
+type MediaRef struct {
+	Kind     MediaKind `json:"kind"`
+	Path     string    `json:"path,omitempty"`
+	URL      string    `json:"url,omitempty"`
+	MimeType string    `json:"mime_type,omitempty"`
+	Name     string    `json:"name,omitempty"`
+	Size     int64     `json:"size,omitempty"`
+}
+
+type ResolveMode string
+
+const (
+	ResolveAsURL    ResolveMode = "url"
+	ResolveAsBase64 ResolveMode = "base64"
+)
+
+type ResolvedMedia struct {
+	URL      string
+	Base64   string
+	MimeType string
+	Name     string
+	Size     int64
+}
+
+type MediaResolver interface {
+	Resolve(ctx context.Context, ref MediaRef, mode ResolveMode) (ResolvedMedia, error)
+}
+
+// ContentBlock 是模型消息的最小内容单元；当前只支持文本和图片。
 type ContentBlock struct {
-	Type     ContentBlockType `json:"type"`
-	Text     string           `json:"text,omitempty"`
-	MediaURL string           `json:"media_url,omitempty"`
-	MediaB64 string           `json:"media_b64,omitempty"`
-	MimeType string           `json:"mime_type,omitempty"`
+	Type  ContentBlockType `json:"type"`
+	Text  string           `json:"text,omitempty"`
+	Media *MediaRef        `json:"media,omitempty"`
 }
 
 // ToolCall 表示模型请求执行的函数工具调用，Arguments 必须是 JSON 字符串。

@@ -122,7 +122,7 @@ Daemon 只挂载 `protocol.Transport`，当前 local transport 通过 Unix Domai
 |---|---|---|---|
 | 1 | [01-architecture.md](01-architecture.md) | 全局 | Daemon 架构、Agent/Runner/Subtask、Protocol/Transport 通信 |
 | 2 | [02-model-router.md](02-model-router.md) | 行动层 | 统一 Provider 接口、智能路由、缓存策略 |
-| 3 | [03-tools.md](03-tools.md) | 行动层 | 固定 9 个工具、多模态输入 |
+| 3 | [03-tools.md](03-tools.md) | 行动层 | 7 个 registry tools、2 个 agent built-ins、多模态输入 |
 | 4 | [04-guard.md](04-guard.md) | 行动层 | 硬规则 + LLM 审查；渐进信任为后续项 |
 | 5 | [05-capability.md](05-capability.md) | 记忆层 | 当前 SKILL.md declarative loading；JS/MCP/hooks 为目标设计 |
 | 6 | [06-memory.md](06-memory.md) | 记忆层 | 轻量 active memory、异步 full compaction、最近会话恢复 |

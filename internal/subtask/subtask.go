@@ -13,6 +13,7 @@ import (
 type Request struct {
 	ID       string
 	Task     string
+	Input    []model.ContentBlock
 	ModelRef string
 	ModelID  string
 	System   string
@@ -44,7 +45,11 @@ func (s *Subtask) Run(ctx context.Context, r *runner.Runner) (Result, error) {
 		defer cancel()
 	}
 	working := memory.NewWorkingMemory()
-	working.AddMessage(model.NewTextMessage(model.RoleUser, s.req.Task))
+	blocks := s.req.Input
+	if len(blocks) == 0 {
+		blocks = []model.ContentBlock{{Type: model.ContentText, Text: s.req.Task}}
+	}
+	working.AddMessage(model.Message{Role: model.RoleUser, TextContent: s.req.Task, Content: blocks})
 	res, err := r.Run(ctx, runner.Request{
 		System:        s.req.System,
 		ModelRef:      s.req.ModelRef,

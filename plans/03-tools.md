@@ -1,6 +1,6 @@
-# 03 — 核心工具 (固定 9 个)
+# 03 — 核心工具
 
-Suna 当前对模型暴露 9 个固定工具定义：7 个 registry tools（readfile/listdir/readhttp/exec/writefile/editfile/writehttp）+ 2 个 agent built-ins（askuser/spawn）。`askuser` 和 `spawn` 由 `internal/agent` 特殊处理，不注册到通用 tool registry。所有更高级的能力通过 skill 系统学习获得。
+Suna 当前对 main agent 暴露 9 个工具定义：7 个 registry tools（readfile/listdir/readhttp/exec/writefile/editfile/writehttp）+ 2 个 agent built-ins（askuser/spawn）。`askuser` 和 `spawn` 依赖 main agent 事件流和动态 schema，由 `internal/agent` 特殊处理，不注册到通用 tool registry。所有更高级的能力通过 skill 系统学习获得。
 
 工具返回在实现上统一为 `tool.Result{Content string, IsError bool, Truncated bool}`。下面的“返回”描述以当前 LLM 实际看到的文本内容为准；`truncated` 是内部结构化标记，不代表每个工具都会返回 JSON 对象。
 
@@ -28,7 +28,7 @@ Act (行动) — 必须经过 Guard 审查
   EditFile    精确编辑文件部分内容
   WriteHTTP   HTTP POST/PUT/DELETE 请求
 
-Communicate (协作) — 特殊处理
+Agent built-ins (特殊处理，不在 tool registry 中)
   AskUser     向用户提问/确认 (不经过 Guard)
   Spawn       委派 subtask (仅 main agent 可用，不经过 Guard)
 ```
@@ -213,7 +213,8 @@ options 参数:
 参数: {
   task: string,              // 必填
   model: string,             // 必填: subtask 使用的模型 ref (provider/model)
-  tools: [string],           // 必填: subtask 可用工具列表
+  tools: [string],           // 必填: subtask 可用工具列表；[] 表示纯模型任务
+  input_images?: [int],      // 当前用户消息图片索引，例如 [0]
   timeout?: int,             // 默认 300 秒
   context?: string,          // 传给 subtask 的额外上下文
   system?: string            // 可选 fallback；正常由 subtask_system.md 模板生成
@@ -226,10 +227,11 @@ options 参数:
 
 工具权限:
   tools 参数必填，指定 subtask 可用的工具列表
+  tools=[] 表示纯模型任务，例如识图、总结、改写
   没有"默认工具集" — 缺少 tools 会返回错误，让 main LLM 重选
   Exec 在 subtask 中仍然经过 Guard 审查（含轻量 shell analyzer 的只读快速放行）
   subtask 禁止授予 askuser 和 spawn — 防止交互逃逸和嵌套
-  daemon 校验每个 tool name: 空/不存在/spawn/askuser 都返回 tool error
+  daemon 校验每个非空 tool name: 不存在/spawn/askuser 都返回 tool error
 
 模型选择:
   model 必填，指定 subtask 使用的模型 ref
@@ -242,7 +244,7 @@ options 参数:
   通过 runner request 的 System 字段注入
 
 上下文隔离:
-  spawn request 只把 task/context/tools/model 显式传入 subtask
+  spawn request 只把 task/context/tools/model/input_images 显式传入 subtask
   subtask 的 tool events 会转发给 TUI 用于可观察性，但不会成为 main 对话继承给 subtask 的共享上下文
   subtask 返回 final result/status 给 main，不保存独立长期记忆
 
@@ -305,17 +307,24 @@ Tool intent 展示:
 
 ## 多模态输入
 
-当前主链路支持图片作为结构化 `ContentBlock` 进入 provider request。TUI MVP 只支持图片 path/url；音频、视频、PDF 不在当前范围。
+当前主链路支持图片作为结构化 `ContentBlock` 进入 provider request。TUI 支持图片 path/url，以及粘贴 data:image base64 后落盘为 attachment。音频、视频、PDF 不在当前范围。
 
 ### 消息格式
 
 ```go
 type ContentBlock struct {
-    Type     string  // "text" | "image" | "audio"
-    Text     string
-    MediaURL string  // 远程 URL
-    MediaB64 string  // daemon 内部读取 path 后生成，不能进入 protocol 或持久化存储
-    MimeType string  // "image/png", "audio/mp3" 等
+    Type  string    // "text" | "image"
+    Text  string
+    Media *MediaRef // 图片等大媒体只保存轻量引用
+}
+
+type MediaRef struct {
+    Kind     string // "path" | "url" | "attachment"
+    Path     string
+    URL      string
+    MimeType string
+    Name     string
+    Size     int64
 }
 
 type Message struct {
@@ -336,8 +345,8 @@ type Message struct {
    → 确认后作为 url attachment 发送
 
 3. Ctrl+V 粘贴 data:image base64
-   TUI 询问是否加入附件 → 确认后保存到 ~/.suna/tmp/paste-*.png
-   → 再作为 path attachment 发送；base64 不进入 protocol
+   TUI 询问是否加入附件 → 确认后保存到 ~/.suna/attachments/sha256-*.png
+   → 再作为 attachment ref 发送；base64 不进入 protocol/daemon/agent memory
 
 注: 不支持 /attach 命令、不识别裸 base64、不自动扫描普通提示词里的图片路径。
 ```
@@ -346,20 +355,20 @@ type Message struct {
 
 ```
 用户发送图片时:
-  daemon 将 path/url 规范化为 ContentImage
-  provider 将 ContentImage 转成各家模型的 image block
-  如果当前模型不支持图片，应在 daemon/provider 层报错或后续路由到支持多模态的模型
+  daemon 将 path/url/attachment 规范化为 ContentImage(MediaRef)
+  main 可通过 spawn.input_images 显式把当前用户图片传给多模态 subtask
+  provider 请求阶段通过 media resolver 将 MediaRef 临时转成 URL/base64，再映射到各家模型协议
 ```
 
 ### 文件大小和存储限制
 
 ```
 protocol:
-  只接受 path/url，不接受 base64/blob
+  只接受 path/url/attachment，不接受 base64/blob
 
-daemon:
+media resolver:
   path 图片最大 10MB
-  path -> 读取文件 -> 短生命周期 base64 -> provider request
+  url 保留 URL；path/attachment 只在 provider request 阶段临时读取并编码 base64
 
 持久化:
   working memory / conversation_state / user_memory 不保存 raw media

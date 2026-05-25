@@ -182,6 +182,8 @@ suna/
 │   │   ├── anthropic.go         # anthropic-sdk-go 适配
 │   │   ├── router.go            # 路由工具函数 (RouteWithLLM 已移除)
 │   │   └── token.go             # token 估算
+│   ├── media/                   # 图片 MediaRef 校验、attachment 落盘、provider 请求前 resolve
+│   │   └── store.go
 │   ├── tool/                    # 7 个 registry tools；askuser/spawn 由 core 特殊处理
 │   │   ├── tool.go              # Tool 接口 + 注册
 │   │   ├── readfile.go
@@ -193,8 +195,6 @@ suna/
 │   │   ├── writefile.go
 │   │   ├── editfile.go
 │   │   ├── writehttp.go
-│   │   ├── askuser.go
-│   │   └── spawn.go
 │   ├── guard/                   # LLM 权限守卫
 │   │   ├── guard.go             # Guard mode policy + Check() + checkAllowed/isReadOnlyTool
 │   │   ├── rules_unix.go        # Unix 硬规则 (//go:build !windows)

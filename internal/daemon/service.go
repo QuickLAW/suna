@@ -38,7 +38,7 @@ func (s *service) OnConnect(ctx context.Context, connID string, sink protocol.Ev
 	state.ProviderName = s.daemon.ProviderName()
 	state.ModelName = s.daemon.ModelName()
 	_ = sink.Emit(ctx, protocol.Event{Method: protocol.NotifyDaemonState, Params: state})
-	_ = sink.Emit(ctx, protocol.Event{Method: "daemon.full_status", Params: s.buildDaemonStatus(ctx)})
+	_ = sink.Emit(ctx, protocol.Event{Method: protocol.NotifyDaemonFullStatus, Params: s.buildDaemonStatus(ctx)})
 }
 
 func (s *service) OnDisconnect(ctx context.Context, connID string) {
@@ -55,7 +55,7 @@ func (s *service) Handle(ctx context.Context, req protocol.Request, sink protoco
 	case protocol.MethodCancel:
 		s.daemon.agent.CancelCurrentRun()
 		return map[string]string{"status": "cancelled"}, nil
-	case "agent.askReply":
+	case protocol.MethodAskReply:
 		return s.handleAskReply(req)
 	case protocol.MethodGuardReply:
 		return s.handleGuardReply(req)
@@ -65,7 +65,7 @@ func (s *service) Handle(ctx context.Context, req protocol.Request, sink protoco
 		return s.daemon.agent.ListCapabilities(), nil
 	case protocol.MethodSessionNew:
 		s.daemon.agent.NewSession()
-		_ = sink.Emit(ctx, protocol.Event{Method: "daemon.full_status", Params: s.buildDaemonStatus(ctx)})
+		_ = sink.Emit(ctx, protocol.Event{Method: protocol.NotifyDaemonFullStatus, Params: s.buildDaemonStatus(ctx)})
 		return map[string]string{"status": "ok"}, nil
 	case protocol.MethodSessionRestore:
 		return s.handleSessionRestore(ctx, sink)
@@ -73,9 +73,13 @@ func (s *service) Handle(ctx context.Context, req protocol.Request, sink protoco
 		return s.handleCompact(ctx, sink)
 	case protocol.MethodUsage:
 		return s.handleUsage(ctx), nil
+	case protocol.MethodAttachmentStatus:
+		return s.handleAttachmentStatus()
+	case protocol.MethodAttachmentClear:
+		return s.handleAttachmentClear()
 	case protocol.MethodDaemonStatus:
 		status := s.buildDaemonStatus(ctx)
-		_ = sink.Emit(ctx, protocol.Event{Method: "daemon.full_status", Params: status})
+		_ = sink.Emit(ctx, protocol.Event{Method: protocol.NotifyDaemonFullStatus, Params: status})
 		return status, nil
 	case protocol.MethodConfigGet:
 		return configToParams(s.daemon.agent.Config()), nil
@@ -98,7 +102,7 @@ func (s *service) handleSendMessage(ctx context.Context, req protocol.Request, s
 	if err := decodeParams(req.Params, &params); err != nil {
 		return nil, invalidParams(err.Error())
 	}
-	input, err := agentInputFromParams(ctx, params)
+	input, err := s.agentInputFromParams(ctx, params)
 	if err != nil {
 		return nil, invalidParams(err.Error())
 	}
@@ -144,7 +148,7 @@ func (s *service) runAgent(ctx context.Context, connID, inputText string, input 
 			if strings.HasPrefix(evt.Content, "error:") || evt.Content == "cancelled" {
 				logging.Error("agent", "run_failed", fmt.Errorf("%s", evt.Content), logging.Event{"conn_id": connID, "duration_ms": time.Since(started).Milliseconds()})
 				emit(ctx, sink, protocol.NotifyStream, protocol.StreamParams{Chunk: evt.Content, Done: true})
-				emit(ctx, sink, "daemon.full_status", s.buildDaemonStatus(ctx))
+				emit(ctx, sink, protocol.NotifyDaemonFullStatus, s.buildDaemonStatus(ctx))
 			} else if evt.Content == "done" {
 				speed := 0.0
 				if evt.HasUsage && evt.OutputTokens > 0 {
@@ -154,7 +158,7 @@ func (s *service) runAgent(ctx context.Context, connID, inputText string, input 
 				}
 				logging.Info("agent", "run_done", logging.Event{"conn_id": connID, "duration_ms": time.Since(started).Milliseconds(), "input_tokens": evt.InputTokens, "output_tokens": evt.OutputTokens, "cached_tokens": evt.CachedTokens})
 				emit(ctx, sink, protocol.NotifyStream, protocol.StreamParams{Done: true, InputTokens: evt.InputTokens, OutputTokens: evt.OutputTokens, CachedTokens: evt.CachedTokens, HasUsage: evt.HasUsage, ContextTokens: evt.ContextTokens, ContextWindow: evt.ContextWindow, TokensPerSec: speed})
-				emit(ctx, sink, "daemon.full_status", s.buildDaemonStatus(ctx))
+				emit(ctx, sink, protocol.NotifyDaemonFullStatus, s.buildDaemonStatus(ctx))
 			}
 		}
 	}
@@ -258,6 +262,22 @@ func (s *service) handleUsage(ctx context.Context) protocol.UsageResult {
 	return result
 }
 
+func (s *service) handleAttachmentStatus() (protocol.AttachmentStatusResult, error) {
+	root, bytes, count, err := s.daemon.agent.AttachmentStatus()
+	if err != nil {
+		return protocol.AttachmentStatusResult{}, protocolError{code: -32603, message: err.Error()}
+	}
+	return protocol.AttachmentStatusResult{Root: root, Bytes: bytes, Count: count}, nil
+}
+
+func (s *service) handleAttachmentClear() (protocol.AttachmentClearResult, error) {
+	root, removedBytes, removedCount, bytes, count, err := s.daemon.agent.ClearAttachments()
+	if err != nil {
+		return protocol.AttachmentClearResult{}, protocolError{code: -32603, message: err.Error()}
+	}
+	return protocol.AttachmentClearResult{Root: root, BytesRemoved: removedBytes, CountRemoved: removedCount, Bytes: bytes, Count: count}, nil
+}
+
 func (s *service) handleConfigSet(ctx context.Context, req protocol.Request, sink protocol.EventSink) (any, error) {
 	var params protocol.ConfigSetParams
 	if err := decodeParams(req.Params, &params); err != nil {
@@ -270,8 +290,8 @@ func (s *service) handleConfigSet(ctx context.Context, req protocol.Request, sin
 	}
 	logging.Info("config", "update_success", logging.Event{"action": params.Action, "model_ref": params.ModelRef, "active_model": params.ActiveModel})
 	result := configToParams(updated)
-	emit(ctx, sink, "config.state", result)
-	emit(ctx, sink, "daemon.full_status", s.buildDaemonStatus(ctx))
+	emit(ctx, sink, protocol.NotifyConfigState, result)
+	emit(ctx, sink, protocol.NotifyDaemonFullStatus, s.buildDaemonStatus(ctx))
 	return result, nil
 }
 

@@ -6,9 +6,9 @@ type MessagePart struct {
 	Source AttachmentRef `json:"source,omitempty"`
 }
 
-// AttachmentRef 描述媒体来源。对外协议只接受 path/url；base64 只允许作为 daemon 内部到 provider 的短生命周期格式。
+// AttachmentRef 描述媒体来源。对外协议只接受 path/url/attachment；不接受 base64/blob。
 type AttachmentRef struct {
-	Kind     string `json:"kind"` // path | url
+	Kind     string `json:"kind"` // path | url | attachment
 	Path     string `json:"path,omitempty"`
 	URL      string `json:"url,omitempty"`
 	MimeType string `json:"mime_type,omitempty"`

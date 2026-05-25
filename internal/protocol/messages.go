@@ -160,6 +160,20 @@ type CompactResult struct {
 	Noop             bool `json:"noop,omitempty"`
 }
 
+type AttachmentStatusResult struct {
+	Root  string `json:"root"`
+	Bytes int64  `json:"bytes"`
+	Count int    `json:"count"`
+}
+
+type AttachmentClearResult struct {
+	Root         string `json:"root"`
+	BytesRemoved int64  `json:"bytes_removed"`
+	CountRemoved int    `json:"count_removed"`
+	Bytes        int64  `json:"bytes"`
+	Count        int    `json:"count"`
+}
+
 type AskUserReply struct {
 	ID     string `json:"id"`
 	Answer string `json:"answer"`

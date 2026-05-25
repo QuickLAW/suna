@@ -142,13 +142,13 @@ type SendMessageParams struct {
 }
 
 type MessagePart struct {
-    Type   string        `json:"type"` // text | image | audio | file
+    Type   string        `json:"type"` // text | image
     Text   string        `json:"text,omitempty"`
     Source AttachmentRef `json:"source,omitempty"`
 }
 
 type AttachmentRef struct {
-    Kind     string `json:"kind"` // path | url
+    Kind     string `json:"kind"` // path | url | attachment
     Path     string `json:"path,omitempty"`
     URL      string `json:"url,omitempty"`
     MimeType string `json:"mime_type,omitempty"`
@@ -157,7 +157,7 @@ type AttachmentRef struct {
 }
 ```
 
-TUI/local transport 只传 `path` 或 `url`。粘贴的 `data:image/...;base64,...` 必须先在 TUI 本地保存为临时文件，再作为 `path` 发送。daemon/agent 侧统一校验和规范化为 `model.ContentBlock`，provider 再转换为 OpenAI、Anthropic 等模型各自的多模态格式。raw media 只参与本轮 provider request，working memory、conversation_state 和 user_memory 只保存用户文本与附件 metadata。
+TUI/local transport 只传 `path`、`url` 或 `attachment` 引用。粘贴的 `data:image/...;base64,...` 必须先在 TUI 本地保存到 `~/.suna/attachments`，再作为 `attachment` 发送。daemon 侧二次校验并规范化为 `model.ContentBlock{MediaRef}`；agent、runner、subtask 只传轻量引用；provider 请求阶段再通过 media resolver 临时转成各协议需要的 URL/base64。raw media 不进入 working memory、conversation_state 或 user_memory。
 
 当前 TUI 的 `agent.stream`、`agent.tool_start`、`agent.tool_end`、`agent.ask_user`、`agent.guard_confirm` 等事件也应归入 `protocol`，因为它们是 daemon 对外一致事件流，不是 local transport 私有事件。
 
@@ -222,7 +222,7 @@ Subtasks:    Spawn 作为 tool call 执行
 
 ### Main Agent (`internal/agent`)
 
-- 拥有全部 9 个对模型暴露的工具定义：7 个 registry tools，加 `askuser`/`spawn` 两个 agent built-ins
+- 拥有全部 9 个对模型暴露的工具定义：7 个 registry tools，加 `askuser`/`spawn` 两个 agent built-ins（不注册到通用 tool registry）
 - 负责任务理解、拆分、调度、结果汇总
 - 管理所有 subtask 的生命周期
 - 系统提示词固定，由 Suna 内核生成
@@ -242,10 +242,10 @@ Subtasks:    Spawn 作为 tool call 执行
 - 系统提示词由 `subtask_system.md` 模板生成，针对具体子任务
 - 工具权限由 main 精确授权（subset of 9 tools，不含 Spawn 和 AskUser）
 - 模型由 main 在 spawn.model 中显式指定（必填）
-- tools 由 main 在 spawn.tools 中显式指定（必填，无默认工具集；不能包含 `spawn`/`askuser`）
+- tools 由 main 在 spawn.tools 中显式指定（必填，`[]` 表示纯模型任务；不能包含 `spawn`/`askuser`）
 - daemon 校验 model ref 和 tool name
 - 有独立的上下文窗口，不继承 main conversation、working memory、active memory、restored conversation state 或 main system prompt
-- 数据流单向进入 subtask：`spawn.task`、`spawn.context`、授权 tools、自己的 tool results；执行完毕后自动销毁，只把最终结果回传给 main LLM
+- 数据流单向进入 subtask：`spawn.task`、`spawn.context`、授权 tools、`spawn.input_images` 指定的当前用户图片、自己的 tool results；执行完毕后自动销毁，只把最终结果回传给 main LLM
 - usage 记录绑定 main session，不创建独立 session
 - 继承全局 Guard policy、blocked/allowed、audit DB；需要用户确认时由 main 事件流负责
 - tool call/result 通过 main 事件流转发；stream/reasoning 不外显
@@ -699,10 +699,12 @@ config.get           {}
 config.set           {action, ...}
 agent.askReply       {id, answer}
 agent.guardReply     {id, decision}
+attachment.status    {}                    → {root, bytes, count}
+attachment.clear     {}                    → {root, bytes_removed, count_removed, bytes, count}
 
 预留但当前 server 未路由:
-trigger.list/add/remove/pause/resume
-skill.list/validate
+trigger.list/add/remove
+skill.validate
 ```
 
 daemon → client (事件):
@@ -717,6 +719,11 @@ agent.guard_confirm  {id, tool, risk, reason, suggestion, params}
 memory.list_result   {memories}
 session.compact_result {before, after, ...}
 daemon.state         {session_id, agent_status, current_task}  // 连接时推送
+daemon.full_status   {pid, uptime, provider, model, ...}
+config.state         {models, active_model, locale, theme, ...}
+
+预留但当前 runtime 不发送:
+perception.event
 ```
 
 #### Local JSON-RPC framing

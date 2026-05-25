@@ -20,7 +20,7 @@ type configRow struct{ kind, name, label, value string }
 
 func (r configRow) selectable() bool {
 	switch r.kind {
-	case "section", "general_language", "general_theme", "general_guard", "general_workspace", "open_config_dir", "add_model", "edit_model", "edit_reasoning", "activate_model", "delete_model", "check_model", "model", "empty":
+	case "section", "general_language", "general_theme", "general_guard", "general_workspace", "clear_attachments", "open_config_dir", "add_model", "edit_model", "edit_reasoning", "activate_model", "delete_model", "check_model", "model", "empty":
 		return true
 	default:
 		return false
@@ -66,6 +66,7 @@ func (t *TUI) configHomeRows() []configRow {
 		{"label", "", t.tr("tui.config.local_files"), ""},
 		{"info", "", "  " + t.tr("tui.config.config_path"), configFilePath()},
 		{"info", "", "  " + t.tr("tui.config.credentials_path"), credentialsFilePath()},
+		{"clear_attachments", "", "  " + t.tr("tui.config.attachments"), t.attachmentUsageDisplay()},
 		{"open_config_dir", "", "  " + t.tr("tui.config.open_config_folder"), configDataDir()},
 	}
 	t.ensureConfigCursor(rows)
@@ -148,6 +149,9 @@ func (t *TUI) handleConfigAction(rows []configRow) tea.Cmd {
 		return t.toggleGuardMode()
 	case "general_workspace":
 		return t.openWorkspaceForm()
+	case "clear_attachments":
+		t.attachments = nil
+		return t.attachmentClearCmd()
 	case "open_config_dir":
 		return t.openConfigDirCmd()
 	case "add_model":
@@ -347,6 +351,10 @@ func (t *TUI) workspaceDisplay() string {
 	return workspace
 }
 
+func (t *TUI) attachmentUsageDisplay() string {
+	return fmt.Sprintf("%s / %d files", formatAttachmentSize(t.attachmentStatus.Bytes), t.attachmentStatus.Count)
+}
+
 func normalizeGuardMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "readonly", "auto", "smart":
@@ -524,6 +532,8 @@ func (t *TUI) configHelp(rows []configRow) string {
 			return t.tr("tui.config.help_guard")
 		case "general_workspace":
 			return t.tr("tui.config.help_workspace")
+		case "clear_attachments":
+			return t.tr("tui.config.help_attachments")
 		case "open_config_dir":
 			return t.tr("tui.config.help_open_config_dir")
 		case "add_model":
@@ -589,6 +599,9 @@ func (t *TUI) configRowLabelStyle(label string, st lipgloss.Style) string {
 	if strings.HasPrefix(trimmed, "+") || strings.Contains(label, t.tr("tui.config.activate_model")) {
 		return styleAgent.Render(label)
 	}
+	if strings.Contains(label, t.tr("tui.config.attachments")) {
+		return styleError.Render(label)
+	}
 	if strings.HasPrefix(trimmed, "▸") || strings.Contains(label, t.tr("tui.config.open_config_folder")) {
 		return styleBrand.Render(label)
 	}
@@ -638,47 +651,6 @@ func parsePositiveInt(s string) int {
 		return 0
 	}
 	return n
-}
-
-func modelSummary(mc tuiModelConfig, active bool) string {
-	var parts []string
-	if active {
-		parts = append(parts, "active")
-	}
-	if !mc.HasAPIKey {
-		parts = append(parts, "missing_api_key")
-	} else if mc.Ref() == "" {
-		parts = append(parts, "invalid")
-	}
-	parts = append(parts, mc.Provider, mc.Model)
-	if mc.ContextWindow > 0 {
-		parts = append(parts, "ctx "+fmtTok(mc.ContextWindow))
-	}
-	if mc.BaseURL != "" {
-		parts = append(parts, "endpoint_configured")
-	}
-	if len(mc.Strengths) > 0 {
-		parts = append(parts, strings.Join(mc.Strengths, ", "))
-	}
-	return strings.Join(parts, " · ")
-}
-
-func (t *TUI) modelSummary(mc tuiModelConfig) string {
-	raw := modelSummary(mc, t.isActiveModelRef(mc.Ref()))
-	parts := strings.Split(raw, " · ")
-	for i, part := range parts {
-		switch part {
-		case "active":
-			parts[i] = t.tr("tui.config.activated_status")
-		case "missing_api_key":
-			parts[i] = t.tr("tui.config.missing_api_key")
-		case "invalid":
-			parts[i] = t.tr("tui.config.invalid")
-		case "endpoint_configured":
-			parts[i] = t.tr("tui.config.endpoint_configured")
-		}
-	}
-	return strings.Join(parts, " · ")
 }
 
 func (t *TUI) displayEndpoint(endpoint string) string {

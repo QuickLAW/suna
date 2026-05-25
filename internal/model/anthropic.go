@@ -15,21 +15,26 @@ type AnthropicProvider struct {
 	client        *anthropic.Client
 	model         string
 	contextWindow int
+	media         MediaResolver
 }
 
-func NewAnthropicProvider(apiKey, baseURL, model string, contextWindow int) *AnthropicProvider {
+func NewAnthropicProvider(apiKey, baseURL, model string, contextWindow int, mediaResolver MediaResolver) *AnthropicProvider {
 	client := anthropic.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseURL))
 	return &AnthropicProvider{
 		client:        &client,
 		model:         model,
 		contextWindow: contextWindow,
+		media:         mediaResolver,
 	}
 }
 
 func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest) (<-chan Chunk, error) {
 	ch := make(chan Chunk, 64)
 
-	messages := p.buildMessages(req)
+	messages, buildErr := p.buildMessages(ctx, req)
+	if buildErr != nil {
+		return nil, buildErr
+	}
 	tools := p.buildTools(req.Tools)
 
 	modelName := p.model
@@ -167,15 +172,21 @@ func (p *AnthropicProvider) ContextWindow() int {
 	return 200000
 }
 
-func (p *AnthropicProvider) buildMessages(req *CompletionRequest) []anthropic.MessageParam {
+func (p *AnthropicProvider) buildMessages(ctx context.Context, req *CompletionRequest) ([]anthropic.MessageParam, error) {
 	msgs := make([]anthropic.MessageParam, 0, len(req.Messages))
 	for _, m := range req.Messages {
 		switch m.Role {
 		case RoleUser:
-			blocks := p.buildUserBlocks(m)
+			blocks, err := p.buildUserBlocks(ctx, m)
+			if err != nil {
+				return nil, err
+			}
 			msgs = append(msgs, anthropic.NewUserMessage(blocks...))
 		case RoleAssistant:
-			blocks := p.buildAssistantBlocks(m)
+			blocks, err := p.buildAssistantBlocks(ctx, m)
+			if err != nil {
+				return nil, err
+			}
 			msgs = append(msgs, anthropic.NewAssistantMessage(blocks...))
 		case RoleTool:
 			content := m.Text()
@@ -184,17 +195,21 @@ func (p *AnthropicProvider) buildMessages(req *CompletionRequest) []anthropic.Me
 			))
 		}
 	}
-	return msgs
+	return msgs, nil
 }
 
-func (p *AnthropicProvider) buildUserBlocks(m Message) []anthropic.ContentBlockParamUnion {
+func (p *AnthropicProvider) buildUserBlocks(ctx context.Context, m Message) ([]anthropic.ContentBlockParamUnion, error) {
 	var blocks []anthropic.ContentBlockParamUnion
 	for _, c := range m.Content {
 		switch c.Type {
 		case ContentText:
 			blocks = append(blocks, anthropic.NewTextBlock(c.Text))
 		case ContentImage:
-			if imageBlock, ok := anthropicImageBlock(c); ok {
+			imageBlock, ok, err := p.anthropicImageBlock(ctx, c)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
 				blocks = append(blocks, imageBlock)
 			}
 		}
@@ -202,10 +217,10 @@ func (p *AnthropicProvider) buildUserBlocks(m Message) []anthropic.ContentBlockP
 	if len(blocks) == 0 && m.TextContent != "" {
 		blocks = append(blocks, anthropic.NewTextBlock(m.TextContent))
 	}
-	return blocks
+	return blocks, nil
 }
 
-func (p *AnthropicProvider) buildAssistantBlocks(m Message) []anthropic.ContentBlockParamUnion {
+func (p *AnthropicProvider) buildAssistantBlocks(ctx context.Context, m Message) ([]anthropic.ContentBlockParamUnion, error) {
 	var blocks []anthropic.ContentBlockParamUnion
 	for _, c := range m.Content {
 		switch c.Type {
@@ -215,7 +230,11 @@ func (p *AnthropicProvider) buildAssistantBlocks(m Message) []anthropic.ContentB
 			}
 			blocks = append(blocks, anthropic.NewTextBlock(c.Text))
 		case ContentImage:
-			if imageBlock, ok := anthropicImageBlock(c); ok {
+			imageBlock, ok, err := p.anthropicImageBlock(ctx, c)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
 				blocks = append(blocks, imageBlock)
 			}
 		}
@@ -226,22 +245,29 @@ func (p *AnthropicProvider) buildAssistantBlocks(m Message) []anthropic.ContentB
 	for _, tc := range m.ToolCalls {
 		blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, tc.Arguments, tc.Name))
 	}
-	return blocks
+	return blocks, nil
 }
 
-func anthropicImageBlock(block ContentBlock) (anthropic.ContentBlockParamUnion, bool) {
-	if block.MediaB64 != "" {
-		mimeType := block.MimeType
+func (p *AnthropicProvider) anthropicImageBlock(ctx context.Context, block ContentBlock) (anthropic.ContentBlockParamUnion, bool, error) {
+	if block.Media == nil || p.media == nil {
+		return anthropic.ContentBlockParamUnion{}, false, fmt.Errorf("image media resolver is unavailable")
+	}
+	resolved, err := p.media.Resolve(ctx, *block.Media, ResolveAsBase64)
+	if err != nil {
+		return anthropic.ContentBlockParamUnion{}, false, err
+	}
+	if resolved.URL != "" {
+		return anthropic.NewImageBlock(anthropic.URLImageSourceParam{URL: resolved.URL}), true, nil
+	}
+	if resolved.Base64 != "" {
+		mimeType := resolved.MimeType
 		if mimeType == "" {
 			mimeType = "image/png"
 		}
 		// Anthropic base64 图片必须拆成 source.type/media_type/data，不能使用 OpenAI 的 data URL 结构。
-		return anthropic.NewImageBlockBase64(mimeType, block.MediaB64), true
+		return anthropic.NewImageBlockBase64(mimeType, resolved.Base64), true, nil
 	}
-	if block.MediaURL != "" {
-		return anthropic.NewImageBlock(anthropic.URLImageSourceParam{URL: block.MediaURL}), true
-	}
-	return anthropic.ContentBlockParamUnion{}, false
+	return anthropic.ContentBlockParamUnion{}, false, fmt.Errorf("resolved image is empty")
 }
 
 func (p *AnthropicProvider) buildTools(tools []ToolDef) []anthropic.ToolUnionParam {

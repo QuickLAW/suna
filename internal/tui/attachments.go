@@ -1,13 +1,14 @@
 package tui
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -151,12 +152,12 @@ func (t *TUI) confirmPendingImagePaste() tea.Cmd {
 	}
 	t.pendingImagePaste = nil
 	if p.SourceKind == "data_uri" {
-		path, name, size, err := savePastedImage(p)
+		path, name, size, err := t.savePastedImage(p)
 		if err != nil {
 			t.messages = append(t.messages, chatMsg{role: "error", content: err.Error()})
 			return nil
 		}
-		p.SourceKind = "path"
+		p.SourceKind = protocol.AttachmentKindAttachment
 		p.Path = path
 		p.Name = name
 		p.Size = size
@@ -261,7 +262,7 @@ func detectImagePath(raw string) (pendingImagePaste, bool) {
 	if err != nil || info.IsDir() || !isImageName(path) {
 		return pendingImagePaste{}, false
 	}
-	return pendingImagePaste{SourceKind: "path", Path: path, Name: filepath.Base(path), MimeType: imageMimeFromName(path), Size: info.Size()}, true
+	return pendingImagePaste{SourceKind: protocol.AttachmentKindPath, Path: path, Name: filepath.Base(path), MimeType: imageMimeFromName(path), Size: info.Size()}, true
 }
 
 func detectImageURL(raw string) (pendingImagePaste, bool) {
@@ -273,7 +274,7 @@ func detectImageURL(raw string) (pendingImagePaste, bool) {
 	if name == "." || name == "/" || name == "" {
 		name = "remote-image"
 	}
-	return pendingImagePaste{SourceKind: "url", URL: raw, Name: name, MimeType: imageMimeFromName(u.Path)}, true
+	return pendingImagePaste{SourceKind: protocol.AttachmentKindURL, URL: raw, Name: name, MimeType: imageMimeFromName(u.Path)}, true
 }
 
 func detectDataImageURI(raw string) (pendingImagePaste, bool) {
@@ -294,19 +295,21 @@ func detectDataImageURI(raw string) (pendingImagePaste, bool) {
 	return pendingImagePaste{SourceKind: "data_uri", Name: "pasted-image" + ext, MimeType: mimeType, Size: int64(len(data)), Data: data}, true
 }
 
-func savePastedImage(p *pendingImagePaste) (string, string, int64, error) {
-	home, _ := os.UserHomeDir()
-	if home == "" {
-		return "", "", 0, fmt.Errorf("cannot find home directory for pasted image")
+func (t *TUI) savePastedImage(p *pendingImagePaste) (string, string, int64, error) {
+	root := strings.TrimSpace(t.attachmentStatus.Root)
+	if root == "" {
+		return "", "", 0, fmt.Errorf("attachments directory is unavailable")
 	}
-	dir := filepath.Join(home, ".suna", "tmp")
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return "", "", 0, fmt.Errorf("create temp image dir: %w", err)
+	if err := os.MkdirAll(root, 0700); err != nil {
+		return "", "", 0, fmt.Errorf("create attachments dir: %w", err)
 	}
-	name := fmt.Sprintf("paste-%d%s", time.Now().UnixNano(), extFromMime(p.MimeType))
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, p.Data, 0600); err != nil {
-		return "", "", 0, fmt.Errorf("save pasted image: %w", err)
+	sum := sha256.Sum256(p.Data)
+	name := "sha256-" + hex.EncodeToString(sum[:]) + extFromMime(p.MimeType)
+	path := filepath.Join(root, name)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if err := os.WriteFile(path, p.Data, 0600); err != nil {
+			return "", "", 0, fmt.Errorf("save pasted image: %w", err)
+		}
 	}
 	return path, name, int64(len(p.Data)), nil
 }

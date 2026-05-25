@@ -16,18 +16,23 @@ type OpenAIResponsesProvider struct {
 	client        openai.Client
 	model         string
 	contextWindow int
+	media         MediaResolver
 }
 
-func NewOpenAIResponsesProvider(apiKey, baseURL, model string, contextWindow int) *OpenAIResponsesProvider {
+func NewOpenAIResponsesProvider(apiKey, baseURL, model string, contextWindow int, mediaResolver MediaResolver) *OpenAIResponsesProvider {
 	httpClient := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}}
 	client := openai.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseURL), option.WithHTTPClient(httpClient))
-	return &OpenAIResponsesProvider{client: client, model: model, contextWindow: contextWindow}
+	return &OpenAIResponsesProvider{client: client, model: model, contextWindow: contextWindow, media: mediaResolver}
 }
 
 func (p *OpenAIResponsesProvider) Complete(ctx context.Context, req *CompletionRequest) (<-chan Chunk, error) {
+	input, err := p.buildInput(ctx, req)
+	if err != nil {
+		return nil, err
+	}
 	params := responses.ResponseNewParams{
 		Model:             responses.ResponsesModel(p.resolveModel(req.Model)),
-		Input:             responses.ResponseNewParamsInputUnion{OfInputItemList: p.buildInput(req)},
+		Input:             responses.ResponseNewParamsInputUnion{OfInputItemList: input},
 		MaxOutputTokens:   openai.Int(int64(p.resolveMaxTokens(req.MaxTokens))),
 		Temperature:       openai.Float(p.resolveTemperature(req.Temperature)),
 		ParallelToolCalls: openai.Bool(true),
@@ -131,12 +136,16 @@ func (p *OpenAIResponsesProvider) resolveTemperature(t float64) float64 {
 	return 0.7
 }
 
-func (p *OpenAIResponsesProvider) buildInput(req *CompletionRequest) responses.ResponseInputParam {
+func (p *OpenAIResponsesProvider) buildInput(ctx context.Context, req *CompletionRequest) (responses.ResponseInputParam, error) {
 	input := make(responses.ResponseInputParam, 0, len(req.Messages)*2)
 	for _, m := range req.Messages {
 		switch m.Role {
 		case RoleUser:
-			input = append(input, responses.ResponseInputItemParamOfMessage(p.buildInputContent(m), responses.EasyInputMessageRoleUser))
+			content, err := p.buildInputContent(ctx, m)
+			if err != nil {
+				return nil, err
+			}
+			input = append(input, responses.ResponseInputItemParamOfMessage(content, responses.EasyInputMessageRoleUser))
 		case RoleAssistant:
 			if text := m.Text(); text != "" {
 				input = append(input, responses.ResponseInputItemParamOfMessage(text, responses.EasyInputMessageRoleAssistant))
@@ -148,10 +157,10 @@ func (p *OpenAIResponsesProvider) buildInput(req *CompletionRequest) responses.R
 			input = append(input, responses.ResponseInputItemParamOfFunctionCallOutput(m.ToolCallID, m.Text()))
 		}
 	}
-	return input
+	return input, nil
 }
 
-func (p *OpenAIResponsesProvider) buildInputContent(m Message) responses.ResponseInputMessageContentListParam {
+func (p *OpenAIResponsesProvider) buildInputContent(ctx context.Context, m Message) (responses.ResponseInputMessageContentListParam, error) {
 	blocks := make(responses.ResponseInputMessageContentListParam, 0, len(m.Content))
 	for _, c := range m.Content {
 		switch c.Type {
@@ -160,7 +169,11 @@ func (p *OpenAIResponsesProvider) buildInputContent(m Message) responses.Respons
 				blocks = append(blocks, responses.ResponseInputContentParamOfInputText(c.Text))
 			}
 		case ContentImage:
-			if imageURL := openAIImageURL(c); imageURL != "" {
+			imageURL, err := p.openAIImageURL(ctx, c)
+			if err != nil {
+				return nil, err
+			}
+			if imageURL != "" {
 				img := responses.ResponseInputContentParamOfInputImage(responses.ResponseInputImageDetailAuto)
 				img.OfInputImage.ImageURL = openai.String(imageURL)
 				blocks = append(blocks, img)
@@ -170,7 +183,28 @@ func (p *OpenAIResponsesProvider) buildInputContent(m Message) responses.Respons
 	if len(blocks) == 0 && m.TextContent != "" {
 		blocks = append(blocks, responses.ResponseInputContentParamOfInputText(m.TextContent))
 	}
-	return blocks
+	return blocks, nil
+}
+
+func (p *OpenAIResponsesProvider) openAIImageURL(ctx context.Context, block ContentBlock) (string, error) {
+	if block.Media == nil || p.media == nil {
+		return "", fmt.Errorf("image media resolver is unavailable")
+	}
+	resolved, err := p.media.Resolve(ctx, *block.Media, ResolveAsBase64)
+	if err != nil {
+		return "", err
+	}
+	if resolved.URL != "" {
+		return resolved.URL, nil
+	}
+	if resolved.Base64 == "" {
+		return "", fmt.Errorf("resolved image is empty")
+	}
+	mimeType := resolved.MimeType
+	if mimeType == "" {
+		mimeType = "image/png"
+	}
+	return "data:" + mimeType + ";base64," + resolved.Base64, nil
 }
 
 func (p *OpenAIResponsesProvider) buildTools(tools []ToolDef) []responses.ToolUnionParam {

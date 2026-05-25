@@ -101,6 +101,11 @@ func (a *Agent) Compact(ctx context.Context) (int, int, int, int, int, error) {
 }
 
 func (a *Agent) NewSession() {
+	a.runMu.Lock()
+	defer a.runMu.Unlock()
+	if a.mediaStore != nil {
+		_, _, _ = a.mediaStore.Clear()
+	}
 	if a.conversation != nil {
 		a.conversation.ClearLastMessages(context.Background(), memory.DefaultUserID)
 	}
@@ -109,6 +114,29 @@ func (a *Agent) NewSession() {
 	a.guard = a.newGuardForSession(a.sessionID)
 	a.working.Clear()
 	a.toolSummary = nil
+}
+
+func (a *Agent) AttachmentStatus() (root string, bytes int64, count int, err error) {
+	if a.mediaStore == nil {
+		return "", 0, 0, nil
+	}
+	bytes, count, err = a.mediaStore.Usage()
+	return a.mediaStore.Root, bytes, count, err
+}
+
+func (a *Agent) ClearAttachments() (root string, removedBytes int64, removedCount int, bytes int64, count int, err error) {
+	a.runMu.Lock()
+	defer a.runMu.Unlock()
+	if a.mediaStore == nil {
+		return "", 0, 0, 0, 0, nil
+	}
+	root = a.mediaStore.Root
+	removedBytes, removedCount, err = a.mediaStore.Clear()
+	if err != nil {
+		return root, removedBytes, removedCount, 0, 0, err
+	}
+	bytes, count, err = a.mediaStore.Usage()
+	return root, removedBytes, removedCount, bytes, count, err
 }
 
 func (a *Agent) RestoreSession(ctx context.Context) int {

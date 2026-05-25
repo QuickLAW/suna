@@ -122,7 +122,7 @@ func (c *localClient) Cancel() error {
 }
 
 func (c *localClient) AskReply(askID, answer string) error {
-	return c.SendRequestNotify("agent.askReply", map[string]string{
+	return c.SendRequestNotify(protocol.MethodAskReply, map[string]string{
 		"id":     askID,
 		"answer": answer,
 	})
@@ -158,6 +158,14 @@ func (c *localClient) ConfigGet() error {
 
 func (c *localClient) ConfigSet(params protocol.ConfigSetParams) error {
 	return c.SendRequestNotify(protocol.MethodConfigSet, params)
+}
+
+func (c *localClient) AttachmentStatus() error {
+	return c.SendRequestNotify(protocol.MethodAttachmentStatus, nil)
+}
+
+func (c *localClient) AttachmentClear() error {
+	return c.SendRequestNotify(protocol.MethodAttachmentClear, nil)
 }
 
 func (c *localClient) receiveLoop() {
@@ -236,12 +244,16 @@ func (c *localClient) handleMessage(raw []byte) {
 	if rawResult == nil {
 		return
 	}
+	if method == protocol.MethodAttachmentStatus || method == protocol.MethodAttachmentClear {
+		c.onNotify(protocol.MethodAttachmentStatus, rawResult)
+		return
+	}
 	if looksLikeDaemonStatus(rawResult) {
-		c.onNotify("daemon.full_status", rawResult)
+		c.onNotify(protocol.NotifyDaemonFullStatus, rawResult)
 		return
 	}
 	if looksLikeConfig(rawResult) {
-		c.onNotify("config.state", rawResult)
+		c.onNotify(protocol.NotifyConfigState, rawResult)
 	}
 }
 

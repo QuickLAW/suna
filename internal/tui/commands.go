@@ -23,6 +23,7 @@ func (t *TUI) handleCommand(input string) tea.Cmd {
 	switch cmd {
 	case "/new":
 		t.messages = []chatMsg{}
+		t.attachments = nil
 		t.resetConversationStats()
 		t.resetPhase()
 		t.lastAssistantText = ""

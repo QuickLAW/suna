@@ -133,10 +133,17 @@ func (a *Agent) executeSpawn(ctx context.Context, id string, params map[string]a
 	if errResult.IsError {
 		return errResult
 	}
+	inputBlocks, errResult := a.buildSubtaskInput(task, params["input_images"])
+	if errResult.IsError {
+		return errResult
+	}
 
 	extraCtx, _ := params["context"].(string)
 	env := getEnvInfo()
 	toolsSummary := strings.Join(subRegistry.Names(), ", ")
+	if toolsSummary == "" {
+		toolsSummary = "none"
+	}
 	subtaskPrompt, err := a.prompts.RenderSubtaskSystem(prompt.SubtaskPromptData{Task: task, Tools: toolsSummary, Context: extraCtx, OS: env["OS"], Arch: env["Arch"], WorkDir: env["WorkDir"]})
 	if err != nil || subtaskPrompt == "" {
 		if sys, ok := params["system"].(string); ok && sys != "" {
@@ -152,7 +159,7 @@ func (a *Agent) executeSpawn(ctx context.Context, id string, params map[string]a
 		spawnID = uuid.New().String()
 	}
 	r := a.newSubtaskRunner(events, spawnID, subRegistry)
-	st := subtask.New(subtask.Request{ID: spawnID, Task: task, ModelRef: modelRef, ModelID: resolveModelID(a.cfg, modelRef), System: subtaskPrompt, Tools: subRegistry, Timeout: time.Duration(timeout) * time.Second})
+	st := subtask.New(subtask.Request{ID: spawnID, Task: task, Input: inputBlocks, ModelRef: modelRef, ModelID: resolveModelID(a.cfg, modelRef), System: subtaskPrompt, Tools: subRegistry, Timeout: time.Duration(timeout) * time.Second})
 	res, err := st.Run(ctx, r)
 	if err != nil && res.Text == "" {
 		res.Text = err.Error()
@@ -247,9 +254,6 @@ func (s subtaskSink) namespaced(id string) string {
 
 func (a *Agent) buildSubtaskRegistry(value any) (*tool.Registry, tool.Result) {
 	toolNames := parseStringList(value)
-	if len(toolNames) == 0 {
-		return nil, tool.ErrorResult("spawn requires explicit tools. Tools are permissions; choose least privilege from: " + strings.Join(a.availableSpawnTools(), ", "))
-	}
 	subRegistry := tool.NewRegistry()
 	seen := make(map[string]bool, len(toolNames))
 	for _, name := range toolNames {
@@ -270,10 +274,69 @@ func (a *Agent) buildSubtaskRegistry(value any) (*tool.Registry, tool.Result) {
 		}
 		return nil, tool.ErrorResult(fmt.Sprintf("invalid spawn tool %q. Choose from: %s", name, strings.Join(a.availableSpawnTools(), ", ")))
 	}
-	if len(subRegistry.Names()) == 0 {
-		return nil, tool.ErrorResult("spawn requires at least one valid tool permission")
-	}
 	return subRegistry, tool.Result{}
+}
+
+func (a *Agent) buildSubtaskInput(task string, value any) ([]model.ContentBlock, tool.Result) {
+	blocks := []model.ContentBlock{{Type: model.ContentText, Text: task}}
+	indexes, err := parseImageIndexes(value)
+	if err != nil {
+		return nil, tool.ErrorResult(err.Error())
+	}
+	if len(indexes) == 0 {
+		return blocks, tool.Result{}
+	}
+	images := a.currentInputImages()
+	for _, idx := range indexes {
+		if idx < 0 || idx >= len(images) {
+			return nil, tool.ErrorResult(fmt.Sprintf("invalid input image index %d; current user message has %d image(s)", idx, len(images)))
+		}
+		blocks = append(blocks, images[idx])
+	}
+	return blocks, tool.Result{}
+}
+
+func (a *Agent) currentInputImages() []model.ContentBlock {
+	images := make([]model.ContentBlock, 0)
+	for _, block := range a.currentInputBlocks {
+		if block.Type == model.ContentImage && block.Media != nil {
+			images = append(images, block)
+		}
+	}
+	return images
+}
+
+func parseImageIndexes(value any) ([]int, error) {
+	switch v := value.(type) {
+	case nil:
+		return nil, nil
+	case []any:
+		indexes := make([]int, 0, len(v))
+		for _, item := range v {
+			idx, ok := numericIndex(item)
+			if !ok {
+				return nil, fmt.Errorf("input_images must contain integer indexes")
+			}
+			indexes = append(indexes, idx)
+		}
+		return indexes, nil
+	case []int:
+		return append([]int(nil), v...), nil
+	default:
+		return nil, fmt.Errorf("input_images must be an array of image indexes")
+	}
+}
+
+func numericIndex(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case float64:
+		idx := int(n)
+		return idx, n == float64(idx)
+	default:
+		return 0, false
+	}
 }
 
 func cleanParamsForRegistry(registry *tool.Registry) func(string, map[string]any) (map[string]any, string) {
@@ -317,7 +380,7 @@ func (a *Agent) toolParamKeys(name string) map[string]bool {
 	case "askuser":
 		return map[string]bool{"question": true, "options": true}
 	case "spawn":
-		return map[string]bool{"task": true, "model": true, "system": true, "tools": true, "timeout": true, "context": true}
+		return map[string]bool{"task": true, "model": true, "system": true, "tools": true, "timeout": true, "context": true, "input_images": true}
 	default:
 		return nil
 	}

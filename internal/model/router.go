@@ -19,7 +19,7 @@ type Router struct {
 	rateLimit *RateLimiter
 }
 
-func NewRouter(cfg *config.Config) (*Router, error) {
+func NewRouter(cfg *config.Config, resolver MediaResolver) (*Router, error) {
 	r := &Router{
 		providers: map[string]Provider{},
 		models:    map[string]config.ModelConfig{},
@@ -28,7 +28,7 @@ func NewRouter(cfg *config.Config) (*Router, error) {
 	}
 	for _, mc := range cfg.Models {
 		ref := mc.Ref()
-		p, err := createProvider(mc)
+		p, err := createProvider(mc, resolver)
 		if err != nil {
 			return nil, fmt.Errorf("create provider %q: %w", ref, err)
 		}
@@ -114,7 +114,7 @@ func (r *Router) ListProviders() []string {
 	return names
 }
 
-func createProvider(mc config.ModelConfig) (Provider, error) {
+func createProvider(mc config.ModelConfig, resolver MediaResolver) (Provider, error) {
 	apiKey, err := mc.ResolveAPIKey()
 	if err != nil {
 		return nil, fmt.Errorf("resolve API key: %w", err)
@@ -124,10 +124,10 @@ func createProvider(mc config.ModelConfig) (Provider, error) {
 	}
 	switch {
 	case mc.IsAnthropic():
-		return NewAnthropicProvider(apiKey, mc.BaseURL, mc.Model, mc.ContextWindow), nil
+		return NewAnthropicProvider(apiKey, mc.BaseURL, mc.Model, mc.ContextWindow, resolver), nil
 	case mc.IsOpenAI():
-		return NewOpenAIResponsesProvider(apiKey, mc.BaseURL, mc.Model, mc.ContextWindow), nil
+		return NewOpenAIResponsesProvider(apiKey, mc.BaseURL, mc.Model, mc.ContextWindow, resolver), nil
 	default:
-		return NewOpenAIChatProvider(apiKey, mc.BaseURL, mc.Model, mc.ContextWindow), nil
+		return NewOpenAIChatProvider(apiKey, mc.BaseURL, mc.Model, mc.ContextWindow, resolver), nil
 	}
 }
