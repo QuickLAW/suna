@@ -44,6 +44,7 @@ type TUI struct {
 	pendingAskOptions []string
 	pendingAskCursor  int
 	pendingGuard      *guardConfirmView
+	guardQueue        []*guardConfirmView
 	guardCursor       int
 	cmdSuggestion     string
 	theme             string
@@ -452,11 +453,7 @@ func (t *TUI) handleLocalNotification(notif localNotification) {
 	case protocol.NotifyGuardConfirm:
 		var p protocol.GuardConfirmParams
 		json.Unmarshal(notif.params, &p)
-		t.pendingGuard = &guardConfirmView{id: p.ID, toolCallID: p.ToolCallID, tool: p.Tool, params: p.Params, risk: p.Risk, reason: p.Reason, suggestion: p.Suggestion}
-		t.guardCursor = 1
-		t.loading = false
-		t.phase = phaseIdle
-		t.phaseStart = time.Time{}
+		t.enqueueGuardConfirm(&guardConfirmView{id: p.ID, toolCallID: p.ToolCallID, tool: p.Tool, params: p.Params, risk: p.Risk, reason: p.Reason, suggestion: p.Suggestion})
 	case protocol.NotifyDaemonState:
 		var p protocol.DaemonStateParams
 		json.Unmarshal(notif.params, &p)

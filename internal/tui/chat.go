@@ -501,12 +501,44 @@ func (t *TUI) submitGuardDecision(decision string) tea.Cmd {
 	if decision == "reject" {
 		t.markToolRejected(guardToolID)
 	}
-	t.pendingGuard = nil
-	t.guardCursor = 0
-	t.loading = true
-	t.phase = phaseTool
-	t.phaseStart = time.Now()
+	t.advanceGuardQueue()
+	if t.pendingGuard == nil {
+		t.loading = true
+		t.phase = phaseTool
+		t.phaseStart = time.Now()
+	}
 	return t.guardReplyCmd(id, decision)
+}
+
+func (t *TUI) enqueueGuardConfirm(g *guardConfirmView) {
+	if g == nil {
+		return
+	}
+	if t.pendingGuard != nil {
+		t.guardQueue = append(t.guardQueue, g)
+		return
+	}
+	t.pendingGuard = g
+	t.guardCursor = 1
+	t.loading = false
+	t.phase = phaseIdle
+	t.phaseStart = time.Time{}
+}
+
+func (t *TUI) advanceGuardQueue() {
+	if len(t.guardQueue) == 0 {
+		t.pendingGuard = nil
+		t.guardCursor = 0
+		return
+	}
+	t.pendingGuard = t.guardQueue[0]
+	copy(t.guardQueue, t.guardQueue[1:])
+	t.guardQueue[len(t.guardQueue)-1] = nil
+	t.guardQueue = t.guardQueue[:len(t.guardQueue)-1]
+	t.guardCursor = 1
+	t.loading = false
+	t.phase = phaseIdle
+	t.phaseStart = time.Time{}
 }
 
 func (t *TUI) resetPhase() {
