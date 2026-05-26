@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/openai/openai-go/v3/option"
 )
@@ -12,7 +13,8 @@ func mergeReasoningFields(body map[string]any, reasoning map[string]any) error {
 	if len(reasoning) == 0 {
 		return nil
 	}
-	for key, value := range reasoning {
+	for _, key := range sortedReasoningKeys(reasoning) {
+		value := reasoning[key]
 		if _, exists := body[key]; exists {
 			return fmt.Errorf("reasoning field %q conflicts with generated request body", key)
 		}
@@ -26,11 +28,21 @@ func reasoningRequestOptions(reasoning map[string]any, generated map[string]bool
 		return nil, nil
 	}
 	opts := make([]option.RequestOption, 0, len(reasoning))
-	for key, value := range reasoning {
+	for _, key := range sortedReasoningKeys(reasoning) {
+		value := reasoning[key]
 		if generated[key] {
 			return nil, fmt.Errorf("reasoning field %q conflicts with generated request body", key)
 		}
 		opts = append(opts, option.WithJSONSet(key, value))
 	}
 	return opts, nil
+}
+
+func sortedReasoningKeys(reasoning map[string]any) []string {
+	keys := make([]string, 0, len(reasoning))
+	for key := range reasoning {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }

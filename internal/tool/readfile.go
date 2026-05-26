@@ -1,35 +1,39 @@
 package tool
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
 const (
-	maxReadSize   = 100 * 1024
-	defaultLimit  = 2000
-	maxBase64Size = 10 * 1024 * 1024
+	defaultReadLineLimit = 2000
+	maxReadLineLimit     = 5000
+	maxReadResultBytes   = 100 * 1024
+	maxReadLineBytes     = 32 * 1024
+	maxBase64Size        = 10 * 1024 * 1024
 )
 
 type ReadFile struct{}
 
 func (ReadFile) Name() string { return "readfile" }
 func (ReadFile) Description() string {
-	return "读取文件内容。支持分页读取大文件，二进制文件返回 base64 编码。"
+	return "Read file contents. Text mode streams large files by line with offset/limit pagination; binary files can be returned as base64."
 }
 func (ReadFile) Category() Category { return Perceive }
 func (ReadFile) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"path":     map[string]any{"type": "string", "description": "文件路径"},
-			"offset":   map[string]any{"type": "integer", "description": "起始行号（1-indexed）"},
-			"limit":    map[string]any{"type": "integer", "description": "最大返回行数"},
-			"encoding": map[string]any{"type": "string", "enum": []string{"text", "base64"}, "description": "编码方式"},
+			"path":     map[string]any{"type": "string", "description": "File path"},
+			"offset":   map[string]any{"type": "integer", "description": "Starting line number, 1-indexed, for continuing large file reads"},
+			"limit":    map[string]any{"type": "integer", "description": "Maximum lines to return, default 2000, max 5000; result is still capped at 100KB"},
+			"encoding": map[string]any{"type": "string", "enum": []string{"text", "base64"}, "description": "Output encoding"},
 		},
 		"required": []string{"path"},
 	}
@@ -77,49 +81,105 @@ func readBase64(path string, size int64) Result {
 }
 
 func readText(path string, params map[string]any) Result {
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("read file: %s", err))
+		return ErrorResult(fmt.Sprintf("open file: %s", err))
 	}
-
-	if len(data) > maxReadSize {
-		data = data[:maxReadSize]
-	}
-
-	lines := strings.Split(string(data), "\n")
-	totalLines := len(lines)
+	defer file.Close()
 
 	offset := 1
 	if o, ok := params["offset"].(float64); ok && int(o) > 0 {
 		offset = int(o)
 	}
-	limit := defaultLimit
+	limit := defaultReadLineLimit
 	if l, ok := params["limit"].(float64); ok && int(l) > 0 {
 		limit = int(l)
 	}
-
-	if offset > totalLines {
-		return TextResult(fmt.Sprintf("offset %d exceeds total lines %d", offset, totalLines))
+	if limit > maxReadLineLimit {
+		limit = maxReadLineLimit
 	}
 
-	end := offset + limit - 1
-	if end > totalLines {
-		end = totalLines
-	}
-
-	selected := lines[offset-1 : end]
+	reader := bufio.NewReader(file)
 	var sb strings.Builder
-	for i, line := range selected {
-		sb.WriteString(fmt.Sprintf("%d: %s\n", offset+i, line))
+	lineNo := 0
+	returned := 0
+	truncated := false
+	var nextOffset int
+	for {
+		line, readErr := readLogicalLine(reader)
+		if readErr != nil && readErr != io.EOF {
+			return ErrorResult(fmt.Sprintf("read file: %s", readErr))
+		}
+		if readErr == io.EOF && line == "" {
+			break
+		}
+		lineNo++
+		if lineNo < offset {
+			if readErr == io.EOF {
+				break
+			}
+			continue
+		}
+
+		entry := fmt.Sprintf("%d: %s\n", lineNo, line)
+		if returned >= limit || sb.Len()+len(entry) > maxReadResultBytes {
+			truncated = true
+			nextOffset = lineNo
+			break
+		}
+		sb.WriteString(entry)
+		returned++
+		if readErr == io.EOF {
+			break
+		}
 	}
 
-	truncated := totalLines > end
 	content := sb.String()
+	if returned == 0 && !truncated {
+		return TextResult(fmt.Sprintf("offset %d exceeds total lines %d", offset, lineNo))
+	}
 	if truncated {
-		content += fmt.Sprintf("\n... (truncated, %d lines total. Use offset=%d to read more)", totalLines, end+1)
+		if nextOffset == 0 {
+			nextOffset = lineNo + 1
+		}
+		content += fmt.Sprintf("\n... (truncated. Use offset=%d to read more; limit capped at %d lines and %d bytes per result)", nextOffset, maxReadLineLimit, maxReadResultBytes)
 	}
 
 	return Result{Content: content, Truncated: truncated}
+}
+
+func readLogicalLine(r *bufio.Reader) (string, error) {
+	var line []byte
+	lineTruncated := false
+	for {
+		part, err := r.ReadSlice('\n')
+		if len(part) > 0 {
+			remaining := maxReadLineBytes - len(line)
+			if remaining > 0 {
+				if len(part) > remaining {
+					line = append(line, part[:remaining]...)
+					lineTruncated = true
+				} else {
+					line = append(line, part...)
+				}
+			} else {
+				lineTruncated = true
+			}
+		}
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		if err == nil || err == io.EOF {
+			text := string(line)
+			text = strings.TrimSuffix(text, "\n")
+			text = strings.TrimSuffix(text, "\r")
+			if lineTruncated {
+				text += "... (line truncated)"
+			}
+			return text, err
+		}
+		return "", err
+	}
 }
 
 func expandPath(path string) string {

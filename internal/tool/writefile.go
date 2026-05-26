@@ -12,16 +12,16 @@ type WriteFile struct{}
 
 func (WriteFile) Name() string { return "writefile" }
 func (WriteFile) Description() string {
-	return "创建或覆盖文件。支持自动创建父目录。"
+	return "Create or overwrite a file, optionally creating parent directories."
 }
 func (WriteFile) Category() Category { return Act }
 func (WriteFile) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"path":        map[string]any{"type": "string", "description": "文件路径"},
-			"content":     map[string]any{"type": "string", "description": "文件内容"},
-			"create_dirs": map[string]any{"type": "boolean", "description": "是否自动创建父目录"},
+			"path":        map[string]any{"type": "string", "description": "File path"},
+			"content":     map[string]any{"type": "string", "description": "File content"},
+			"create_dirs": map[string]any{"type": "boolean", "description": "Whether to create parent directories automatically"},
 		},
 		"required": []string{"path", "content"},
 	}

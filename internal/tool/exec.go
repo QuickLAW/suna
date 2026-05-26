@@ -1,7 +1,6 @@
 package tool
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -21,18 +20,18 @@ type Exec struct{}
 
 func (Exec) Name() string { return "exec" }
 func (Exec) Description() string {
-	return "执行系统命令。万能工具，可执行任何 shell 命令。自动检测 shell 类型。"
+	return "Run a shell command. Use for diagnostics, tests, builds, and other system operations."
 }
 func (Exec) Category() Category { return Act }
 func (Exec) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"command": map[string]any{"type": "string", "description": "要执行的命令"},
-			"cwd":     map[string]any{"type": "string", "description": "工作目录"},
-			"timeout": map[string]any{"type": "integer", "description": "超时秒数（默认60）"},
-			"env":     map[string]any{"type": "object", "description": "环境变量"},
-			"shell":   map[string]any{"type": "string", "description": "shell类型: auto|bash|powershell|cmd"},
+			"command": map[string]any{"type": "string", "description": "Command to execute"},
+			"cwd":     map[string]any{"type": "string", "description": "Working directory"},
+			"timeout": map[string]any{"type": "integer", "description": "Timeout in seconds, default 60"},
+			"env":     map[string]any{"type": "object", "description": "Environment variables"},
+			"shell":   map[string]any{"type": "string", "description": "Shell type: auto|bash|powershell|cmd"},
 		},
 		"required": []string{"command"},
 	}
@@ -87,24 +86,16 @@ func (Exec) Execute(ctx context.Context, params map[string]any) Result {
 	cmd.Dir = cwd
 	cmd.Env = env
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := &limitedBuffer{limit: maxExecOutput}
+	stderr := &limitedBuffer{limit: maxExecOutput}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	err := cmd.Run()
 
 	outStr := stdout.String()
 	errStr := stderr.String()
-	truncated := false
-
-	if len(outStr) > maxExecOutput {
-		outStr = outStr[:maxExecOutput] + "\n... (truncated)"
-		truncated = true
-	}
-	if len(errStr) > maxExecOutput {
-		errStr = errStr[:maxExecOutput] + "\n... (truncated)"
-		truncated = true
-	}
+	truncated := stdout.truncated || stderr.truncated
 
 	exitCode := 0
 	if err != nil {
@@ -132,6 +123,38 @@ func (Exec) Execute(ctx context.Context, params map[string]any) Result {
 	}
 
 	return Result{Content: sb.String(), Truncated: truncated}
+}
+
+type limitedBuffer struct {
+	limit     int
+	buf       strings.Builder
+	truncated bool
+}
+
+func (w *limitedBuffer) Write(p []byte) (int, error) {
+	if w.limit <= 0 {
+		return len(p), nil
+	}
+	remaining := w.limit - w.buf.Len()
+	if remaining <= 0 {
+		w.truncated = true
+		return len(p), nil
+	}
+	if len(p) > remaining {
+		_, _ = w.buf.Write(p[:remaining])
+		w.truncated = true
+		return len(p), nil
+	}
+	_, _ = w.buf.Write(p)
+	return len(p), nil
+}
+
+func (w *limitedBuffer) String() string {
+	out := w.buf.String()
+	if w.truncated {
+		out += "\n... (truncated)"
+	}
+	return out
 }
 
 func resolveShell(shell string) (cmd string, name string) {

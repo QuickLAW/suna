@@ -9,22 +9,28 @@ import (
 	"time"
 )
 
-const maxEntries = 500
+const (
+	defaultListLimit = 500
+	maxListLimit     = 1000
+	maxWalkEntries   = 5000
+)
 
 type ListDir struct{}
 
 func (ListDir) Name() string { return "listdir" }
 func (ListDir) Description() string {
-	return "列出目录内容，返回结构化文件列表。支持递归列出，最大深度 3。"
+	return "List directory contents as structured entries. Supports offset/limit pagination and recursive listing up to depth 3."
 }
 func (ListDir) Category() Category { return Perceive }
 func (ListDir) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"path":      map[string]any{"type": "string", "description": "目录路径"},
-			"recursive": map[string]any{"type": "boolean", "description": "是否递归列出子目录"},
-			"max_depth": map[string]any{"type": "integer", "description": "递归最大深度（默认3）"},
+			"path":      map[string]any{"type": "string", "description": "Directory path"},
+			"recursive": map[string]any{"type": "boolean", "description": "Whether to recursively list subdirectories"},
+			"max_depth": map[string]any{"type": "integer", "description": "Maximum recursion depth, default 3"},
+			"offset":    map[string]any{"type": "integer", "description": "Starting entry index, 1-indexed, for continuing large directory listings"},
+			"limit":     map[string]any{"type": "integer", "description": "Maximum entries to return, default 500, max 1000"},
 		},
 		"required": []string{"path"},
 	}
@@ -48,6 +54,17 @@ func (ListDir) Execute(ctx context.Context, params map[string]any) Result {
 			maxDepth = 3
 		}
 	}
+	offset := 1
+	if o, ok := params["offset"].(float64); ok && int(o) > 0 {
+		offset = int(o)
+	}
+	limit := defaultListLimit
+	if l, ok := params["limit"].(float64); ok && int(l) > 0 {
+		limit = int(l)
+	}
+	if limit > maxListLimit {
+		limit = maxListLimit
+	}
 
 	info, err := os.Stat(path)
 	if err != nil {
@@ -60,25 +77,25 @@ func (ListDir) Execute(ctx context.Context, params map[string]any) Result {
 		return ErrorResult(fmt.Sprintf("path is not a directory: %s", path))
 	}
 
-	var entries []entry
+	page := listPage{offset: offset, limit: limit}
 	if recursive {
-		entries = walkDir(path, path, 0, maxDepth, &entries)
+		walkDirPage(path, path, 0, maxDepth, &page)
 	} else {
-		entries = readDir(path)
+		readDirPage(path, &page)
 	}
 
-	if len(entries) > maxEntries {
-		entries = entries[:maxEntries]
-		return Result{
-			Content:   formatEntries(entries) + fmt.Sprintf("\n... (truncated, showing %d of total)", maxEntries),
-			Truncated: true,
-		}
-	}
-
-	if len(entries) == 0 {
+	if page.seen == 0 {
 		return TextResult("(empty directory)")
 	}
-	return TextResult(formatEntries(entries))
+	if len(page.entries) == 0 {
+		return TextResult(fmt.Sprintf("offset %d exceeds scanned entries %d", offset, page.seen))
+	}
+	content := formatEntries(page.entries)
+	truncated := page.hasMore || page.stoppedEarly
+	if truncated {
+		content += fmt.Sprintf("\n... (truncated, at least %d entries. Use offset=%d to list more; limit capped at %d)", page.seen, page.nextOffset(), maxListLimit)
+	}
+	return Result{Content: content, Truncated: truncated}
 }
 
 type entry struct {
@@ -89,12 +106,35 @@ type entry struct {
 	Modified time.Time
 }
 
-func readDir(path string) []entry {
+type listPage struct {
+	offset       int
+	limit        int
+	seen         int
+	entries      []entry
+	hasMore      bool
+	stoppedEarly bool
+}
+
+func (p *listPage) add(e entry) bool {
+	p.seen++
+	if p.seen < p.offset {
+		return true
+	}
+	if len(p.entries) >= p.limit {
+		p.hasMore = true
+		return false
+	}
+	p.entries = append(p.entries, e)
+	return true
+}
+
+func (p *listPage) nextOffset() int { return p.offset + len(p.entries) }
+
+func readDirPage(path string, page *listPage) {
 	entries, err := os.ReadDir(path)
 	if err != nil {
-		return nil
+		return
 	}
-	var result []entry
 	for _, e := range entries {
 		info, err := e.Info()
 		if err != nil {
@@ -104,28 +144,33 @@ func readDir(path string) []entry {
 		if e.IsDir() {
 			typ = "dir"
 		}
-		result = append(result, entry{
+		if !page.add(entry{
 			Name:     e.Name(),
 			RelPath:  e.Name(),
 			Type:     typ,
 			Size:     info.Size(),
 			Modified: info.ModTime(),
-		})
+		}) {
+			return
+		}
 	}
-	return result
 }
 
-func walkDir(root, current string, depth, maxDepth int, entries *[]entry) []entry {
+func walkDirPage(root, current string, depth, maxDepth int, page *listPage) {
 	if depth > maxDepth {
-		return *entries
+		return
+	}
+	if page.hasMore || page.stoppedEarly {
+		return
 	}
 	dirEntries, err := os.ReadDir(current)
 	if err != nil {
-		return *entries
+		return
 	}
 	for _, e := range dirEntries {
-		if len(*entries) >= maxEntries*2 {
-			return *entries
+		if page.seen >= maxWalkEntries {
+			page.stoppedEarly = true
+			return
 		}
 		info, err := e.Info()
 		if err != nil {
@@ -136,18 +181,22 @@ func walkDir(root, current string, depth, maxDepth int, entries *[]entry) []entr
 			typ = "dir"
 		}
 		rel, _ := filepath.Rel(root, filepath.Join(current, e.Name()))
-		*entries = append(*entries, entry{
+		if !page.add(entry{
 			Name:     e.Name(),
 			RelPath:  rel,
 			Type:     typ,
 			Size:     info.Size(),
 			Modified: info.ModTime(),
-		})
+		}) {
+			return
+		}
 		if e.IsDir() && depth < maxDepth {
-			walkDir(root, filepath.Join(current, e.Name()), depth+1, maxDepth, entries)
+			walkDirPage(root, filepath.Join(current, e.Name()), depth+1, maxDepth, page)
+			if page.hasMore || page.stoppedEarly {
+				return
+			}
 		}
 	}
-	return *entries
 }
 
 func formatEntries(entries []entry) string {

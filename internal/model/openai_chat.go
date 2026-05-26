@@ -188,6 +188,9 @@ func (p *OpenAIChatProvider) buildChatUserMessage(ctx context.Context, m Message
 			}
 		}
 	}
+	if len(parts) == 0 && m.TextContent != "" {
+		parts = append(parts, openai.TextContentPart(m.TextContent))
+	}
 	return openai.UserMessage(parts), nil
 }
 

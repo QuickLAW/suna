@@ -155,7 +155,8 @@ Daemon 只挂载 `protocol.Transport`，当前 local transport 通过 Unix Domai
 
 5. 缓存友好上下文
    - 固定 system prompt 在前
-   - 动态 active memory 短且靠后
+   - 工具定义稳定排序
+   - 动态 active memory 靠近当前用户消息，不挡在 prior conversation 前面
    - 提高 prompt cache 命中
 
 6. 精简交互 (vs 命令爆炸)
@@ -179,5 +180,5 @@ Daemon 只挂载 `protocol.Transport`，当前 local transport 通过 Unix Domai
 | 1 | Daemon 基础 + 记忆层基础：sunad + protocol/local transport + active memory + memory_queue + 9 tool definitions + Guard stub | 5 周 |
 | 2 | 行动层完善：Guard 完善 + 多模型路由；渐进信任和感知源仍是后续项 | 4 周 |
 | 3 | 记忆深化 + 学习：active memory 质量评估 + declarative SKILL.md；JS/MCP 能力系统后续接入 | 4 周 |
-| 4 | 完善 + 扩展：项目配置 (SUNA.md) + 模型表现追踪 + 最近会话恢复 | 4 周 |
+| 4 | 完善 + 扩展：项目配置 (AGENTS.md) + 模型表现追踪 + 最近会话恢复 | 4 周 |
 | 5 | 探索：意图层、多 I/O 渠道 (WebSocket)、能力市场、Docker sandbox | — |

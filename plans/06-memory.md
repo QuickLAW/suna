@@ -18,7 +18,7 @@ Suna 只保留少量有效记忆。记忆会被刷新、合并、替换和删除
 原则 3: 不做 append-only。记忆是 active state，会被 compact 和刷新。
 原则 4: 不做项目/工作区记忆。Suna 只有一个当前会话，要么新建，要么恢复上一条。
 原则 5: 主链路只读记忆。记忆提取和整理由 daemon 异步批量处理。
-原则 6: 上下文必须短且缓存友好。固定提示词在前，动态记忆靠后。
+原则 6: 上下文必须短且缓存友好。固定提示词和历史前缀在前，动态记忆靠近当前用户消息。
 ```
 
 ## 记忆模型
@@ -312,7 +312,7 @@ LLM 必须遵守：
   -> working memory.Add(user)
   -> buildSystemPrompt()
   -> user_memory.BuildBrief(last_user_text)
-  -> 作为第一条 internal-context user message 注入 <active_memory>
+  -> 作为 internal-context user message 注入到最新 user message 之前
   -> 调用主 LLM
 ```
 
@@ -354,12 +354,12 @@ system:
   Runtime/project/capability context
 
 messages:
-  user: <internal_context><active_memory>...</active_memory></internal_context>
   restored/current conversation messages
+  user: <internal_context><active_memory>...</active_memory></internal_context>
   current user message
 ```
 
-不要把动态记忆插入固定 system prompt。为了最大化跨 provider 兼容性，不使用多 system message 或 provider-specific cache control；active memory 作为第一条 user role internal-context message 注入，并明确声明它不是用户请求。
+不要把动态记忆插入固定 system prompt，也不要放在完整 working history 之前。为了最大化跨 provider 兼容性，不使用多 system message 或 provider-specific cache control；active memory 作为 user role internal-context message 注入到最新 user message 之前，并明确声明它不是用户请求。这样既保留 query-based 召回，又不挡在 prior conversation 前面破坏连续对话前缀。
 
 ### Memory Policy
 
@@ -375,7 +375,7 @@ Do not infer private facts beyond the provided memory.
 
 ### Memory Brief 格式
 
-主链路不要调用 LLM 重新总结记忆，直接拼接已保存的 `content`。该 block 不写入 working memory，不展示给 TUI，只在发起 LLM 请求时临时前置。
+主链路不要调用 LLM 重新总结记忆，直接拼接已保存的 `content`。该 block 不写入 working memory，不展示给 TUI，只在发起 LLM 请求时临时注入。
 
 ```
 <internal_context>

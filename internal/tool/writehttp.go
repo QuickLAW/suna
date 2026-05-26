@@ -15,18 +15,18 @@ type WriteHTTP struct{}
 
 func (WriteHTTP) Name() string { return "writehttp" }
 func (WriteHTTP) Description() string {
-	return "发送 HTTP POST/PUT/DELETE/PATCH 请求。"
+	return "Send an HTTP POST, PUT, DELETE, or PATCH request."
 }
 func (WriteHTTP) Category() Category { return Act }
 func (WriteHTTP) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"method":  map[string]any{"type": "string", "description": "HTTP 方法", "enum": []string{"POST", "PUT", "DELETE", "PATCH"}},
-			"url":     map[string]any{"type": "string", "description": "请求 URL"},
-			"headers": map[string]any{"type": "object", "description": "请求头"},
-			"body":    map[string]any{"type": "string", "description": "请求体"},
-			"timeout": map[string]any{"type": "integer", "description": "超时秒数（默认30）"},
+			"method":  map[string]any{"type": "string", "description": "HTTP method", "enum": []string{"POST", "PUT", "DELETE", "PATCH"}},
+			"url":     map[string]any{"type": "string", "description": "Request URL"},
+			"headers": map[string]any{"type": "object", "description": "Request headers"},
+			"body":    map[string]any{"type": "string", "description": "Request body"},
+			"timeout": map[string]any{"type": "integer", "description": "Timeout in seconds, default 30"},
 		},
 		"required": []string{"method", "url"},
 	}

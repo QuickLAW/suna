@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"sort"
 )
 
 // Category 表示 registry 工具行为类别，用于 Guard 和 UI 展示区分感知、行动类工具。
@@ -78,6 +79,7 @@ func (r *Registry) All() []Tool {
 	for _, t := range r.tools {
 		tools = append(tools, t)
 	}
+	sort.Slice(tools, func(i, j int) bool { return tools[i].Name() < tools[j].Name() })
 	return tools
 }
 
@@ -87,5 +89,6 @@ func (r *Registry) Names() []string {
 	for n := range r.tools {
 		names = append(names, n)
 	}
+	sort.Strings(names)
 	return names
 }

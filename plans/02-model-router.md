@@ -306,9 +306,9 @@ Main agent 使用 active_model 运行。Subtask 的模型由 main agent 在 `spa
 
 ## 缓存策略
 
-### API 缓存（prefix cache）
+### API 缓存（prefix / KV cache）
 
-利用各厂商的 prefix cache 机制（OpenAI automatic prefix caching、Anthropic prompt caching）：
+Suna 不绑定具体厂商的缓存协议。当前策略是保持自然前缀稳定，让支持 automatic prefix cache、KV pool 或 prompt cache 的服务自行命中：
 
 ```
 原则: 不变的内容放前面，变化的内容放后面
@@ -316,24 +316,18 @@ Main agent 使用 active_model 运行。Subtask 的模型由 main agent 在 `spa
 构建 CompletionRequest 时的固定顺序:
   1. System prompt (几乎不变)
   2. 工具定义 (很少变)
-  3. 对话历史 (逐步追加)
-  4. 最新消息 (每轮变)
+  3. 对话历史 / compact summary (逐步追加)
+  4. Active memory (query-based，靠近当前用户消息)
+  5. 最新消息 (每轮变)
 
 不要做的:
   ❌ 每次重排 system prompt 中的段落
   ❌ 在固定段落中间插入动态内容
   ❌ 频繁变更工具定义
+  ❌ 默认注入 provider-specific cache_control / prompt_cache_key
 ```
 
-### Anthropic prompt caching — 目标设计
-
-Anthropic 支持 `cache_control` 标记，可以显式标记哪些内容应该被缓存；当前 provider 适配层尚未写入 cache_control：
-
-```
-System prompt 的能力列表部分 → 标记为 cacheable
-  因为在一次会话中能力列表通常不变
-  多次调用共享缓存，减少输入 token 计费
-```
+显式缓存断点（如 Anthropic `cache_control` 或 OpenAI `prompt_cache_key`）不是默认行为。若未来需要支持，应作为 provider/model 配置项引入，避免为了单个服务破坏 OpenAI-compatible 通用请求结构。
 
 ### 本地缓存（可选，未实现）
 

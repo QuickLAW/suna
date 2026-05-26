@@ -175,10 +175,11 @@ TUI/local transport 只传 `path`、`url` 或 `attachment` 引用。粘贴的 `d
 │     └── Subtask 返回                                         │
 │                                                               │
 │  2. 构建请求                                                  │
-│     ├── System Prompt (固定模板 + 能力提示词 + memory policy) │
+│     ├── System Prompt (固定模板 + AGENTS.md + capabilities)   │
+│     ├── 工具定义 (main 暴露内置工具；subtask 只暴露授权工具)    │
+│     ├── 对话历史 / compact summary                            │
 │     ├── Active Memory brief (最多 5 条，见 06-memory.md)      │
-│     ├── 对话历史 (带压缩)                                     │
-│     └── 工具定义 (main 暴露内置工具；subtask 只暴露授权工具)    │
+│     └── 当前用户消息                                           │
 │                                                               │
 │  3. 调用模型 (streaming 能力取决于 provider，路由见 02)       │
 │     └── 输出文本 + 可能的 tool_calls                           │
@@ -261,14 +262,18 @@ Subtask 不能创建嵌套 subtask（工具列表不含 Spawn）。
 ```
 模型上下文窗口 (以 128K 为例):
 ┌──────────────────────────────────────────────┐
-│ System Prompt          ~4K tokens            │
+│ System Prompt          尽量短且稳定           │
 │   ├── 固定指令                               │
-│   ├── 能力提示词 (按相关性筛选)               │
-│   └── 项目配置 (SUNA.md)                     │
+│   ├── AGENTS.md 项目指令 (如存在)             │
+│   └── capabilities 摘要                      │
 ├──────────────────────────────────────────────┤
-│ 动态上下文             ~1K tokens            │
-│   ├── Active Memory brief (最多 5 条)         │
-│   └── 上一轮 conversation_state 恢复摘要      │
+│ 工具 schemas           稳定排序               │
+├──────────────────────────────────────────────┤
+│ Working Memory         当前会话短期上下文      │
+│   ├── compact summary (如已压缩)              │
+│   ├── prior conversation                      │
+│   ├── Active Memory brief (当前轮背景)         │
+│   └── current user message                    │
 ├──────────────────────────────────────────────┤
 │ 当前工具结果            ~20K tokens           │
 ├──────────────────────────────────────────────┤
@@ -276,7 +281,7 @@ Subtask 不能创建嵌套 subtask（工具列表不含 Spawn）。
 └──────────────────────────────────────────────┘
 ```
 
-设计原则：固定 System Prompt 尽量稳定，动态 active memory 和恢复状态短且靠后。Suna 不把长期会话历史作为上下文来源，只保留当前 working memory、上一轮恢复快照和少量 active memory。
+设计原则：固定 System Prompt 和 tool schemas 尽量稳定；query-based active memory 仍然召回，但注入到最新 user message 之前，作为当前轮背景，避免挡在 prior conversation 前面破坏连续对话前缀。Suna 不把长期会话历史作为上下文来源，只保留当前 working memory、上一轮恢复快照和少量 active memory。
 
 ### 何时压缩
 
@@ -332,15 +337,12 @@ Subtask 不能创建嵌套 subtask（工具列表不含 Spawn）。
 ```
 不变的内容放前面，变化的内容放后面:
 
-System Prompt → 几乎不变 → cache 命中率高
-  构建时按固定顺序拼接:
-    1. 固定系统指令 (永远不变)
-    2. 能力提示词列表 (只在能力变更时变)
-    3. Active Memory brief (短、稳定排序)
-    4. Conversation resume state (仅恢复上一轮时有)
-    5. 当前消息 (最新)
+System Prompt + tool schemas + prior conversation → 尽量稳定
+Active Memory brief → query-based，放在最新 user message 之前
+Current user message / new tool results → 放在尾部
 
-固定内容在前，动态内容靠后，保证 prompt cache 命中。
+Suna 不默认注入 provider-specific cache_control / prompt_cache_key。
+缓存命中依赖服务端策略，但 Suna 保证自然前缀稳定。
 ```
 
 ## 任务拆解策略
@@ -448,22 +450,20 @@ Main: 测试通过 → 通知用户完成
 
 ### 项目级配置
 
-除全局 `~/.suna/config.toml` 外，Suna 支持项目级配置文件：
+除全局 `~/.suna/config.toml` 外，Suna 支持项目级 agent 指令文件：
 
 ```
 工作目录/
-├── SUNA.md              # 项目级 agent 指令 (自动加载)
-├── .suna/
-│   └── AGENTS.md        # 等效 (二选一)
+├── AGENTS.md            # 项目级 agent 指令 (自动加载)
 └── ...
 ```
 
-加载优先级: SUNA.md > .suna/AGENTS.md
+加载规则: 只读取当前工作目录下的 `AGENTS.md`。不读取 `SUNA.md` 或 `.suna/AGENTS.md`。
 
-内容: 纯 Markdown，与 CLAUDE.md / OpenClaw AGENTS.md 格式兼容
+内容: 纯 Markdown，与主流 agent 的 `AGENTS.md` 项目指令风格兼容。
 
 ```
-# SUNA.md 示例
+# AGENTS.md 示例
 
 ## 项目信息
 Go 1.22 + Gin 框架的 REST API 服务
@@ -483,7 +483,7 @@ Go 1.22 + Gin 框架的 REST API 服务
 ```
 优先级 (高→低):
   1. 用户消息中的显式指令 (当前对话)
-  2. SUNA.md / .suna/AGENTS.md (项目级)
+  2. AGENTS.md (项目级)
   3. Active Memory (用户偏好/习惯/纠错)
   4. 默认系统提示词
 ```
@@ -491,80 +491,14 @@ Go 1.22 + Gin 框架的 REST API 服务
 ### System Prompt 模板
 
 ```
-你是 Suna，一个通用 AI agent。
-
-## 身份
-你是一个智能助手，能够通过工具感知和改变环境。
-
-## 工作方式
-- 优先使用已有能力（见下方能力列表）完成任务
-- 遇到不确定的操作，先询问用户
-- 操作失败时，分析原因并调整策略
-
-## 工具使用原则
-- Perceive 工具不需要确认，可以直接使用
-- Act 工具会经过安全审查
-- 复杂任务应该拆解为子任务并行处理
-- 不要重复执行已经成功的操作
-
-## 环境
-操作系统: {{ runtime.GOOS }}/{{ runtime.GOARCH }}
-Shell: {{ 自动检测: bash / powershell / cmd }}
-路径分隔符: {{ os.PathSeparator }}
-当前用户: {{ os.Username }}
-工作目录: {{ os.Getwd }}
-当前时间: {{ time.Now }}
-
-注意: 使用当前操作系统兼容的命令和路径格式。
-
-{{ 项目配置 (SUNA.md 内容，如有) }}
-
-## Active Memory
-{{ active_memory_brief，最多 5 条 }}
-
-## Previous Conversation State
-{{ conversation_state.resume_summary，恢复上一轮时使用 }}
-
-## 当前能力
-{{ 能力摘要列表 (每个能力前200字)，LLM 按需加载完整 SKILL.md }}
-```
-
-注：active memory 是短小动态背景，不是完整历史。固定系统提示词在前，动态记忆和恢复状态靠后，保证 cache 友好。
-
-### System Prompt 模板
-
-```
-你是 Suna，一个通用 AI agent。
-
-## 身份
-你是一个智能助手，能够通过工具感知和改变环境。
-
-## 工作方式
-- 优先使用已有能力（见下方能力列表）完成任务
-- 遇到不确定的操作，先询问用户
-- 操作失败时，分析原因并调整策略
-
-## 工具使用原则
-- Perceive 工具不需要确认，可以直接使用
-- Act 工具会经过安全审查
-- 复杂任务应该拆解为子任务并行处理
-- 不要重复执行已经成功的操作
-
-## 当前能力
-{{ 能力摘要列表 (每个能力前200字)，LLM 按需加载完整 SKILL.md }}
-
-## Active Memory
-{{ 从 user_memory 召回的少量 active memory }}
-
-## 环境
-操作系统: {{ runtime.GOOS }}/{{ runtime.GOARCH }}
-Shell: {{ 自动检测: bash / powershell / cmd }}
-路径分隔符: {{ os.PathSeparator }}
-当前用户: {{ os.Username }}
-工作目录: {{ os.Getwd() }}
-当前时间: {{ time.Now }}
-
-注意: 使用当前操作系统兼容的命令和路径格式。
+You are Suna, a general-purpose main agent...
+Tool calls: include intent...
+Delegation: use spawn only for isolated subtasks...
+Memory: active memory is lightweight background...
+Environment: OS/arch, cwd, active model...
+Spawnable models: ...
+Project instructions from AGENTS.md: ...
+Capabilities: ...
 ```
 
 环境信息的作用:
@@ -572,7 +506,6 @@ Shell: {{ 自动检测: bash / powershell / cmd }}
   2. 引导 LLM 使用正确的路径分隔符
   3. 避免跨平台命令误操作 (Windows 上 rm -rf 无效但 rmdir /s /q 危险)
   4. 提供工作目录上下文，LLM 生成相对路径时更准确
-```
 
 ## Daemon 架构
 

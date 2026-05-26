@@ -11,17 +11,17 @@ type EditFile struct{}
 
 func (EditFile) Name() string { return "editfile" }
 func (EditFile) Description() string {
-	return "精确编辑文件的部分内容。通过 old_string 匹配并替换为 new_string。"
+	return "Edit a file by replacing an exact old_string match with new_string."
 }
 func (EditFile) Category() Category { return Act }
 func (EditFile) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"path":        map[string]any{"type": "string", "description": "文件路径"},
-			"old_string":  map[string]any{"type": "string", "description": "要替换的原文本"},
-			"new_string":  map[string]any{"type": "string", "description": "替换后的新文本"},
-			"replace_all": map[string]any{"type": "boolean", "description": "是否替换所有匹配项"},
+			"path":        map[string]any{"type": "string", "description": "File path"},
+			"old_string":  map[string]any{"type": "string", "description": "Exact text to replace"},
+			"new_string":  map[string]any{"type": "string", "description": "Replacement text"},
+			"replace_all": map[string]any{"type": "boolean", "description": "Whether to replace all matches"},
 		},
 		"required": []string{"path", "old_string", "new_string"},
 	}

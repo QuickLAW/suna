@@ -20,16 +20,16 @@ type ReadHTTP struct{}
 
 func (ReadHTTP) Name() string { return "readhttp" }
 func (ReadHTTP) Description() string {
-	return "发送 HTTP GET 请求，返回响应内容。用于获取网页、API 数据等。"
+	return "Send an HTTP GET request and return response status, headers, and body."
 }
 func (ReadHTTP) Category() Category { return Perceive }
 func (ReadHTTP) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"url":     map[string]any{"type": "string", "description": "请求 URL"},
-			"headers": map[string]any{"type": "object", "description": "请求头"},
-			"timeout": map[string]any{"type": "integer", "description": "超时秒数（默认30）"},
+			"url":     map[string]any{"type": "string", "description": "Request URL"},
+			"headers": map[string]any{"type": "object", "description": "Request headers"},
+			"timeout": map[string]any{"type": "integer", "description": "Timeout in seconds, default 30"},
 		},
 		"required": []string{"url"},
 	}

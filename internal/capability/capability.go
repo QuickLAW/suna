@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -247,8 +248,14 @@ func (l *Loader) Summary() string {
 	if len(l.capabilities) == 0 {
 		return ""
 	}
-	var lines []string
-	for _, cap := range l.capabilities {
+	names := make([]string, 0, len(l.capabilities))
+	for name := range l.capabilities {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	lines := make([]string, 0, len(names))
+	for _, name := range names {
+		cap := l.capabilities[name]
 		lines = append(lines, fmt.Sprintf("- %s: %s", cap.Name, cap.Description))
 	}
 	return strings.Join(lines, "\n")

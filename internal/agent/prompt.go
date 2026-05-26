@@ -19,11 +19,8 @@ func (a *Agent) buildSystemPrompt(ctx context.Context) (string, error) {
 	env := getEnvInfo()
 	projectConfig := ""
 	wd, _ := os.Getwd()
-	for _, name := range []string{"SUNA.md", ".suna/AGENTS.md"} {
-		if data, err := os.ReadFile(filepath.Join(wd, name)); err == nil {
-			projectConfig = string(data)
-			break
-		}
+	if data, err := os.ReadFile(filepath.Join(wd, "AGENTS.md")); err == nil {
+		projectConfig = string(data)
 	}
 	capabilities := ""
 	if a.caps != nil {
@@ -50,9 +47,25 @@ func (a *Agent) buildRequestMessages(ctx context.Context) []model.Message {
 		"<active_memory>\n" + brief + "\n</active_memory>\n" +
 		"</internal_context>"
 	out := make([]model.Message, 0, len(msgs)+1)
+	insert := latestUserMessageIndex(msgs)
+	if insert < 0 {
+		out = append(out, model.NewTextMessage(model.RoleUser, contextBlock))
+		out = append(out, msgs...)
+		return out
+	}
+	out = append(out, msgs[:insert]...)
 	out = append(out, model.NewTextMessage(model.RoleUser, contextBlock))
-	out = append(out, msgs...)
+	out = append(out, msgs[insert:]...)
 	return out
+}
+
+func latestUserMessageIndex(msgs []model.Message) int {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == model.RoleUser {
+			return i
+		}
+	}
+	return -1
 }
 
 func (a *Agent) activeModelSummary() string {
