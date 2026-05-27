@@ -147,3 +147,43 @@ func TestReasoningSavesInlineThinkingTable(t *testing.T) {
 		t.Fatalf("thinking.type = %#v", got)
 	}
 }
+
+func TestDeleteCredentialRemovesOnlyProvider(t *testing.T) {
+	dir := t.TempDir()
+	if err := SaveCredential(dir, "openai", "sk-openai"); err != nil {
+		t.Fatalf("SaveCredential openai: %v", err)
+	}
+	if err := SaveCredential(dir, "anthropic", "sk-anthropic"); err != nil {
+		t.Fatalf("SaveCredential anthropic: %v", err)
+	}
+	if err := DeleteCredential(dir, "openai"); err != nil {
+		t.Fatalf("DeleteCredential: %v", err)
+	}
+	creds, err := readCredentials(dir)
+	if err != nil {
+		t.Fatalf("readCredentials: %v", err)
+	}
+	if _, ok := creds["openai"]; ok {
+		t.Fatalf("openai credential still present: %#v", creds)
+	}
+	if got := creds["anthropic"].APIKey; got != "sk-anthropic" {
+		t.Fatalf("anthropic key = %q", got)
+	}
+}
+
+func TestDeleteCredentialMissingProviderIsNoop(t *testing.T) {
+	dir := t.TempDir()
+	if err := SaveCredential(dir, "openai", "sk-openai"); err != nil {
+		t.Fatalf("SaveCredential: %v", err)
+	}
+	if err := DeleteCredential(dir, "missing"); err != nil {
+		t.Fatalf("DeleteCredential missing provider: %v", err)
+	}
+	creds, err := readCredentials(dir)
+	if err != nil {
+		t.Fatalf("readCredentials: %v", err)
+	}
+	if got := creds["openai"].APIKey; got != "sk-openai" {
+		t.Fatalf("openai key = %q", got)
+	}
+}

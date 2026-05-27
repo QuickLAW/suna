@@ -384,6 +384,22 @@ func SaveCredential(dataDir, provider, apiKey string) error {
 	return writeCredentials(dataDir, creds)
 }
 
+// DeleteCredential removes a stored provider credential. Missing files or absent providers are no-ops.
+func DeleteCredential(dataDir, provider string) error {
+	creds, err := readCredentials(dataDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if _, ok := creds[provider]; !ok {
+		return nil
+	}
+	delete(creds, provider)
+	return writeCredentials(dataDir, creds)
+}
+
 // LoadCredentials 将 credentials.toml 中的密钥注入到对应 ModelConfig；解析错误会直接返回。
 func LoadCredentials(cfg *Config) error {
 	creds, err := readCredentials(cfg.DataDir)

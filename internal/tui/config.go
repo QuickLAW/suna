@@ -123,12 +123,16 @@ func (t *TUI) updateConfig(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "ctrl+c":
 				t.doQuit()
 				return t, tea.Quit
-			case "left", "h", "up", "k", "tab", "shift+tab", "right", "l", "down", "j":
-				if t.configDeleteCursor == 0 {
-					t.configDeleteCursor = 1
-				} else {
-					t.configDeleteCursor = 0
+			case "left", "h", "up", "k", "shift+tab", "right", "l", "down", "j", "tab":
+				options := t.configDeleteOptions()
+				if len(options) == 0 {
+					return t, nil
 				}
+				delta := 1
+				if m.String() == "left" || m.String() == "h" || m.String() == "up" || m.String() == "k" || m.String() == "shift+tab" {
+					delta = -1
+				}
+				t.configDeleteCursor = (t.configDeleteCursor + delta + len(options)) % len(options)
 				return t, nil
 			case "enter":
 				if t.configDeleteCursor == 0 {
@@ -137,9 +141,10 @@ func (t *TUI) updateConfig(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return t, nil
 				}
 				ref := t.configDeleteConfirm
+				deleteAPIKey := t.configDeleteCursor == 2 && t.shouldOfferDeleteAPIKey(ref)
 				t.configDeleteConfirm = ""
 				t.configDeleteCursor = 0
-				return t, t.sendConfigSet(protocol.ConfigSetParams{Action: protocol.ConfigActionDeleteModel, ModelRef: ref})
+				return t, t.sendConfigSet(protocol.ConfigSetParams{Action: protocol.ConfigActionDeleteModel, ModelRef: ref, DeleteAPIKey: deleteAPIKey})
 			case "esc":
 				t.configDeleteConfirm = ""
 				t.configDeleteCursor = 0

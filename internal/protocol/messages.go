@@ -102,15 +102,16 @@ type ConfigModel struct {
 }
 
 type ConfigSetParams struct {
-	Action      string      `json:"action"`
-	Model       ConfigModel `json:"model,omitempty"`
-	ModelRef    string      `json:"model_ref,omitempty"`
-	ActiveModel string      `json:"active_model,omitempty"`
-	APIKey      string      `json:"api_key,omitempty"`
-	Locale      string      `json:"locale,omitempty"`
-	Theme       string      `json:"theme,omitempty"`
-	GuardMode   string      `json:"guard_mode,omitempty"`
-	Workspace   *string     `json:"workspace,omitempty"`
+	Action       string      `json:"action"`
+	Model        ConfigModel `json:"model,omitempty"`
+	ModelRef     string      `json:"model_ref,omitempty"`
+	ActiveModel  string      `json:"active_model,omitempty"`
+	APIKey       string      `json:"api_key,omitempty"`
+	DeleteAPIKey bool        `json:"delete_api_key,omitempty"`
+	Locale       string      `json:"locale,omitempty"`
+	Theme        string      `json:"theme,omitempty"`
+	GuardMode    string      `json:"guard_mode,omitempty"`
+	Workspace    *string     `json:"workspace,omitempty"`
 }
 
 type MemoryStats struct {

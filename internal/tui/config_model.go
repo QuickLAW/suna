@@ -400,6 +400,31 @@ func (t *TUI) selectedConfigModel(rows []configRow) (string, bool) {
 	return rows[t.configCursor].name, true
 }
 
+func (t *TUI) shouldOfferDeleteAPIKey(ref string) bool {
+	mc, ok := t.modelByRef(ref)
+	if !ok || !mc.HasAPIKey {
+		return false
+	}
+	count := 0
+	for _, existing := range t.configModelsSnapshot() {
+		if existing.Provider == mc.Provider {
+			count++
+		}
+	}
+	return count == 1
+}
+
+func (t *TUI) configDeleteOptions() []string {
+	options := []string{t.tr("tui.config.cancel"), t.tr("tui.config.delete_model")}
+	if t.shouldOfferDeleteAPIKey(t.configDeleteConfirm) {
+		options = append(options, t.tr("tui.config.delete_model_and_api_key"))
+	}
+	if t.configDeleteCursor >= len(options) {
+		t.configDeleteCursor = len(options) - 1
+	}
+	return options
+}
+
 func (t *TUI) configModelsSnapshot() []tuiModelConfig {
 	models := make([]tuiModelConfig, 0, len(t.configState.Models))
 	for _, cm := range t.configState.Models {
@@ -613,9 +638,16 @@ func (t *TUI) configRowLabelStyle(label string, st lipgloss.Style) string {
 
 func (t *TUI) renderConfigDeleteConfirm() string {
 	message := styleError.Render("✗ " + t.i18n.Tf("tui.config.delete_confirm", t.configDeleteConfirm))
-	cancel := t.configConfirmButton(0, t.tr("tui.config.cancel"))
-	delete := t.configConfirmButton(1, t.tr("tui.config.delete_model"))
-	body := message + "\n\n" + cancel + "  " + delete + "\n" + styleDim.Render(t.tr("tui.config.delete_help"))
+	if t.shouldOfferDeleteAPIKey(t.configDeleteConfirm) {
+		if mc, ok := t.modelByRef(t.configDeleteConfirm); ok {
+			message += "\n" + styleDim.Render(t.i18n.Tf("tui.config.delete_last_provider_key_hint", mc.Provider))
+		}
+	}
+	buttons := make([]string, 0, 3)
+	for i, label := range t.configDeleteOptions() {
+		buttons = append(buttons, t.configConfirmButton(i, label))
+	}
+	body := message + "\n\n" + strings.Join(buttons, "  ") + "\n" + styleDim.Render(t.tr("tui.config.delete_help"))
 	return boxStyle.Width(min(max(44, t.width-8), 72)).Padding(1, 2).Render(body)
 }
 

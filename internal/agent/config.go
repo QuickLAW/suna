@@ -10,15 +10,16 @@ import (
 )
 
 type ConfigSetParams struct {
-	Action      string
-	Model       ConfigModel
-	ModelRef    string
-	ActiveModel string
-	APIKey      string
-	Locale      string
-	Theme       string
-	GuardMode   string
-	Workspace   *string
+	Action       string
+	Model        ConfigModel
+	ModelRef     string
+	ActiveModel  string
+	APIKey       string
+	DeleteAPIKey bool
+	Locale       string
+	Theme        string
+	GuardMode    string
+	Workspace    *string
 }
 
 type ConfigModel struct {
@@ -100,13 +101,21 @@ func (a *Agent) UpdateConfig(params ConfigSetParams) (*config.Config, error) {
 		if params.ModelRef == "" {
 			return nil, fmt.Errorf("model_ref is required")
 		}
+		deletedProvider := ""
 		filtered := cfg.Models[:0]
 		for _, mc := range cfg.Models {
 			if mc.Ref() != params.ModelRef {
 				filtered = append(filtered, mc)
+			} else {
+				deletedProvider = mc.Provider
 			}
 		}
 		cfg.Models = filtered
+		if params.DeleteAPIKey && deletedProvider != "" && !providerStillUsed(cfg.Models, deletedProvider) {
+			if err := config.DeleteCredential(cfg.DataDir, deletedProvider); err != nil {
+				return nil, err
+			}
+		}
 		if cfg.ActiveModel == params.ModelRef {
 			cfg.ActiveModel = ""
 			if len(cfg.Models) > 0 {
@@ -149,6 +158,15 @@ func (a *Agent) UpdateConfig(params ConfigSetParams) (*config.Config, error) {
 		a.configModTime = info.ModTime()
 	}
 	return cfg, nil
+}
+
+func providerStillUsed(models []config.ModelConfig, provider string) bool {
+	for _, mc := range models {
+		if mc.Provider == provider {
+			return true
+		}
+	}
+	return false
 }
 
 func cloneMap(in map[string]any) map[string]any {
