@@ -90,26 +90,27 @@ func normalizeThemeName(name string) string {
 
 func resolveTheme(name string) themePalette {
 	name = normalizeThemeName(name)
-	if name == ThemeLight || name == ThemeAuto && terminalLooksLight() {
+	switch name {
+	case ThemeDark:
+		return darkPalette()
+	case ThemeAuto:
+		if !terminalLooksDark() {
+			return lightPalette()
+		}
+		return darkPalette()
+	default:
 		return lightPalette()
 	}
-	return darkPalette()
 }
 
-func terminalLooksLight() bool {
-	// 终端通常不暴露可靠的背景色 API；auto 先通过显式环境变量和常见主题名做保守判断。
+func terminalLooksDark() bool {
+	// 终端通常不暴露可靠的背景色 API；auto 只在明确识别为 dark 时使用深色。
 	for _, key := range []string{"COLORFGBG", "TERMINAL_THEME", "THEME", "APPEARANCE"} {
 		value := strings.ToLower(os.Getenv(key))
 		if value == "" {
 			continue
 		}
-		if strings.Contains(value, "light") {
-			return true
-		}
 		if strings.Contains(value, "dark") {
-			return false
-		}
-		if key == "COLORFGBG" && strings.HasSuffix(value, ";15") {
 			return true
 		}
 	}
