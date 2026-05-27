@@ -206,6 +206,7 @@ func (t *TUI) saveReasoning(reasoning map[string]any) tea.Cmd {
 		reasoning = nil
 	}
 	mc.Reasoning = reasoning
+	t.updateConfigModelReasoning(mc.Ref(), reasoning)
 	t.configReasoningOpen = false
 	t.configReasoningFamily = ""
 	return t.sendConfigSet(protocol.ConfigSetParams{Action: protocol.ConfigActionUpsertModel, ModelRef: mc.Ref(), Model: protocol.ConfigModel{Provider: mc.Provider, Model: mc.Model, BaseURL: mc.BaseURL, ContextWindow: mc.ContextWindow, Strengths: mc.Strengths, Reasoning: reasoning}})

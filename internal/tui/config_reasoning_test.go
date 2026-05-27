@@ -33,6 +33,28 @@ func TestReasoningLabelMatch(t *testing.T) {
 	}
 }
 
+func TestSaveReasoningUpdatesDetailStateImmediately(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleEN), configDetailRef: "deepseek/deepseek-v4-pro", configState: testReasoningConfig("deepseek", "deepseek-v4-pro")}
+
+	tui.saveReasoning(deepSeekReasoning("max"))
+	mc, ok := tui.modelByRef("deepseek/deepseek-v4-pro")
+	if !ok {
+		t.Fatal("model not found")
+	}
+	if got := tui.reasoningDisplay(mc); got != "DeepSeek V4 / Max" {
+		t.Fatalf("reasoningDisplay after save = %q", got)
+	}
+
+	tui.saveReasoning(nil)
+	mc, ok = tui.modelByRef("deepseek/deepseek-v4-pro")
+	if !ok {
+		t.Fatal("model not found after clear")
+	}
+	if got := tui.reasoningDisplay(mc); got != "" {
+		t.Fatalf("reasoningDisplay after clear = %q, want empty", got)
+	}
+}
+
 func testReasoningConfig(provider, model string) protocol.ConfigParams {
 	return protocol.ConfigParams{Models: []protocol.ConfigModel{{Provider: provider, Model: model}}}
 }

@@ -442,6 +442,16 @@ func (t *TUI) modelByRef(ref string) (tuiModelConfig, bool) {
 	return tuiModelConfig{}, false
 }
 
+func (t *TUI) updateConfigModelReasoning(ref string, reasoning map[string]any) bool {
+	for i, mc := range t.configState.Models {
+		if mc.Provider+"/"+mc.Model == ref {
+			t.configState.Models[i].Reasoning = reasoning
+			return true
+		}
+	}
+	return false
+}
+
 func (t *TUI) isActiveModelRef(ref string) bool {
 	if ref == "" {
 		return false
