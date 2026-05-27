@@ -7,6 +7,7 @@ import (
 	"github.com/alanchenchen/suna/internal/config"
 	"github.com/alanchenchen/suna/internal/memory"
 	"github.com/alanchenchen/suna/internal/model"
+	"github.com/alanchenchen/suna/internal/protocol"
 )
 
 type ConfigSetParams struct {
@@ -68,7 +69,7 @@ func (a *Agent) UpdateConfig(params ConfigSetParams) (*config.Config, error) {
 		return nil, fmt.Errorf("config not loaded")
 	}
 	switch params.Action {
-	case "upsert_model":
+	case protocol.ConfigActionUpsertModel:
 		mc := config.ModelConfig{Provider: params.Model.Provider, Model: params.Model.Model, BaseURL: params.Model.BaseURL, ContextWindow: params.Model.ContextWindow, Strengths: append([]string(nil), params.Model.Strengths...), Reasoning: cloneMap(params.Model.Reasoning)}
 		if mc.Provider == "" || mc.Model == "" {
 			return nil, fmt.Errorf("provider and model are required")
@@ -97,7 +98,7 @@ func (a *Agent) UpdateConfig(params ConfigSetParams) (*config.Config, error) {
 				return nil, err
 			}
 		}
-	case "delete_model":
+	case protocol.ConfigActionDeleteModel:
 		if params.ModelRef == "" {
 			return nil, fmt.Errorf("model_ref is required")
 		}
@@ -122,12 +123,12 @@ func (a *Agent) UpdateConfig(params ConfigSetParams) (*config.Config, error) {
 				cfg.ActiveModel = cfg.Models[0].Ref()
 			}
 		}
-	case "activate_model":
+	case protocol.ConfigActionActivateModel:
 		if _, ok := cfg.ModelByRef(params.ActiveModel); !ok {
 			return nil, fmt.Errorf("model %q not found", params.ActiveModel)
 		}
 		cfg.ActiveModel = params.ActiveModel
-	case "update_general":
+	case protocol.ConfigActionUpdateGeneral:
 		if params.Locale != "" {
 			cfg.UI.Locale = params.Locale
 		}

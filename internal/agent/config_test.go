@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/alanchenchen/suna/internal/config"
+	"github.com/alanchenchen/suna/internal/protocol"
 )
 
 func TestUpdateConfigDeleteModelKeepsCredentialByDefault(t *testing.T) {
@@ -20,7 +21,7 @@ func TestUpdateConfigDeleteModelKeepsCredentialByDefault(t *testing.T) {
 	}
 	a := &Agent{cfg: cfg}
 
-	if _, err := a.UpdateConfig(ConfigSetParams{Action: "delete_model", ModelRef: "openai/gpt-4o-mini"}); err != nil {
+	if _, err := a.UpdateConfig(ConfigSetParams{Action: protocol.ConfigActionDeleteModel, ModelRef: "openai/gpt-4o-mini"}); err != nil {
 		t.Fatalf("UpdateConfig: %v", err)
 	}
 	loaded := &config.Config{Models: []config.ModelConfig{{Provider: "openai", Model: "gpt-4o-mini"}}, DataDir: dir}
@@ -46,7 +47,7 @@ func TestUpdateConfigDeleteLastProviderModelCanDeleteCredential(t *testing.T) {
 	}
 	a := &Agent{cfg: cfg}
 
-	if _, err := a.UpdateConfig(ConfigSetParams{Action: "delete_model", ModelRef: "openai/gpt-4o-mini", DeleteAPIKey: true}); err != nil {
+	if _, err := a.UpdateConfig(ConfigSetParams{Action: protocol.ConfigActionDeleteModel, ModelRef: "openai/gpt-4o-mini", DeleteAPIKey: true}); err != nil {
 		t.Fatalf("UpdateConfig: %v", err)
 	}
 	loaded := &config.Config{Models: []config.ModelConfig{{Provider: "openai", Model: "gpt-4o-mini"}}, DataDir: dir}
@@ -75,7 +76,7 @@ func TestUpdateConfigDoesNotDeleteCredentialWhenProviderStillUsed(t *testing.T) 
 	}
 	a := &Agent{cfg: cfg}
 
-	if _, err := a.UpdateConfig(ConfigSetParams{Action: "delete_model", ModelRef: "openai/gpt-4o-mini", DeleteAPIKey: true}); err != nil {
+	if _, err := a.UpdateConfig(ConfigSetParams{Action: protocol.ConfigActionDeleteModel, ModelRef: "openai/gpt-4o-mini", DeleteAPIKey: true}); err != nil {
 		t.Fatalf("UpdateConfig: %v", err)
 	}
 	loaded := &config.Config{Models: []config.ModelConfig{{Provider: "openai", Model: "gpt-4o"}}, DataDir: dir}

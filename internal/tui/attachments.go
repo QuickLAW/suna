@@ -137,7 +137,7 @@ func (t *TUI) updatePendingImagePaste(key string) tea.Cmd {
 	case "esc", "n", "N":
 		p := t.pendingImagePaste
 		t.pendingImagePaste = nil
-		if p.SourceKind == "path" || p.SourceKind == "url" {
+		if p.SourceKind == protocol.AttachmentKindPath || p.SourceKind == protocol.AttachmentKindURL {
 			t.ta.InsertString(p.Raw)
 			t.layoutChat()
 		}
