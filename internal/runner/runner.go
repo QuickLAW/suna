@@ -80,6 +80,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		if r.Sink != nil {
 			r.Sink.Status("waiting_llm")
 		}
+		requestStarted := time.Now()
 		ch, err := r.Router.Complete(ctx, req.ModelRef, completionReq)
 		if err != nil {
 			return result, err
@@ -91,6 +92,20 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		}
 		if usage != nil {
 			result.Usage = usage
+			if r.Sink != nil {
+				contextTokens := usage.TotalTokens
+				if contextTokens <= 0 {
+					contextTokens = usage.InputTokens + usage.OutputTokens
+				}
+				r.Sink.Usage(UsageEvent{
+					InputTokens:   usage.InputTokens,
+					OutputTokens:  usage.OutputTokens,
+					CachedTokens:  usage.CachedTokens,
+					ContextTokens: contextTokens,
+					ContextWindow: contextWindow,
+					Duration:      time.Since(requestStarted),
+				})
+			}
 			if r.UsageSink != nil {
 				r.UsageSink.RecordUsage(ctx, req.ModelID, usage)
 			}

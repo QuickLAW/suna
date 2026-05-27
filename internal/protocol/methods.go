@@ -52,6 +52,7 @@ const (
 const (
 	NotifyStream       = "agent.stream"
 	NotifyReasoning    = "agent.reasoning"
+	NotifyUsage        = "agent.usage"
 	NotifyToolStart    = "agent.tool_start"
 	NotifyToolEnd      = "agent.tool_end"
 	NotifyAskUser      = "agent.ask_user"

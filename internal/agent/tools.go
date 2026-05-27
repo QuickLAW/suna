@@ -242,6 +242,8 @@ type subtaskSink struct {
 func (s subtaskSink) Status(content string)    {}
 func (s subtaskSink) Stream(content string)    {}
 func (s subtaskSink) Reasoning(content string) {}
+// subtask 的 usage 只需要落库，不进入主 TUI token 展示。
+func (s subtaskSink) Usage(usage runner.UsageEvent) {}
 func (s subtaskSink) ToolCall(call runner.ToolCallEvent) {
 	s.events <- Event{Type: EventToolCall, ToolCallID: s.namespaced(call.ID), ToolName: call.Name, ToolParams: call.Params, ToolIntent: call.Intent}
 }

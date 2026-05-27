@@ -125,6 +125,12 @@ func (s *service) runAgent(ctx context.Context, connID, inputText string, input 
 			emit(ctx, sink, protocol.NotifyStream, protocol.StreamParams{Chunk: evt.Content})
 		case agent.EventReasoning:
 			emit(ctx, sink, protocol.NotifyReasoning, protocol.StreamParams{Chunk: evt.Content})
+		case agent.EventUsage:
+			speed := 0.0
+			if evt.OutputTokens > 0 && evt.DurationMs > 0 {
+				speed = float64(evt.OutputTokens) / (float64(evt.DurationMs) / 1000)
+			}
+			emit(ctx, sink, protocol.NotifyUsage, protocol.UsageParams{InputTokens: evt.InputTokens, OutputTokens: evt.OutputTokens, CachedTokens: evt.CachedTokens, ContextTokens: evt.ContextTokens, ContextWindow: evt.ContextWindow, DurationMs: evt.DurationMs, TokensPerSec: speed})
 		case agent.EventToolCall:
 			logging.Info("agent", "tool_call", logging.Event{"conn_id": connID, "tool": evt.ToolName, "intent": evt.ToolIntent})
 			emit(ctx, sink, protocol.NotifyToolStart, protocol.ToolStartParams{ID: evt.ToolCallID, Tool: evt.ToolName, Params: evt.ToolParams, Intent: evt.ToolIntent})
@@ -150,14 +156,8 @@ func (s *service) runAgent(ctx context.Context, connID, inputText string, input 
 				emit(ctx, sink, protocol.NotifyStream, protocol.StreamParams{Chunk: evt.Content, Done: true})
 				emit(ctx, sink, protocol.NotifyDaemonFullStatus, s.buildDaemonStatus(ctx))
 			} else if evt.Content == "done" {
-				speed := 0.0
-				if evt.HasUsage && evt.OutputTokens > 0 {
-					if elapsed := time.Since(started).Seconds(); elapsed > 0 {
-						speed = float64(evt.OutputTokens) / elapsed
-					}
-				}
-				logging.Info("agent", "run_done", logging.Event{"conn_id": connID, "duration_ms": time.Since(started).Milliseconds(), "input_tokens": evt.InputTokens, "output_tokens": evt.OutputTokens, "cached_tokens": evt.CachedTokens})
-				emit(ctx, sink, protocol.NotifyStream, protocol.StreamParams{Done: true, InputTokens: evt.InputTokens, OutputTokens: evt.OutputTokens, CachedTokens: evt.CachedTokens, HasUsage: evt.HasUsage, ContextTokens: evt.ContextTokens, ContextWindow: evt.ContextWindow, TokensPerSec: speed})
+				logging.Info("agent", "run_done", logging.Event{"conn_id": connID, "duration_ms": time.Since(started).Milliseconds()})
+				emit(ctx, sink, protocol.NotifyStream, protocol.StreamParams{Done: true, ContextWindow: evt.ContextWindow})
 				emit(ctx, sink, protocol.NotifyDaemonFullStatus, s.buildDaemonStatus(ctx))
 			}
 		}

@@ -5,6 +5,7 @@ type EventType int
 const (
 	EventStream EventType = iota
 	EventReasoning
+	EventUsage
 	EventToolCall
 	EventToolResult
 	EventStatus
@@ -41,5 +42,5 @@ type Event struct {
 	CachedTokens  int
 	ContextTokens int
 	ContextWindow int
-	HasUsage      bool
+	DurationMs    int64
 }

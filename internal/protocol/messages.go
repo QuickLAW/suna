@@ -7,15 +7,20 @@ type SendMessageParams struct {
 }
 
 type StreamParams struct {
-	Chunk         string  `json:"chunk"`
-	ID            string  `json:"id"`
-	Done          bool    `json:"done,omitempty"`
-	InputTokens   int     `json:"input_tokens,omitempty"`
-	OutputTokens  int     `json:"output_tokens,omitempty"`
+	Chunk         string `json:"chunk"`
+	ID            string `json:"id"`
+	Done          bool   `json:"done,omitempty"`
+	ContextTokens int    `json:"context_tokens,omitempty"`
+	ContextWindow int    `json:"context_window,omitempty"`
+}
+
+type UsageParams struct {
+	InputTokens   int     `json:"input_tokens"`
+	OutputTokens  int     `json:"output_tokens"`
 	CachedTokens  int     `json:"cached_tokens,omitempty"`
-	HasUsage      bool    `json:"has_usage,omitempty"`
 	ContextTokens int     `json:"context_tokens,omitempty"`
 	ContextWindow int     `json:"context_window,omitempty"`
+	DurationMs    int64   `json:"duration_ms,omitempty"`
 	TokensPerSec  float64 `json:"tokens_per_sec,omitempty"`
 }
 

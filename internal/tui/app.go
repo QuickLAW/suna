@@ -330,26 +330,11 @@ func (t *TUI) handleLocalNotification(notif localNotification) {
 				t.messages = append(t.messages, chatMsg{role: "error", content: p.Chunk})
 			}
 			t.resetPhase()
-			t.hasUsage = p.HasUsage
-			t.lastDuration = time.Since(t.streamStart)
-			if p.HasUsage {
-				t.lastInputTok = p.InputTokens
-				t.lastOutputTok = p.OutputTokens
-				t.lastCachedTok = p.CachedTokens
-				t.lastTokensPerSec = p.TokensPerSec
-				t.sessionInputTok += p.InputTokens
-				t.sessionOutputTok += p.OutputTokens
-				t.sessionCachedTok += p.CachedTokens
-				t.contextTokens = p.ContextTokens
-			} else {
-				t.lastInputTok = 0
-				t.lastOutputTok = 0
-				t.lastCachedTok = 0
-				t.lastTokensPerSec = 0
-				t.contextTokens = 0
-			}
 			if p.ContextWindow > 0 {
 				t.contextWindow = p.ContextWindow
+			}
+			if p.ContextTokens > 0 {
+				t.contextTokens = p.ContextTokens
 			}
 			return
 		}
@@ -378,6 +363,28 @@ func (t *TUI) handleLocalNotification(notif localNotification) {
 			t.messages[len(t.messages)-1].content = prev + p.Chunk
 		} else {
 			t.messages = append(t.messages, chatMsg{role: "reasoning", content: p.Chunk})
+		}
+	case protocol.NotifyUsage:
+		var p protocol.UsageParams
+		json.Unmarshal(notif.params, &p)
+		t.hasUsage = true
+		t.lastInputTok = p.InputTokens
+		t.lastOutputTok = p.OutputTokens
+		t.lastCachedTok = p.CachedTokens
+		t.lastTokensPerSec = p.TokensPerSec
+		if p.DurationMs > 0 {
+			t.lastDuration = time.Duration(p.DurationMs) * time.Millisecond
+		} else {
+			t.lastDuration = 0
+		}
+		t.sessionInputTok += p.InputTokens
+		t.sessionOutputTok += p.OutputTokens
+		t.sessionCachedTok += p.CachedTokens
+		if p.ContextTokens > 0 {
+			t.contextTokens = p.ContextTokens
+		}
+		if p.ContextWindow > 0 {
+			t.contextWindow = p.ContextWindow
 		}
 	case protocol.NotifyToolStart:
 		var p protocol.ToolStartParams

@@ -218,18 +218,7 @@ func (a *Agent) Run(ctx context.Context, input Input) <-chan Event {
 		}
 
 		a.enqueueMemoryEvent(runCtx, model.RoleAssistant, res.FinalText, res.HadToolCall, res.HadToolError, false, false)
-		done := Event{Type: EventStatus, Content: "done", ContextWindow: res.ContextWindow}
-		if res.Usage != nil {
-			done.HasUsage = true
-			done.InputTokens = res.Usage.InputTokens
-			done.OutputTokens = res.Usage.OutputTokens
-			done.CachedTokens = res.Usage.CachedTokens
-			done.ContextTokens = res.Usage.TotalTokens
-			if done.ContextTokens <= 0 {
-				done.ContextTokens = done.InputTokens + done.OutputTokens
-			}
-		}
-		events <- done
+		events <- Event{Type: EventStatus, Content: "done", ContextWindow: res.ContextWindow}
 	}()
 	return events
 }
@@ -294,6 +283,17 @@ func (s eventSink) Status(content string) { s.events <- Event{Type: EventStatus,
 func (s eventSink) Stream(content string) { s.events <- Event{Type: EventStream, Content: content} }
 func (s eventSink) Reasoning(content string) {
 	s.events <- Event{Type: EventReasoning, Content: content}
+}
+func (s eventSink) Usage(usage runner.UsageEvent) {
+	s.events <- Event{
+		Type:         EventUsage,
+		InputTokens:  usage.InputTokens,
+		OutputTokens: usage.OutputTokens,
+		CachedTokens: usage.CachedTokens,
+		ContextTokens: usage.ContextTokens,
+		ContextWindow: usage.ContextWindow,
+		DurationMs:   usage.Duration.Milliseconds(),
+	}
 }
 func (s eventSink) ToolCall(call runner.ToolCallEvent) {
 	s.events <- Event{Type: EventToolCall, ToolCallID: call.ID, ToolName: call.Name, ToolParams: call.Params, ToolIntent: call.Intent}

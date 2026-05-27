@@ -51,6 +51,7 @@ type EventSink interface {
 	Status(content string)
 	Stream(content string)
 	Reasoning(content string)
+	Usage(usage UsageEvent)
 	ToolCall(call ToolCallEvent)
 	ToolResult(result ToolResultEvent)
 }
@@ -67,6 +68,15 @@ type ToolResultEvent struct {
 	Name   string
 	Result string
 	Error  bool
+}
+
+type UsageEvent struct {
+	InputTokens   int
+	OutputTokens  int
+	CachedTokens  int
+	ContextTokens int
+	ContextWindow int
+	Duration      time.Duration
 }
 
 type ToolExecutor interface {
