@@ -466,7 +466,8 @@ func (a *Agent) guardLLMReview(ctx context.Context, toolName string, paramsJSON 
 	if err != nil {
 		return "", err
 	}
-	req := &model.CompletionRequest{Model: modelRef, Purpose: "guard_review", RequestID: uuid.New().String(), System: "Reply with JSON only.", Messages: []model.Message{model.NewTextMessage(model.RoleUser, reviewPrompt)}, MaxTokens: 100}
+	modelID := resolveModelID(a.cfg, modelRef)
+	req := &model.CompletionRequest{Model: modelID, Purpose: "guard_review", RequestID: uuid.New().String(), System: "Reply with JSON only.", Messages: []model.Message{model.NewTextMessage(model.RoleUser, reviewPrompt)}, MaxTokens: 100}
 	ch, err := a.router.Complete(ctx, modelRef, req)
 	if err != nil {
 		return "", err

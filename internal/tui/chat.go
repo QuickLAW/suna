@@ -22,6 +22,7 @@ const (
 	phaseLLM
 	phaseThinking
 	phaseTool
+	phaseWaitingAfterTool
 )
 
 var (
@@ -266,6 +267,8 @@ func (t *TUI) currentStatusLabel() string {
 		return t.tr("status.thinking")
 	case phaseTool:
 		return t.tr("status.exec_tool")
+	case phaseWaitingAfterTool:
+		return t.tr("status.waiting_after_tool")
 	default:
 		return ""
 	}
@@ -553,12 +556,18 @@ func (t *TUI) submitGuardDecision(decision string) tea.Cmd {
 		t.markToolRejected(guardToolID)
 	}
 	t.advanceGuardQueue()
+	restartSpinner := false
 	if t.pendingGuard == nil {
 		t.loading = true
 		t.phase = phaseTool
 		t.phaseStart = time.Now()
+		restartSpinner = true
 	}
-	return t.guardReplyCmd(id, decision)
+	cmd := t.guardReplyCmd(id, decision)
+	if restartSpinner {
+		return tea.Batch(cmd, t.sp.Tick)
+	}
+	return cmd
 }
 
 func (t *TUI) enqueueGuardConfirm(g *guardConfirmView) {

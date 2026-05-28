@@ -344,7 +344,7 @@ func (t *TUI) handleLocalNotification(notif localNotification) {
 			}
 			return
 		}
-		if t.phase == phaseFirstLLM || t.phase == phaseThinking {
+		if t.phase == phaseFirstLLM || t.phase == phaseThinking || t.phase == phaseWaitingAfterTool {
 			t.phase = phaseLLM
 			t.phaseStart = time.Now()
 		}
@@ -360,7 +360,7 @@ func (t *TUI) handleLocalNotification(notif localNotification) {
 	case protocol.NotifyReasoning:
 		var p protocol.StreamParams
 		json.Unmarshal(notif.params, &p)
-		if t.phase == phaseFirstLLM || t.phase == phaseLLM {
+		if t.phase == phaseFirstLLM || t.phase == phaseLLM || t.phase == phaseWaitingAfterTool {
 			t.phase = phaseThinking
 			t.phaseStart = time.Now()
 		}
@@ -458,7 +458,7 @@ func (t *TUI) handleLocalNotification(notif localNotification) {
 			}
 		}
 		if !t.hasRunningTools() {
-			t.phase = phaseLLM
+			t.phase = phaseWaitingAfterTool
 			t.phaseStart = time.Now()
 			t.lastAssistantText = ""
 		}
