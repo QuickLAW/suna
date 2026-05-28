@@ -8,6 +8,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/Microsoft/go-winio"
 	"github.com/google/uuid"
@@ -30,6 +31,15 @@ type pipeConn struct {
 	id   string
 	conn net.Conn
 	mu   sync.Mutex
+}
+
+// DefaultEndpoint 返回当前平台 local transport 使用的默认监听地址。
+func DefaultEndpoint() string {
+	return `\\.\pipe\sunad`
+}
+
+func platformDial(endpoint string, timeout time.Duration) (net.Conn, error) {
+	return winio.DialPipe(endpoint, &timeout)
 }
 
 // NewPlatformTransport 在 Windows 平台使用 Named Pipe；平台选择由文件名和 build tag 在编译期完成。

@@ -559,7 +559,7 @@ Daemon 模式将核心逻辑与 UI 完全解耦，解决以上所有问题。
 suna              # 自动: daemon 未运行 → 后台启动 → 连接 → 进入 TUI
 suna              # 自动: daemon 已运行 → 直接连接 → 进入 TUI
 suna start        # 后台启动 daemon
-suna stop         # 发送 SIGTERM 给 daemon
+suna stop         # 通过 protocol 请求 daemon 优雅退出，失败时走本机进程 fallback
 suna status       # 查看 daemon 状态
 ```
 
@@ -569,9 +569,10 @@ suna status       # 查看 daemon 状态
 
 ```
 启动:
-  1. 检查 socket/pid 文件
-  2. 尝试连接 → 连上了 → daemon 活着 → 不启动新的
-  3. 连不上 → 删除残留 → 创建新 socket → 启动 daemon
+  1. CLI 先通过 local transport 调用 daemon.status
+  2. protocol 可达 → daemon 活着 → 不启动新的
+  3. protocol 不可达 → 后台启动 daemon 进程 → 等待 daemon.status 可用
+  4. PID 文件只作为 fallback/debug 信号，不作为首要运行态判断
 
 运行中:
   - 无客户端连接时: 记忆 worker 继续处理 pending memory_queue
@@ -586,13 +587,13 @@ suna status       # 查看 daemon 状态
 
 手动管理 (通过 CLI，非 TUI 命令):
    suna start        → 后台启动 daemon
-   suna status       → 显示 PID, 运行时间, 连接数, 感知源数
-   suna stop         → 请求优雅退出 (等任务完成)
+   suna status       → 优先通过 daemon.status 显示 PID、运行时间、连接数
+   suna stop         → 优先通过 daemon.stop 请求优雅退出；不可达时才使用本机进程 fallback
 ```
 
 ### Protocol / Transport
 
-`protocol` 是 daemon 对外业务协议；`transport` 是具体通信方式。daemon 只持有 `[]protocol.Transport`，不直接依赖 Unix socket、Named Pipe、JSON-RPC、HTTP 或 WebSocket。
+`protocol` 是 daemon 对外业务协议；`transport` 是具体通信方式。daemon 只持有 `[]protocol.Transport`，不直接依赖 Unix socket、Named Pipe、JSON-RPC、HTTP 或 WebSocket。具体 transport 由入口层组装后注入 daemon，`main` 是当前单二进制的 composition root。
 
 #### Protocol Transport 接口
 
@@ -614,6 +615,8 @@ type Transport interface {
 | `transport/web` | 远期 | HTTP/WebSocket/SSE | token/TLS/本机策略 | Web UI |
 
 local 两个平台实现都基于 OS 权限保证安全——只有当前用户能连接。平台差异通过 `transport_unix.go` / `transport_windows.go` 的 build tags 编译期隔离。
+
+`transport/local` 同时提供本地 client 侧封装，供 TUI 和 CLI 管理命令复用。TUI 只保留 UI 通知分发和交互包装；CLI 的 `status` / `stop` / 启动等待也通过同一套 local protocol client 调用 `daemon.status` / `daemon.stop`。
 
 #### Protocol 方法
 

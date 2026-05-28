@@ -34,6 +34,16 @@ type socketConn struct {
 	mu   sync.Mutex
 }
 
+// DefaultEndpoint 返回当前平台 local transport 使用的默认监听地址。
+func DefaultEndpoint() string {
+	homeDir, _ := os.UserHomeDir()
+	return filepath.Join(homeDir, ".suna", "sunad.sock")
+}
+
+func platformDial(endpoint string, timeout time.Duration) (net.Conn, error) {
+	return net.DialTimeout("unix", endpoint, timeout)
+}
+
 // NewPlatformTransport 在 Unix-like 平台使用 Unix domain socket；平台选择由文件名和 build tag 在编译期完成。
 func NewPlatformTransport(socketPath string) *UnixSocketTransport {
 	return &UnixSocketTransport{socketPath: socketPath, conns: make(map[string]*socketConn)}

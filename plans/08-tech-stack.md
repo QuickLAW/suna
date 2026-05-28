@@ -148,16 +148,15 @@ MVP 目标平台:
 
 ```
 suna/
-├── main.go                      # 入口: 检测 daemon → 启动/连接 → TUI
-├── daemon_start_unix.go         # 后台启动 daemon (macOS/Linux)
-├── daemon_start_windows.go      # 后台启动 daemon (Windows)
-├── stop_unix.go                 # 停止 daemon (macOS/Linux)
-├── stop_windows.go              # 停止 daemon (Windows)
+├── main.go                      # 入口: CLI 分发、daemon runtime 组装、TUI 启动
+├── daemon_cmd.go                # CLI daemon 管理: start/status/stop，优先走 protocol
+├── daemon_process_unix.go       # 本机进程 fallback (macOS/Linux)
+├── daemon_process_windows.go    # 本机进程 fallback (Windows)
 ├── go.mod
 ├── go.sum
 ├── internal/
-│   ├── daemon/                  # Daemon 进程管理
-│   │   ├── daemon.go            # Daemon 主循环 (启动/停止/信号处理)
+│   ├── daemon/                  # Daemon runtime，不依赖具体 transport 实现
+│   │   ├── daemon.go            # Daemon 主循环 (挂载抽象 transport、信号处理、PID 写入/删除)
 │   │   └── lifecycle.go         # 自动退出策略 (无客户端 + 无感知源 → 退出)
 │   ├── protocol/                # daemon 对外业务协议
 │   │   ├── transport.go         # Transport 挂载接口
@@ -166,6 +165,7 @@ suna/
 │   │   ├── messages.go          # 请求/响应/事件 payload
 │   │   └── multimodal.go        # MessagePart / AttachmentRef
 │   ├── transport/local/         # 本机 transport：TUI/CLI
+│   │   ├── client.go            # local protocol client，供 TUI 和 CLI 复用
 │   │   ├── jsonrpc.go           # NDJSON + JSON-RPC framing
 │   │   ├── transport_unix.go    # Unix Socket (//go:build !windows)
 │   │   └── transport_windows.go # Named Pipe  (//go:build windows)

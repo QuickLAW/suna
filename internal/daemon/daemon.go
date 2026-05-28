@@ -14,7 +14,6 @@ import (
 	"github.com/alanchenchen/suna/internal/agent"
 	"github.com/alanchenchen/suna/internal/config"
 	"github.com/alanchenchen/suna/internal/protocol"
-	"github.com/alanchenchen/suna/internal/transport/local"
 )
 
 /*
@@ -44,22 +43,17 @@ type Daemon struct {
 	cancelFn  context.CancelFunc
 }
 
-// New 创建 Daemon 实例
-func New(cfg *config.Config) (*Daemon, error) {
+// New 创建 Daemon 实例。具体 transport 由入口层注入，daemon 只认识 protocol.Transport。
+func New(cfg *config.Config, transports []protocol.Transport) (*Daemon, error) {
 	agent, err := agent.NewAgent(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create agent: %w", err)
 	}
 
-	homeDir, _ := os.UserHomeDir()
-	socketPath := filepath.Join(homeDir, ".suna", "sunad.sock")
-
-	transport := local.NewPlatformTransport(socketPath)
-
 	return &Daemon{
 		cfg:        cfg,
 		agent:      agent,
-		transports: []protocol.Transport{transport},
+		transports: transports,
 		sinks:      make(map[string]protocol.EventSink),
 	}, nil
 }
@@ -191,35 +185,4 @@ func (d *Daemon) removePID() {
 	homeDir, _ := os.UserHomeDir()
 	pidPath := filepath.Join(homeDir, ".suna", "sunad.pid")
 	os.Remove(pidPath)
-}
-
-// IsRunning 检查 daemon 是否在运行（通过 PID 文件 + socket 连接测试）
-func IsRunning() bool {
-	homeDir, _ := os.UserHomeDir()
-	pidPath := filepath.Join(homeDir, ".suna", "sunad.pid")
-	data, err := os.ReadFile(pidPath)
-	if err != nil {
-		return false
-	}
-	pid, err := strconv.Atoi(string(data))
-	if err != nil {
-		return false
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	// 发送 signal 0 检测进程是否存活
-	return proc.Signal(syscall.Signal(0)) == nil
-}
-
-// ReadPID 读取 PID 文件
-func ReadPID() (int, error) {
-	homeDir, _ := os.UserHomeDir()
-	pidPath := filepath.Join(homeDir, ".suna", "sunad.pid")
-	data, err := os.ReadFile(pidPath)
-	if err != nil {
-		return 0, err
-	}
-	return strconv.Atoi(string(data))
 }

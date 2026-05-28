@@ -4,13 +4,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"time"
 
 	"github.com/alanchenchen/suna/internal/config"
 	"github.com/alanchenchen/suna/internal/daemon"
 	"github.com/alanchenchen/suna/internal/logging"
+	"github.com/alanchenchen/suna/internal/protocol"
+	"github.com/alanchenchen/suna/internal/transport/local"
 	"github.com/alanchenchen/suna/internal/tui"
 )
 
@@ -34,13 +34,7 @@ func main() {
 	case "help":
 		printHelp()
 	case "start":
-		if daemon.IsRunning() {
-			pid, _ := daemon.ReadPID()
-			fmt.Printf("sunad is already running (pid %d)\n", pid)
-			return
-		}
-		startDaemon()
-		fmt.Println("sunad started")
+		startDaemonCommand()
 	case "stop":
 		stopDaemonCommand()
 	case "status":
@@ -106,7 +100,8 @@ func runDaemon(configPath string) {
 
 	initLogging(cfg.DataDir)
 
-	d, err := daemon.New(cfg)
+	transports := []protocol.Transport{local.NewPlatformTransport(local.DefaultEndpoint())}
+	d, err := daemon.New(cfg, transports)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sunad: create error: %s\n", err)
 		os.Exit(1)
@@ -116,27 +111,6 @@ func runDaemon(configPath string) {
 		fmt.Fprintf(os.Stderr, "sunad: %s\n", err)
 		os.Exit(1)
 	}
-}
-
-func showStatus() {
-	if !daemon.IsRunning() {
-		fmt.Println("sunad is not running")
-		return
-	}
-	pid, _ := daemon.ReadPID()
-	fmt.Printf("sunad is running (pid %d)\n", pid)
-}
-
-func stopDaemonCommand() {
-	if !daemon.IsRunning() {
-		fmt.Println("sunad is not running")
-		return
-	}
-	if err := daemon.StopRunning(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error stopping daemon: %s\n", err)
-		os.Exit(1)
-	}
-	fmt.Println("sunad stopped")
 }
 
 func runTUI() {
@@ -157,42 +131,6 @@ func runTUI() {
 		os.Exit(1)
 	}
 	client.Close()
-}
-
-func ensureDaemonRunning() {
-	if daemon.IsRunning() {
-		return
-	}
-	startDaemon()
-}
-
-func startDaemon() {
-	exe, err := os.Executable()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: cannot determine executable path: %s\n", err)
-		os.Exit(1)
-	}
-
-	cmd := exec.Command(exe)
-	cmd.Env = append(os.Environ(), "SUNA_RUN_DAEMON=1")
-	cmd.Stdin = nil
-	cmd.Stdout = nil
-	cmd.Stderr = os.Stderr
-
-	if err := daemon.StartBackground(cmd); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: failed to start daemon: %s\n", err)
-		os.Exit(1)
-	}
-
-	for i := 0; i < 50; i++ {
-		time.Sleep(200 * time.Millisecond)
-		if daemon.IsRunning() {
-			return
-		}
-	}
-
-	fmt.Fprintf(os.Stderr, "Error: daemon failed to start within 10 seconds (check logs at ~/.suna/logs/app.log)\n")
-	os.Exit(1)
 }
 
 func loadOrCreateConfig(configPath string) *config.Config {
