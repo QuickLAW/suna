@@ -86,7 +86,7 @@ func (t *TUI) switchModelRef(ref string) tea.Cmd {
 		t.appendNonToolMessage(chatMsg{role: "error", content: t.i18n.Tf("cmd.model_not_found", ref)})
 		return nil
 	}
-	t.configState.ActiveModel = ref
+	t.setActiveModelRef(ref)
 	t.modelPickerOpen = false
 	t.appendNonToolMessage(chatMsg{role: "system", content: t.i18n.Tf("cmd.model_switched", ref)})
 	return t.sendConfigSet(protocol.ConfigSetParams{Action: protocol.ConfigActionActivateModel, ActiveModel: ref})

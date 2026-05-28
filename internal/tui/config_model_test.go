@@ -61,3 +61,29 @@ func TestConfigDeleteOptionsHideAPIKeyWhenMissing(t *testing.T) {
 		t.Fatalf("len(options) = %d, want 2: %#v", len(options), options)
 	}
 }
+
+func TestSwitchModelRefUpdatesActiveProviderModel(t *testing.T) {
+	tui := &TUI{
+		i18n:         newTranslator(LocaleEN),
+		providerName: "openai",
+		modelName:    "gpt-4o-mini",
+		configState: protocol.ConfigParams{ActiveModel: "openai/gpt-4o-mini", Models: []protocol.ConfigModel{
+			{Provider: "openai", Model: "gpt-4o-mini", ContextWindow: 128000},
+			{Provider: "anthropic", Model: "claude-sonnet", ContextWindow: 200000},
+		}},
+	}
+
+	cmd := tui.switchModelRef("anthropic/claude-sonnet")
+	if cmd == nil {
+		t.Fatalf("switchModelRef returned nil cmd")
+	}
+	if tui.configState.ActiveModel != "anthropic/claude-sonnet" {
+		t.Fatalf("ActiveModel = %q", tui.configState.ActiveModel)
+	}
+	if tui.providerName != "anthropic" || tui.modelName != "claude-sonnet" {
+		t.Fatalf("provider/model = %q/%q", tui.providerName, tui.modelName)
+	}
+	if tui.contextWindow != 200000 {
+		t.Fatalf("contextWindow = %d", tui.contextWindow)
+	}
+}

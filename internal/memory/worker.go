@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/alanchenchen/suna/internal/logging"
@@ -18,6 +19,7 @@ type Worker struct {
 	memories *MemoryStore
 	db       *sql.DB
 	provider model.Provider
+	mu       sync.RWMutex
 	prompts  *prompt.Loader
 	closed   chan struct{}
 }
@@ -32,6 +34,20 @@ func NewWorker(queue *ExtractQueue, memories *MemoryStore, db *sql.DB, provider 
 }
 
 func (w *Worker) SetPrompts(p *prompt.Loader) { w.prompts = p }
+
+func (w *Worker) SetProvider(provider model.Provider) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.provider = provider
+}
+
+func (w *Worker) Provider() model.Provider { return w.currentProvider() }
+
+func (w *Worker) currentProvider() model.Provider {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.provider
+}
 
 func (w *Worker) Run() {
 	defer close(w.closed)
@@ -92,7 +108,8 @@ func (w *Worker) processPending() {
 	for _, it := range items {
 		ids = append(ids, it.ID)
 	}
-	if w.provider == nil {
+	provider := w.currentProvider()
+	if provider == nil {
 		// 没有可用模型时保留队列，等待后续 provider 配置好再处理，避免静默丢记忆。
 		logging.Info("memory", "compaction_no_provider", logging.Event{"queue_events": len(items)})
 		return
@@ -103,7 +120,7 @@ func (w *Worker) processPending() {
 		_ = RetryQueueItems(context.Background(), w.db, ids, err)
 		return
 	}
-	newList, err := w.compact(ctx, current, items)
+	newList, err := w.compact(ctx, provider, current, items)
 	if err != nil {
 		logging.Error("memory", "compaction_failed", err, logging.Event{"queue_events": len(items), "active_memories_before": len(current)})
 		_ = RetryQueueItems(context.Background(), w.db, ids, err)
@@ -135,11 +152,11 @@ type compactionResult struct {
 	Memories []compactionMemory `json:"memories"`
 }
 
-func (w *Worker) compact(ctx context.Context, current []UserMemory, items []QueueItem) ([]UserMemory, error) {
+func (w *Worker) compact(ctx context.Context, provider model.Provider, current []UserMemory, items []QueueItem) ([]UserMemory, error) {
 	systemPrompt := w.renderCompactionPrompt(current, items)
 	// 记忆整理是异步 LLM 调用，一次处理多条 queue event，并要求模型返回完整的新列表。
 	// 主请求链路不会等待这个调用，因此不会影响用户看到回复的延迟。
-	ch, err := w.provider.Complete(ctx, &model.CompletionRequest{Purpose: "memory_compact", System: systemPrompt, Messages: []model.Message{model.NewTextMessage(model.RoleUser, "Return the new active memory JSON now.")}, MaxTokens: 4096})
+	ch, err := provider.Complete(ctx, &model.CompletionRequest{Purpose: "memory_compact", System: systemPrompt, Messages: []model.Message{model.NewTextMessage(model.RoleUser, "Return the new active memory JSON now.")}, MaxTokens: 4096})
 	if err != nil {
 		return nil, err
 	}

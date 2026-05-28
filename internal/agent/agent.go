@@ -96,14 +96,7 @@ func NewAgent(cfg *config.Config) (*Agent, error) {
 	memories := memory.NewMemoryStore(store.DB())
 	conversation := memory.NewConversationStore(store.DB())
 
-	var extractProvider model.Provider
-	if router != nil {
-		if p, err := router.Provider("fast"); err == nil {
-			extractProvider = p
-		} else if p := router.DefaultProvider(); p != nil {
-			extractProvider = p
-		}
-	}
+	extractProvider := backgroundProvider(router)
 
 	extractQueue := memory.NewExtractQueue(store.DB())
 	extractWorker := memory.NewWorker(extractQueue, memories, store.DB(), extractProvider)
@@ -238,6 +231,13 @@ func (a *Agent) newRunner(events chan<- Event) *runner.Runner {
 	}
 }
 
+func backgroundProvider(router *model.Router) model.Provider {
+	if router == nil {
+		return nil
+	}
+	return router.DefaultProvider()
+}
+
 func (a *Agent) RecordUsage(ctx context.Context, modelID string, usage *model.Usage) {
 	if a.sessions == nil || usage == nil {
 		return
@@ -286,13 +286,13 @@ func (s eventSink) Reasoning(content string) {
 }
 func (s eventSink) Usage(usage runner.UsageEvent) {
 	s.events <- Event{
-		Type:         EventUsage,
-		InputTokens:  usage.InputTokens,
-		OutputTokens: usage.OutputTokens,
-		CachedTokens: usage.CachedTokens,
+		Type:          EventUsage,
+		InputTokens:   usage.InputTokens,
+		OutputTokens:  usage.OutputTokens,
+		CachedTokens:  usage.CachedTokens,
 		ContextTokens: usage.ContextTokens,
 		ContextWindow: usage.ContextWindow,
-		DurationMs:   usage.Duration.Milliseconds(),
+		DurationMs:    usage.Duration.Milliseconds(),
 	}
 }
 func (s eventSink) ToolCall(call runner.ToolCallEvent) {

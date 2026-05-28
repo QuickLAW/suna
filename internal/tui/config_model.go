@@ -239,13 +239,17 @@ func (t *TUI) activateModelRef(ref string) tea.Cmd {
 		t.configError = t.tr("tui.error.provider_incomplete")
 		return nil
 	}
+	t.setActiveModelRef(ref)
+	return t.sendConfigSet(protocol.ConfigSetParams{Action: protocol.ConfigActionActivateModel, ActiveModel: ref})
+}
+
+func (t *TUI) setActiveModelRef(ref string) {
 	t.configState.ActiveModel = ref
 	if mc, ok := t.modelByRef(ref); ok {
 		t.providerName = mc.Provider
 		t.modelName = mc.Model
 		t.contextWindow = defaultContextWindow(mc)
 	}
-	return t.sendConfigSet(protocol.ConfigSetParams{Action: protocol.ConfigActionActivateModel, ActiveModel: ref})
 }
 
 func (t *TUI) sendConfigSet(params protocol.ConfigSetParams) tea.Cmd {

@@ -185,6 +185,12 @@ func (a *Agent) reloadRouterLocked(cfg *config.Config) error {
 	if len(cfg.Models) == 0 || cfg.ActiveModel == "" {
 		a.router = nil
 		a.compressor = memory.NewCompressor(nil)
+		if a.prompts != nil {
+			a.compressor.SetPrompts(a.prompts)
+		}
+		if a.extractWorker != nil {
+			a.extractWorker.SetProvider(nil)
+		}
 		return nil
 	}
 	router, err := model.NewRouter(cfg, a.mediaStore)
@@ -195,11 +201,13 @@ func (a *Agent) reloadRouterLocked(cfg *config.Config) error {
 	if a.prompts != nil {
 		router.SetPrompts(a.prompts)
 	}
-	if p := router.DefaultProvider(); p != nil {
-		a.compressor = memory.NewCompressor(p)
-		if a.prompts != nil {
-			a.compressor.SetPrompts(a.prompts)
-		}
+	provider := backgroundProvider(router)
+	a.compressor = memory.NewCompressor(provider)
+	if a.prompts != nil {
+		a.compressor.SetPrompts(a.prompts)
+	}
+	if a.extractWorker != nil {
+		a.extractWorker.SetProvider(provider)
 	}
 	return nil
 }
