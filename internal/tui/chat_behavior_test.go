@@ -4,6 +4,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/alanchenchen/suna/internal/protocol"
 )
 
 func TestThinkingBoxCollapsedWhileStreamingAndStopsElapsed(t *testing.T) {
@@ -82,5 +86,22 @@ func TestLockedInputShowsStatusPlaceholder(t *testing.T) {
 	}
 	if tui.ta.Focused() {
 		t.Fatalf("textarea should be blurred while input is locked")
+	}
+}
+
+func TestWelcomeNewInitializesChatBeforeResetPhase(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleZH), width: 80, height: 24, ready: true}
+	tui.configState = protocol.ConfigParams{Models: []protocol.ConfigModel{{Provider: "test", Model: "model"}}}
+	tui.initWelcomeList()
+
+	_, cmd := tui.updateWelcome(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if tui.mode != "chat" {
+		t.Fatalf("expected welcome new action to enter chat mode, got %q", tui.mode)
+	}
+	if tui.ta.Placeholder == "" {
+		t.Fatalf("chat textarea should be initialized before resetPhase focuses it")
+	}
+	if cmd == nil {
+		t.Fatalf("expected chat focus command")
 	}
 }

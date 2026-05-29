@@ -19,6 +19,9 @@ func (t *TUI) allowLockedInputKey(ks string) bool {
 }
 
 func (t *TUI) syncInputFocus() tea.Cmd {
+	if t.ta.Placeholder == "" {
+		return nil
+	}
 	if t.inputLocked() {
 		t.ta.Blur()
 		return nil

@@ -126,11 +126,12 @@ func (t *TUI) handleWelcomeAction(action welcomeAction) tea.Cmd {
 		t.messages = []chatMsg{}
 		t.attachments = nil
 		t.resetConversationStats()
+		cmd := t.initChatComponents()
 		t.resetPhase()
 		if t.localCli != nil {
 			go t.localCli.NewSession()
 		}
-		return t.initChatComponents()
+		return cmd
 	case actionResume:
 		if t.daemonStatus.Sessions == nil || t.daemonStatus.Sessions.LastID == "" {
 			return nil
@@ -138,9 +139,10 @@ func (t *TUI) handleWelcomeAction(action welcomeAction) tea.Cmd {
 		t.mode = "chat"
 		t.messages = []chatMsg{}
 		t.resetConversationStats()
+		cmd := t.initChatComponents()
 		t.resetPhase()
 		go func() { t.localCli.RestoreSession() }()
-		return t.initChatComponents()
+		return cmd
 	case actionConfig:
 		t.mode = "config"
 		t.configFromMode = "welcome"
