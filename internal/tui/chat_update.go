@@ -106,7 +106,6 @@ func (t *TUI) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case ks == "esc":
 			if t.showToolDetail {
 				t.showToolDetail = false
-				t.syncContent()
 				return t, nil
 			}
 			if t.showHelp {
@@ -137,7 +136,6 @@ func (t *TUI) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 					t.selectedToolID = ids[0]
 				}
 			}
-			t.syncContent()
 			return t, nil
 		case ks == "ctrl+r":
 			t.showReasoningDetail = !t.showReasoningDetail
@@ -146,7 +144,6 @@ func (t *TUI) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case ks == "pgup":
 			if t.showToolDetail {
 				t.scrollToolDetailOverlay(-max(1, t.toolDetailPageStep()))
-				t.syncContent()
 			} else {
 				t.vp.HalfPageUp()
 				t.followBottom = false
@@ -155,7 +152,6 @@ func (t *TUI) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case ks == "pgdown":
 			if t.showToolDetail {
 				t.scrollToolDetailOverlay(max(1, t.toolDetailPageStep()))
-				t.syncContent()
 			} else {
 				t.vp.HalfPageDown()
 				t.followBottom = t.vp.AtBottom()
@@ -164,7 +160,6 @@ func (t *TUI) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case ks == "up":
 			if t.showToolDetail {
 				t.moveSelectedTool(-1)
-				t.syncContent()
 			} else if len(t.cmdSuggestions) > 0 {
 				if t.cmdSuggestionIdx > 0 {
 					t.cmdSuggestionIdx--
@@ -181,7 +176,6 @@ func (t *TUI) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case ks == "down":
 			if t.showToolDetail {
 				t.moveSelectedTool(1)
-				t.syncContent()
 			} else if len(t.cmdSuggestions) > 0 {
 				if t.cmdSuggestionIdx < len(t.cmdSuggestions)-1 {
 					t.cmdSuggestionIdx++
@@ -244,7 +238,6 @@ func (t *TUI) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else if mm.Mouse().Button == tea.MouseWheelDown {
 					t.scrollToolDetailOverlay(3)
 				}
-				t.syncContent()
 			}
 			return t, nil
 		}

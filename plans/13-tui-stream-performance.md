@@ -55,6 +55,16 @@ TUI 在 notification pump 层合并连续文本流：
 
 最终展示给用户的 assistant/reasoning detail 仍是 Markdown，不降级最终体验。
 
+### 长文本 overlay 虚拟滚动
+
+工具详情 overlay 不再先完整生成所有展示行：
+
+- `internal/tui/virtual_scroll.go` 提供 `virtualLineSource`，只暴露 `Len()` 和 `Line(index)`。
+- tool detail 将 title/tool/intent/params/guard/result 拆成 section，并通过 `virtualScrollWindow` 只渲染当前可见窗口。
+- `wrappedLineSection` 只保存原始逻辑行和 wrap 后行数；滚动到某一行时才切出目标展示行，不缓存完整 wrap 后文本。
+- `Ctrl+T`、`Esc`、`PgUp/PgDn`、`↑/↓`、鼠标滚轮这类只影响 overlay 的操作不再调用 `syncContent()`，避免重算整个 chat viewport。
+- Chat 当前 `bubbles/viewport` 只负责显示窗口滚动，`syncContent()` 仍会生成完整聊天字符串；若长会话后续成为瓶颈，应按同一 line source 模型做消息级虚拟渲染。
+
 ### Markdown 缓存
 
 已完成的 assistant 消息按以下维度缓存渲染结果：

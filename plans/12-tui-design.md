@@ -310,7 +310,8 @@ Current status line：
 - Loading 状态只显示工具执行中和 running 数量，不再拼接当前 tool name/intent，避免和 tool tree 重复。
 - Tool/subtask 固定 UI 文案走 i18n；主线只在父 spawn 显示 `Subtask` 标识，子工具依靠树结构表达归属，不重复加 `Subtask tool`。
 - Tool detail overlay 底部提示根据当前位置动态显示 `previous`/`next`，首项不显示 previous，末项不显示 next。
-- Tool detail overlay 限制内容高度，避免 result 过长撑破 box；完整展示仍以 local/protocol 展示层 16KB 上限和后续滚动/详情机制为准。
+- Tool detail overlay 限制内容高度，避免 result 过长撑破 box；详情内容使用 `virtualLineSource` 虚拟滚动，只渲染可见窗口，不完整生成长 params/result 的 `[]string`。
+- Chat 当前使用 `bubbles/viewport` 做显示窗口滚动，但 `syncContent()` 仍会生成完整聊天内容；这是显示层滚动，不是完整渲染虚拟化。后续若长会话卡顿，应优先复用 `virtual_scroll.go` 的 line source 思路拆分消息级虚拟渲染。
 - Guard confirm payload 携带 `tool_call_id`；用户 reject 后，TUI 立即把对应 tool 标为 error，而不是只追加系统消息。
 
 ### AskUser Options

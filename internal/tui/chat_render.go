@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // viewChat 是 Chat 页面的布局入口。
@@ -440,13 +441,17 @@ func (t *TUI) scrollGuardOverlay(delta int) {
 }
 
 func (t *TUI) toolDetailPageStep() int {
-	_, bodyHeight := t.toolDetailBodyLines()
-	return max(1, bodyHeight-1)
+	return max(1, t.toolDetailBodyHeight()-1)
 }
 
 func (t *TUI) scrollToolDetailOverlay(delta int) {
-	body, bodyHeight := t.toolDetailBodyLines()
-	maxOffset := max(0, len(body)-bodyHeight)
+	te := t.findTool(t.selectedToolID)
+	if te == nil {
+		t.toolDetailScroll = 0
+		return
+	}
+	bodyHeight := t.toolDetailBodyHeight()
+	maxOffset := max(0, t.toolDetailLineSource(te).Len()-bodyHeight)
 	t.toolDetailScroll += delta
 	if t.toolDetailScroll < 0 {
 		t.toolDetailScroll = 0
@@ -527,28 +532,10 @@ func wrapLineLimit(s string, maxWidth int, maxLines int) []string {
 	if maxWidth <= 0 || lipgloss.Width(s) <= maxWidth {
 		return []string{s}
 	}
-	var lines []string
-	var current []rune
-	for _, r := range s {
-		candidate := append(current, r)
-		if len(current) > 0 && lipgloss.Width(string(candidate)) > maxWidth {
-			lines = append(lines, string(current))
-			if maxLines > 0 && len(lines) >= maxLines {
-				return append(lines, "...")
-			}
-			current = current[:0]
-		}
-		current = append(current, r)
-		if lipgloss.Width(string(current)) > maxWidth {
-			lines = append(lines, string(current))
-			if maxLines > 0 && len(lines) >= maxLines {
-				return append(lines, "...")
-			}
-			current = current[:0]
-		}
-	}
-	if len(current) > 0 {
-		lines = append(lines, string(current))
+	wrappedText := ansi.GraphemeWidth.Hardwrap(s, maxWidth, true)
+	lines := strings.Split(wrappedText, "\n")
+	if maxLines > 0 && len(lines) > maxLines {
+		return append(append([]string(nil), lines[:maxLines]...), "...")
 	}
 	return lines
 }
