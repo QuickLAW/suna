@@ -15,21 +15,30 @@ func (t *TUI) renderMemoryList(memories []protocol.MemoryItem) string {
 	var lines []string
 	lines = append(lines, styleHL.Render(t.tr("tui.memory.active_title")))
 	for _, m := range memories {
-		badge := fmt.Sprintf("%s:%d", m.Kind, m.Priority)
-		if m.IsCore {
-			badge = "core " + badge
-		}
-		prefix := styleDim.Render("• ") + styleTool.Render("["+badge+"]") + " "
-		wrapped := wrapLine(strings.TrimSpace(m.Content), max(12, inner-lipglossWidthPlain(prefix)))
-		if len(wrapped) == 0 {
-			wrapped = []string{""}
-		}
-		lines = append(lines, prefix+wrapped[0])
-		for _, line := range wrapped[1:] {
-			lines = append(lines, strings.Repeat(" ", lipglossWidthPlain(prefix))+styleToolDim.Render(line))
-		}
+		lines = append(lines, renderMemoryItem(m, inner)...)
 	}
 	return boxStyle.Width(width).Padding(1, 2).Render(strings.Join(lines, "\n"))
+}
+
+func renderMemoryItem(m protocol.MemoryItem, width int) []string {
+	badge := fmt.Sprintf("%s:%d", m.Kind, m.Priority)
+	if m.IsCore {
+		badge = "core " + badge
+	}
+	head := styleTool.Render("[" + badge + "]")
+	content := strings.TrimSpace(m.Content)
+	if content == "" {
+		content = "-"
+	}
+	wrapped := wrapLine(content, max(12, width-4))
+	if len(wrapped) == 0 {
+		wrapped = []string{""}
+	}
+	lines := []string{"  " + styleDim.Render("• ") + head}
+	for _, line := range wrapped {
+		lines = append(lines, "    "+styleToolDim.Render(line))
+	}
+	return lines
 }
 
 func lipglossWidthPlain(s string) int {

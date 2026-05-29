@@ -141,6 +141,23 @@ func TestRenderToolEntryShowsGuardSummary(t *testing.T) {
 	}
 }
 
+func TestCompactPathKeepsFullPathWhenItFits(t *testing.T) {
+	path := "Users/alanchen/Documents/suna/internal/runner/types.go"
+	if got := compactPath(path, 80); got != path {
+		t.Fatalf("compactPath() = %q, want full path", got)
+	}
+}
+
+func TestCompactPathKeepsFilenameSuffixWhenTight(t *testing.T) {
+	got := compactPath("very/long/path/internal/runner/types.go", 12)
+	if !strings.HasSuffix(got, "types.go") {
+		t.Fatalf("compactPath() = %q, want filename suffix", got)
+	}
+	if got == "types.go" || !strings.HasPrefix(got, "…") {
+		t.Fatalf("compactPath() = %q, want ellipsized suffix", got)
+	}
+}
+
 func stripANSIForTest(s string) string {
 	var b strings.Builder
 	inEsc := false

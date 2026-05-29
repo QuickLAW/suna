@@ -152,8 +152,8 @@ func (t *TUI) renderToolEntry(te *toolEntry, nested bool) string {
 	if nested {
 		prefix = "      " + styleDim.Render("└─ ")
 	}
-	mainLabel, detailLabel := t.toolEntryLabels(te)
 	maxWidth := max(20, t.width-lipgloss.Width(stripANSI(prefix))-8)
+	mainLabel, detailLabel := t.toolEntryLabels(te, maxWidth)
 	maxLines := 2
 	if isSubtask(te) {
 		maxLines = 3
@@ -188,11 +188,11 @@ func (t *TUI) renderToolEntry(te *toolEntry, nested bool) string {
 	return line + "\n"
 }
 
-func (t *TUI) toolEntryLabels(te *toolEntry) (string, string) {
+func (t *TUI) toolEntryLabels(te *toolEntry, maxWidth int) (string, string) {
 	label := t.displayToolIntentLabel(te)
 	if hasFileChange(te) {
 		if path, _ := te.metadata["path"].(string); path != "" {
-			main := te.name + " " + compactPath(path, 36)
+			main := te.name + " " + compactPath(path, max(12, maxWidth-lipgloss.Width(te.name)-1))
 			if strings.TrimSpace(label) != "" && strings.TrimSpace(label) != main {
 				return main, label
 			}
@@ -383,14 +383,42 @@ func compactPath(path string, maxWidth int) string {
 	if maxWidth <= 0 || lipgloss.Width(path) <= maxWidth {
 		return path
 	}
+	const ellipsis = "…"
 	base := path
-	if idx := strings.LastIndexAny(path, "/\\"); idx >= 0 && idx < len(path)-1 {
-		base = path[idx+1:]
+	sepIdx := strings.LastIndexAny(path, "/\\")
+	if sepIdx >= 0 && sepIdx < len(path)-1 {
+		base = path[sepIdx+1:]
 	}
-	if lipgloss.Width(base)+1 <= maxWidth {
-		return "…" + base
+	if lipgloss.Width(base)+lipgloss.Width(ellipsis) <= maxWidth {
+		return ellipsis + base
 	}
-	return truncateRunes(base, maxWidth)
+	if sepIdx >= 0 && sepIdx < len(path)-1 {
+		dir := strings.TrimRight(path[:sepIdx], "/\\")
+		parent := dir
+		if parentIdx := strings.LastIndexAny(dir, "/\\"); parentIdx >= 0 && parentIdx < len(dir)-1 {
+			parent = dir[parentIdx+1:]
+		}
+		withParent := ellipsis + parent + string(path[sepIdx]) + base
+		if lipgloss.Width(withParent) <= maxWidth {
+			return withParent
+		}
+	}
+	return truncateRunesKeepEnd(base, maxWidth)
+}
+
+func truncateRunesKeepEnd(s string, maxWidth int) string {
+	const ellipsis = "…"
+	if maxWidth <= lipgloss.Width(ellipsis) {
+		return ellipsis
+	}
+	if lipgloss.Width(s) <= maxWidth {
+		return s
+	}
+	runes := []rune(s)
+	for len(runes) > 0 && lipgloss.Width(ellipsis+string(runes)) > maxWidth {
+		runes = runes[1:]
+	}
+	return ellipsis + string(runes)
 }
 
 func formatTinyBytes(n int) string {
