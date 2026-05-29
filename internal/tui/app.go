@@ -575,14 +575,30 @@ func (t *TUI) handleLocalNotification(notif localNotification) {
 		}
 		if t.configFormOpen {
 			wasWorkspace := t.configWorkspaceOpen
+			editingRef := t.configEditingName
+			targetRef := ""
+			if !wasWorkspace {
+				// 保存编辑后 provider/model 可能变化，先按表单里的新 ref 回到详情页。
+				targetRef = t.configProviderFormRef()
+			}
 			t.configFormOpen = false
 			t.configWorkspaceOpen = false
+			t.configEditingName = ""
 			if wasWorkspace {
 				t.configPage = "home"
-			} else if t.configEditingName != "" {
-				t.openConfigDetail(t.configEditingName)
+			} else if editingRef != "" {
+				// 新旧 ref 都不存在时，说明目标模型已不可见，退回列表避免“模型未找到”空面板。
+				if !t.openConfigDetailIfPresent(targetRef) && !t.openConfigDetailIfPresent(editingRef) {
+					t.returnToConfigModels()
+				}
 			} else {
 				t.configPage = "models"
+			}
+		}
+		if t.configPage == "detail" && t.configDetailRef != "" {
+			// 删除模型后配置通知会先更新列表；若当前详情 ref 已失效，自动回模型列表。
+			if _, ok := t.modelByRef(t.configDetailRef); !ok {
+				t.returnToConfigModels()
 			}
 		}
 		if t.mode == "welcome" && len(t.configState.Models) == 0 && !t.hasConfiguredModel() {

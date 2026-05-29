@@ -45,7 +45,7 @@ func defaultTranslationKeys() map[string]map[LocaleID]string {
 		"tui.tool.guard.source":              {LocaleEN: "Source:", LocaleZH: "来源："},
 		"tui.tool.guard.reason":              {LocaleEN: "Reason", LocaleZH: "原因"},
 		"tui.tool.guard.suggestion":          {LocaleEN: "Suggestion", LocaleZH: "建议"},
-		"tui.tool.guard.badge":               {LocaleEN: "Guard", LocaleZH: "安全"},
+		"tui.tool.guard.badge":               {LocaleEN: "Guard", LocaleZH: "权限"},
 		"tui.tool.file.badge":                {LocaleEN: "File", LocaleZH: "文件"},
 		"tui.tool.guard.unknown":             {LocaleEN: "unknown", LocaleZH: "未知"},
 		"tui.tool.guard.llm_approved":        {LocaleEN: "LLM approved", LocaleZH: "LLM 已批准"},

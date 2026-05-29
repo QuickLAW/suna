@@ -3,6 +3,8 @@ package tui
 import (
 	"testing"
 
+	"charm.land/bubbles/v2/textinput"
+
 	"github.com/alanchenchen/suna/internal/protocol"
 )
 
@@ -86,4 +88,58 @@ func TestSwitchModelRefUpdatesActiveProviderModel(t *testing.T) {
 	if tui.contextWindow != 200000 {
 		t.Fatalf("contextWindow = %d", tui.contextWindow)
 	}
+}
+
+func TestConfigModelRefAfterEditUsesNewRef(t *testing.T) {
+	tui := &TUI{
+		i18n:              newTranslator(LocaleEN),
+		configEditingName: "openai/gpt-4o-mini",
+		configInputs:      providerInputsForTest("openai", "gpt-4o", "", "https://api.openai.com/v1", "128000", ""),
+		configState: protocol.ConfigParams{ActiveModel: "openai/gpt-4o", Models: []protocol.ConfigModel{
+			{Provider: "openai", Model: "gpt-4o", BaseURL: "https://api.openai.com/v1", ContextWindow: 128000},
+		}},
+	}
+
+	if got := tui.configProviderFormRef(); got != "openai/gpt-4o" {
+		t.Fatalf("configProviderFormRef = %q", got)
+	}
+	if !tui.openConfigDetailIfPresent(tui.configProviderFormRef()) {
+		t.Fatalf("openConfigDetailIfPresent returned false")
+	}
+	if tui.configPage != "detail" || tui.configDetailRef != "openai/gpt-4o" {
+		t.Fatalf("detail page/ref = %q/%q", tui.configPage, tui.configDetailRef)
+	}
+}
+
+func TestReturnToConfigModelsClearsMissingDetail(t *testing.T) {
+	tui := &TUI{
+		i18n:            newTranslator(LocaleEN),
+		configPage:      "detail",
+		configDetailRef: "openai/gpt-4o-mini",
+		configState: protocol.ConfigParams{ActiveModel: "anthropic/claude-sonnet", Models: []protocol.ConfigModel{
+			{Provider: "anthropic", Model: "claude-sonnet"},
+		}},
+	}
+
+	if _, ok := tui.modelByRef(tui.configDetailRef); ok {
+		t.Fatalf("deleted model unexpectedly exists")
+	}
+	tui.returnToConfigModels()
+	if tui.configPage != "models" || tui.configDetailRef != "" {
+		t.Fatalf("page/ref = %q/%q, want models/empty", tui.configPage, tui.configDetailRef)
+	}
+	rows := tui.configModelRows()
+	if tui.configCursor < 0 || tui.configCursor >= len(rows) || rows[tui.configCursor].name != "anthropic/claude-sonnet" {
+		t.Fatalf("cursor = %d rows = %#v", tui.configCursor, rows)
+	}
+}
+
+func providerInputsForTest(values ...string) []textinput.Model {
+	inputs := make([]textinput.Model, len(values))
+	for i, value := range values {
+		in := textinput.New()
+		in.SetValue(value)
+		inputs[i] = in
+	}
+	return inputs
 }
