@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/alanchenchen/suna/internal/guard"
+	"github.com/alanchenchen/suna/internal/runner"
 	"github.com/alanchenchen/suna/internal/tool"
 )
 
@@ -14,7 +15,7 @@ func TestSubtaskReadFileBlocksSensitivePath(t *testing.T) {
 	a := &Agent{guard: guard.NewGuardWithMode(nil, "test", guard.ModeAuto)}
 	executor := subtaskExecutor{agent: a, registry: registry}
 
-	result := executor.ExecuteTool(context.Background(), "call-1", "readfile", map[string]any{"path": ".env"})
+	result := executor.ExecuteTool(context.Background(), runner.ToolExecution{ID: "call-1", Name: "readfile", Params: map[string]any{"path": ".env"}})
 	if !result.IsError || result.Error == "" {
 		t.Fatalf("subtask readfile .env result = %#v, want error", result)
 	}

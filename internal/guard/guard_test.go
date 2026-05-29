@@ -205,3 +205,39 @@ func TestWorkspaceBlocksExecCWDAndCommandPaths(t *testing.T) {
 		})
 	}
 }
+
+func TestSmartReviewReceivesIntentContext(t *testing.T) {
+	g := NewGuardWithMode(nil, "test", ModeSmart)
+	var got ReviewRequest
+	g.SetLLMReviewer(func(ctx context.Context, req ReviewRequest) (string, error) {
+		got = req
+		return `{"decision":"approve","reason":"aligned","suggestion":""}`, nil
+	})
+	ctx := ReviewContext{
+		UserRequest:      "prepare a report",
+		ToolIntent:       "write the report draft",
+		AssistantContext: "I will create the requested report file.",
+		RecentContext:    "[user] prepare a report",
+	}
+	result := g.Check(context.Background(), "writefile", map[string]any{"path": "report.md", "content": "hello"}, ctx)
+	if result.Decision != Approve || result.Source != "llm" {
+		t.Fatalf("smart review decision/source = %s/%s, want approve/llm", result.Decision, result.Source)
+	}
+	if got.Context.UserRequest != ctx.UserRequest || got.Context.ToolIntent != ctx.ToolIntent || got.Context.AssistantContext != ctx.AssistantContext {
+		t.Fatalf("review context not propagated: %#v", got.Context)
+	}
+	if got.Risk != "medium" || got.ToolName != "writefile" || got.Target != "report.md" {
+		t.Fatalf("review request metadata = %#v", got)
+	}
+}
+
+func TestSmartReviewModifyIsDecision(t *testing.T) {
+	g := NewGuardWithMode(nil, "test", ModeSmart)
+	g.SetLLMReviewer(func(ctx context.Context, req ReviewRequest) (string, error) {
+		return `{"decision":"modify","reason":"too broad","suggestion":"use a narrower operation"}`, nil
+	})
+	result := g.Check(context.Background(), "writefile", map[string]any{"path": "out.txt", "content": "hello"}, ReviewContext{UserRequest: "create output"})
+	if result.Decision != Modify || result.Suggestion != "use a narrower operation" {
+		t.Fatalf("modify result = %#v", result)
+	}
+}

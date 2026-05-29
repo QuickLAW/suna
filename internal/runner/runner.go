@@ -258,7 +258,7 @@ func (r *Runner) prepareToolCalls(toolCalls []model.ToolCall, fullContent string
 		if b, err := json.Marshal(params); err == nil {
 			cleanTC.Arguments = string(b)
 		}
-		preparedCalls = append(preparedCalls, preparedToolCall{tc: cleanTC, params: params, intent: intent})
+		preparedCalls = append(preparedCalls, preparedToolCall{tc: cleanTC, params: params, intent: intent, assistantContext: strings.TrimSpace(fullContent)})
 		cleanToolCalls = append(cleanToolCalls, cleanTC)
 	}
 	return preparedCalls, cleanToolCalls
@@ -270,7 +270,7 @@ func (r *Runner) executeToolCalls(ctx context.Context, calls []preparedToolCall)
 		go func(index int, pc preparedToolCall) {
 			res := tool.ErrorResult("tool executor not configured")
 			if r.Executor != nil {
-				res = r.Executor.ExecuteTool(ctx, pc.tc.ID, pc.tc.Name, pc.params)
+				res = r.Executor.ExecuteTool(ctx, ToolExecution{ID: pc.tc.ID, Name: pc.tc.Name, Params: pc.params, Intent: pc.intent, AssistantContext: pc.assistantContext})
 			}
 			resultCh <- toolExecResult{index: index, tc: pc.tc, result: res}
 		}(i, pc)

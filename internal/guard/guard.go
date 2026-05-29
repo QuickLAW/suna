@@ -29,9 +29,25 @@ const (
 	ModeSmart    Mode = "smart"
 )
 
-// LLMReviewer 用于 Guard Stage 3 LLM 审查。
-// 接收操作上下文，返回 LLM 原始回复。
-type LLMReviewer func(ctx context.Context, toolName string, paramsJSON string, target string, recentCtx string) (string, error)
+// ReviewContext 是 smart mode 下 LLM review 的轻量意图上下文。
+// 它随单次 tool call 传入，避免全局 recent context 在并发工具调用时串线。
+type ReviewContext struct {
+	UserRequest      string
+	ToolIntent       string
+	AssistantContext string
+	RecentContext    string
+}
+
+type ReviewRequest struct {
+	ToolName   string
+	ParamsJSON string
+	Target     string
+	Risk       string
+	Context    ReviewContext
+}
+
+// LLMReviewer 用于 Guard Stage 3 LLM 审查。接收结构化操作上下文，返回 LLM 原始回复。
+type LLMReviewer func(ctx context.Context, req ReviewRequest) (string, error)
 
 type GuardResult struct {
 	Decision   Decision
@@ -60,7 +76,6 @@ type Guard struct {
 	workspace    string
 	sessionID    string
 	llmReviewer  LLMReviewer
-	recentCtx    []string
 }
 
 type blockRule struct {
@@ -79,11 +94,7 @@ func NewGuard(db *sql.DB, sessionID string) *Guard {
 }
 
 func NewGuardWithMode(db *sql.DB, sessionID string, mode Mode) *Guard {
-	g := &Guard{
-		db:        db,
-		sessionID: sessionID,
-		mode:      NormalizeMode(string(mode)),
-	}
+	g := &Guard{db: db, sessionID: sessionID, mode: NormalizeMode(string(mode))}
 	g.blockedRules = g.builtinBlockedRules()
 	g.allowedCmds = g.builtinAllowedCommands()
 	return g
@@ -98,11 +109,7 @@ func NewGuardWithConfigAndMode(db *sql.DB, sessionID string, mode Mode, blockedP
 }
 
 func NewGuardWithConfigModeAndWorkspace(db *sql.DB, sessionID string, mode Mode, workspace string, blockedPatterns []string, blockedReasons []string, allowedPatterns []string, allowedTools []string) *Guard {
-	g := &Guard{
-		db:        db,
-		sessionID: sessionID,
-		mode:      NormalizeMode(string(mode)),
-	}
+	g := &Guard{db: db, sessionID: sessionID, mode: NormalizeMode(string(mode))}
 	g.blockedRules = g.builtinBlockedRules()
 	g.allowedCmds = g.builtinAllowedCommands()
 	g.workspace = normalizeWorkspaceRoot(workspace)
@@ -158,24 +165,18 @@ func (g *Guard) Workspace() string {
 	return g.workspace
 }
 
-// SetLLMReviewer 注入 LLM 审查函数，由 Agent 在创建 Guard 后调用
+// SetLLMReviewer 注入 LLM 审查函数，由 Agent 在创建 Guard 后调用。
 func (g *Guard) SetLLMReviewer(reviewer LLMReviewer) {
 	g.llmReviewer = reviewer
 }
 
-// SetRecentContext 设置最近对话上下文，供 LLM 审查使用
-func (g *Guard) SetRecentContext(messages []string) {
-	g.recentCtx = messages
-}
-
-func (g *Guard) Check(ctx context.Context, tool string, params map[string]any) *GuardResult {
+func (g *Guard) Check(ctx context.Context, tool string, params map[string]any, reviewCtx ...ReviewContext) *GuardResult {
 	risk := g.assessRisk(tool, params)
 
 	if blocked, reason := g.checkWorkspace(tool, params); blocked {
 		g.audit(ctx, tool, params, risk, "workspace_reject", reason)
 		return &GuardResult{Decision: Reject, Reason: reason, Risk: risk, Source: "rule", Audit: "workspace_reject"}
 	}
-
 	if blocked, reason := g.checkBlocked(tool, params); blocked {
 		g.audit(ctx, tool, params, risk, "blocked", reason)
 		return &GuardResult{Decision: Reject, Reason: reason, Risk: risk, Source: "rule", Audit: "blocked"}
@@ -196,62 +197,41 @@ func (g *Guard) Check(ctx context.Context, tool string, params map[string]any) *
 		g.audit(ctx, tool, params, risk, "readonly_reject", "readonly mode blocks this operation")
 		return &GuardResult{Decision: Reject, Reason: "readonly mode blocks this operation", Risk: risk, Source: "static", Audit: "readonly_reject"}
 	}
-
 	if risk == RiskLow {
 		g.audit(ctx, tool, params, risk, "auto_approve", "low_risk")
 		return &GuardResult{Decision: Approve, Reason: "low risk", Risk: risk, Source: "static", Audit: "auto_approve"}
 	}
-
 	if g.Mode() == ModeAuto {
 		g.audit(ctx, tool, params, risk, "auto_approve", fmt.Sprintf("auto mode risk=%s", RiskString(risk)))
 		return &GuardResult{Decision: Approve, Reason: "auto mode", Risk: risk, Source: "static", Audit: "auto_approve"}
 	}
-
 	if g.Mode() == ModeAsk {
 		g.audit(ctx, tool, params, risk, "confirm", fmt.Sprintf("ask mode risk=%s", RiskString(risk)))
 		return &GuardResult{Decision: Confirm, Reason: "confirm risky operation", Risk: risk, Source: "user", Audit: "confirm"}
 	}
 
-	// smart mode: LLM 审查（中高风险），失败或不确定时转用户确认。
+	// smart mode: medium/high 由 LLM 结合任务意图判断；失败或不确定才转人工确认。
 	if g.llmReviewer != nil {
-		result := g.llmReview(ctx, tool, params, risk)
-		if result != nil {
+		ctxForReview := ReviewContext{}
+		if len(reviewCtx) > 0 {
+			ctxForReview = reviewCtx[0]
+		}
+		if result := g.llmReview(ctx, tool, params, risk, ctxForReview); result != nil {
 			return result
 		}
 	}
-
 	g.audit(ctx, tool, params, risk, "confirm", "smart review unavailable or inconclusive")
 	return &GuardResult{Decision: Confirm, Reason: "smart review unavailable or inconclusive", Risk: risk, Source: "fallback", Audit: "confirm"}
 }
 
-// llmReview 调用 LLM 进行安全审查
-func (g *Guard) llmReview(ctx context.Context, toolName string, params map[string]any, risk RiskLevel) *GuardResult {
-	var target string
-	switch toolName {
-	case "exec":
-		target, _ = params["command"].(string)
-	case "writefile", "editfile":
-		target, _ = params["path"].(string)
-	case "writehttp":
-		target, _ = params["url"].(string)
-	}
-
-	paramsJSON, _ := json.Marshal(params)
-
-	recentCtx := ""
-	if len(g.recentCtx) > 0 {
-		start := 0
-		if len(g.recentCtx) > 3 {
-			start = len(g.recentCtx) - 3
-		}
-		recentCtx = strings.Join(g.recentCtx[start:], "\n")
-	}
-
-	resp, err := g.llmReviewer(ctx, toolName, string(paramsJSON), target, recentCtx)
+// llmReview 调用 LLM 进行安全审查。LLM 可以 approve/reject/confirm/modify。
+func (g *Guard) llmReview(ctx context.Context, toolName string, params map[string]any, risk RiskLevel, reviewCtx ReviewContext) *GuardResult {
+	target := guardTarget(toolName, params)
+	paramsJSON, _ := marshalParams(params)
+	resp, err := g.llmReviewer(ctx, ReviewRequest{ToolName: toolName, ParamsJSON: paramsJSON, Target: target, Risk: RiskString(risk), Context: reviewCtx})
 	if err != nil {
 		return nil
 	}
-
 	var decision struct {
 		Decision   string `json:"decision"`
 		Reason     string `json:"reason"`
@@ -260,14 +240,14 @@ func (g *Guard) llmReview(ctx context.Context, toolName string, params map[strin
 	if err := json.Unmarshal([]byte(extractJSON(resp)), &decision); err != nil {
 		return nil
 	}
-
+	decision.Decision = strings.ToLower(strings.TrimSpace(decision.Decision))
 	switch decision.Decision {
 	case "reject":
 		g.audit(ctx, toolName, params, risk, "llm_reject", decision.Reason)
 		return &GuardResult{Decision: Reject, Reason: decision.Reason, Risk: risk, Source: "llm", Audit: "llm_reject"}
 	case "confirm":
 		g.audit(ctx, toolName, params, risk, "llm_confirm", decision.Reason)
-		return &GuardResult{Decision: Confirm, Reason: decision.Reason, Risk: risk, Source: "llm", Audit: "llm_confirm"}
+		return &GuardResult{Decision: Confirm, Reason: decision.Reason, Risk: risk, Suggestion: decision.Suggestion, Source: "llm", Audit: "llm_confirm"}
 	case "modify":
 		g.audit(ctx, toolName, params, risk, "llm_modify", decision.Reason)
 		return &GuardResult{Decision: Modify, Reason: decision.Reason, Risk: risk, Suggestion: decision.Suggestion, Source: "llm", Audit: "llm_modify"}
@@ -280,7 +260,7 @@ func (g *Guard) llmReview(ctx context.Context, toolName string, params map[strin
 	}
 }
 
-// extractJSON 从 LLM 回复中提取 JSON 对象
+// extractJSON 从 LLM 回复中提取 JSON 对象。
 func extractJSON(s string) string {
 	s = strings.TrimSpace(s)
 	start := strings.Index(s, "{")
@@ -292,22 +272,10 @@ func extractJSON(s string) string {
 }
 
 func (g *Guard) checkBlocked(tool string, params map[string]any) (bool, string) {
-	var target string
-	switch tool {
-	case "exec":
-		target, _ = params["command"].(string)
-	case "writefile", "editfile":
-		target, _ = params["path"].(string)
-	case "writehttp":
-		target, _ = params["url"].(string)
-	case "readfile", "listdir":
-		target, _ = params["path"].(string)
-	case "readhttp":
-		target, _ = params["url"].(string)
-	default:
+	target := guardTarget(tool, params)
+	if target == "" {
 		return false, ""
 	}
-
 	for _, rule := range g.blockedRules {
 		if rule.pattern.MatchString(target) {
 			return true, rule.reason
@@ -342,7 +310,7 @@ func guardTarget(tool string, params map[string]any) string {
 	case "exec":
 		target, _ := params["command"].(string)
 		return target
-	case "writefile", "editfile", "readfile":
+	case "writefile", "editfile", "readfile", "listdir":
 		target, _ := params["path"].(string)
 		return target
 	case "writehttp", "readhttp":
@@ -364,12 +332,10 @@ func (g *Guard) audit(ctx context.Context, tool string, params map[string]any, r
 	} else if risk == RiskHigh {
 		riskStr = "high"
 	}
-
 	paramsStr := "{}"
 	if b, err := marshalParams(params); err == nil {
 		paramsStr = b
 	}
-
 	g.db.ExecContext(ctx, `
 		INSERT INTO audit_log (id, session_id, tool, params, risk_level, guard_decision, guard_reason)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -379,21 +345,15 @@ func (g *Guard) audit(ctx context.Context, tool string, params map[string]any, r
 
 func (g *Guard) builtinBlockedRules() []blockRule {
 	rules := platformBlockedRules()
-
-	genericRules := []struct {
-		pattern string
-		reason  string
-	}{
+	genericRules := []struct{ pattern, reason string }{
 		{`(?i)\b(curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b.*\|\s*(sh|bash|zsh|fish|iex|invoke-expression|powershell|pwsh)\b`, "blocked: remote script pipe execution"},
 		{`(?i)\beval\s*\$\(`, "blocked: command injection pattern"},
 	}
 	for _, r := range genericRules {
-		re, err := regexp.Compile(r.pattern)
-		if err == nil {
+		if re, err := regexp.Compile(r.pattern); err == nil {
 			rules = append(rules, blockRule{pattern: re, reason: r.reason})
 		}
 	}
-
 	return rules
 }
 
@@ -425,8 +385,7 @@ func (g *Guard) assessRisk(tool string, params map[string]any) RiskLevel {
 	case "readfile", "listdir", "readhttp":
 		return RiskLow
 	default:
-		// Unknown Act tools are never safe-by-default. New capabilities must be
-		// explicitly classified before they can bypass confirmation.
+		// Unknown Act tools are never safe-by-default. New capabilities must be explicitly classified.
 		return RiskMedium
 	}
 }
@@ -444,9 +403,7 @@ func RiskString(risk RiskLevel) string {
 
 func isReadOnlyTool(tool string) bool {
 	switch tool {
-	case "readfile", "listdir", "readhttp":
-		return true
-	case "exec":
+	case "readfile", "listdir", "readhttp", "exec":
 		return true
 	default:
 		return false

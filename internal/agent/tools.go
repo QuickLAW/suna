@@ -19,7 +19,7 @@ import (
 )
 
 func (a *Agent) ExecuteTool(ctx context.Context, id string, name string, params map[string]any) tool.Result {
-	return a.executeTool(ctx, id, name, params, nil)
+	return a.executeTool(ctx, runner.ToolExecution{ID: id, Name: name, Params: params}, nil)
 }
 
 type mainExecutor struct {
@@ -27,11 +27,12 @@ type mainExecutor struct {
 	events chan<- Event
 }
 
-func (e mainExecutor) ExecuteTool(ctx context.Context, id string, name string, params map[string]any) tool.Result {
-	return e.agent.executeTool(ctx, id, name, params, e.events)
+func (e mainExecutor) ExecuteTool(ctx context.Context, call runner.ToolExecution) tool.Result {
+	return e.agent.executeTool(ctx, call, e.events)
 }
 
-func (a *Agent) executeTool(ctx context.Context, id string, name string, params map[string]any, events chan<- Event) tool.Result {
+func (a *Agent) executeTool(ctx context.Context, call runner.ToolExecution, events chan<- Event) tool.Result {
+	id, name, params := call.ID, call.Name, call.Params
 	if name == "askuser" {
 		return a.executeAskUser(ctx, params, events)
 	}
@@ -44,12 +45,15 @@ func (a *Agent) executeTool(ctx context.Context, id string, name string, params 
 	}
 	if a.shouldGuardTool(name) {
 		a.prepareWorkspaceParams(name, params)
-		result := a.guard.Check(ctx, name, params)
+		result := a.guard.Check(ctx, name, params, a.buildGuardReviewContext(call))
 		a.emitToolGuard(events, id, name, result)
 		if result.Decision == guard.Reject {
 			return tool.ErrorResult("blocked: " + result.Reason)
 		}
-		if result.Decision == guard.Confirm || result.Decision == guard.Modify {
+		if result.Decision == guard.Modify {
+			return guardModifyResult(result)
+		}
+		if result.Decision == guard.Confirm {
 			if !a.confirmGuard(ctx, id, name, params, result, events) {
 				return tool.ErrorResult("blocked: user rejected guard confirmation")
 			}
@@ -63,6 +67,17 @@ func (a *Agent) executeTool(ctx context.Context, id string, name string, params 
 		result.Content = guard.MaskSensitiveContent(result.Content)
 	}
 	return result
+}
+
+func guardModifyResult(result *guard.GuardResult) tool.Result {
+	msg := "guard requested a safer modified tool call"
+	if strings.TrimSpace(result.Reason) != "" {
+		msg += ": " + result.Reason
+	}
+	if strings.TrimSpace(result.Suggestion) != "" {
+		msg += "\nsuggestion: " + result.Suggestion
+	}
+	return tool.ErrorResult(msg)
 }
 
 func (a *Agent) emitToolGuard(events chan<- Event, id string, name string, result *guard.GuardResult) {
@@ -197,7 +212,8 @@ type subtaskExecutor struct {
 	registry *tool.Registry
 }
 
-func (e subtaskExecutor) ExecuteTool(ctx context.Context, id string, name string, params map[string]any) tool.Result {
+func (e subtaskExecutor) ExecuteTool(ctx context.Context, call runner.ToolExecution) tool.Result {
+	name, params := call.Name, call.Params
 	if name == "askuser" || name == "spawn" {
 		return tool.ErrorResult("subtask cannot use " + name)
 	}
@@ -207,13 +223,16 @@ func (e subtaskExecutor) ExecuteTool(ctx context.Context, id string, name string
 	}
 	if e.agent.shouldGuardTool(name) {
 		e.agent.prepareWorkspaceParams(name, params)
-		result := e.agent.guard.Check(ctx, name, params)
-		e.agent.emitToolGuard(e.events, id, name, result)
+		result := e.agent.guard.Check(ctx, name, params, e.agent.buildGuardReviewContext(call))
+		e.agent.emitToolGuard(e.events, call.ID, name, result)
 		if result.Decision == guard.Reject {
 			return tool.ErrorResult("blocked: " + result.Reason)
 		}
-		if result.Decision == guard.Confirm || result.Decision == guard.Modify {
-			if !e.agent.confirmGuard(ctx, id, name, params, result, e.events) {
+		if result.Decision == guard.Modify {
+			return guardModifyResult(result)
+		}
+		if result.Decision == guard.Confirm {
+			if !e.agent.confirmGuard(ctx, call.ID, name, params, result, e.events) {
 				return tool.ErrorResult("blocked: user rejected guard confirmation")
 			}
 		}
@@ -226,6 +245,51 @@ func (e subtaskExecutor) ExecuteTool(ctx context.Context, id string, name string
 		res.Content = guard.MaskSensitiveContent(res.Content)
 	}
 	return res
+}
+
+func (a *Agent) buildGuardReviewContext(call runner.ToolExecution) guard.ReviewContext {
+	// smart guard 只需要短上下文：当前用户意图 + 工具意图 + 最近几条消息摘要。
+	ctx := guard.ReviewContext{
+		ToolIntent:       trimForGuard(call.Intent, 500),
+		AssistantContext: trimForGuard(call.AssistantContext, 800),
+	}
+	if a.working != nil {
+		ctx.UserRequest = trimForGuard(a.working.LastUserText(), 1200)
+		ctx.RecentContext = a.recentContextForGuard(6, 1800)
+	}
+	return ctx
+}
+
+func (a *Agent) recentContextForGuard(n, maxChars int) string {
+	msgs := a.working.LastN(n)
+	lines := make([]string, 0, len(msgs))
+	for _, msg := range msgs {
+		role := string(msg.Role)
+		text := strings.TrimSpace(msg.Text())
+		if text == "" && len(msg.ToolCalls) > 0 {
+			names := make([]string, 0, len(msg.ToolCalls))
+			for _, tc := range msg.ToolCalls {
+				names = append(names, tc.Name)
+			}
+			text = "tool calls: " + strings.Join(names, ", ")
+		}
+		if text == "" {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("[%s] %s", role, trimForGuard(text, 400)))
+	}
+	return trimForGuard(strings.Join(lines, "\n"), maxChars)
+}
+
+func trimForGuard(s string, max int) string {
+	s = strings.TrimSpace(guard.MaskSensitiveContent(s))
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	if max <= 16 {
+		return s[:max]
+	}
+	return s[:max-16] + "...[truncated]"
 }
 
 func (a *Agent) shouldGuardTool(name string) bool {
@@ -476,18 +540,24 @@ func (a *Agent) availableSpawnTools() []string {
 	return filtered
 }
 
-func (a *Agent) guardLLMReview(ctx context.Context, toolName string, paramsJSON string, target string, recentCtx string) (string, error) {
-	reviewPrompt, err := a.prompts.RenderGuardReview(prompt.GuardReviewData{ToolName: toolName, ToolParams: paramsJSON, Target: target, RecentContext: recentCtx})
+func (a *Agent) guardLLMReview(ctx context.Context, req guard.ReviewRequest) (string, error) {
+	reviewPrompt, err := a.prompts.RenderGuardReview(prompt.GuardReviewData{
+		ToolName:         req.ToolName,
+		ToolParams:       req.ParamsJSON,
+		Target:           req.Target,
+		Risk:             req.Risk,
+		UserRequest:      req.Context.UserRequest,
+		ToolIntent:       req.Context.ToolIntent,
+		AssistantContext: req.Context.AssistantContext,
+		RecentContext:    req.Context.RecentContext,
+	})
 	if err != nil {
 		return "", err
 	}
-	_, modelRef, err := a.router.Route(ctx, "")
-	if err != nil {
-		return "", err
-	}
+	modelRef := a.router.ActiveRef()
 	modelID := resolveModelID(a.cfg, modelRef)
-	req := &model.CompletionRequest{Model: modelID, Purpose: "guard_review", RequestID: uuid.New().String(), System: "Reply with JSON only.", Messages: []model.Message{model.NewTextMessage(model.RoleUser, reviewPrompt)}, MaxTokens: 100}
-	ch, err := a.router.Complete(ctx, modelRef, req)
+	request := &model.CompletionRequest{Model: modelID, Purpose: "guard_review", RequestID: uuid.New().String(), System: "Reply with JSON only.", Messages: []model.Message{model.NewTextMessage(model.RoleUser, reviewPrompt)}, MaxTokens: 180, Temperature: 0}
+	ch, err := a.router.Complete(ctx, modelRef, request)
 	if err != nil {
 		return "", err
 	}

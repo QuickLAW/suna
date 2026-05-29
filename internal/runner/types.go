@@ -80,8 +80,18 @@ type UsageEvent struct {
 	Duration      time.Duration
 }
 
+// ToolExecution 是一次具体工具调用的不可变上下文。
+// Intent 与 AssistantContext 专供 smart guard review 判断“为什么要调用”。
+type ToolExecution struct {
+	ID               string
+	Name             string
+	Params           map[string]any
+	Intent           string
+	AssistantContext string
+}
+
 type ToolExecutor interface {
-	ExecuteTool(ctx context.Context, id string, name string, params map[string]any) tool.Result
+	ExecuteTool(ctx context.Context, call ToolExecution) tool.Result
 }
 
 type UsageSink interface {
@@ -110,9 +120,10 @@ type Runner struct {
 }
 
 type preparedToolCall struct {
-	tc     model.ToolCall
-	params map[string]any
-	intent string
+	tc               model.ToolCall
+	params           map[string]any
+	intent           string
+	assistantContext string
 }
 
 type toolExecResult struct {
