@@ -7,122 +7,70 @@ import (
 	"testing"
 )
 
-func TestGuardWorkspaceNormalize(t *testing.T) {
+func TestGuardWorkspaceNormalizesExistingDirectory(t *testing.T) {
 	workspace := t.TempDir()
 	cfg := &Config{Guard: GuardConfig{Workspace: workspace}}
+
 	if err := cfg.NormalizeGuard(); err != nil {
-		t.Fatalf("NormalizeGuard error: %v", err)
+		t.Fatalf("NormalizeGuard() error = %v", err)
 	}
-	want, err := filepath.EvalSymlinks(workspace)
-	if err != nil {
-		t.Fatalf("EvalSymlinks workspace: %v", err)
-	}
-	if cfg.Guard.Workspace != filepath.Clean(want) {
-		t.Fatalf("workspace = %q, want %q", cfg.Guard.Workspace, filepath.Clean(want))
+	want := cleanSymlinkPath(t, workspace)
+	if got := cfg.Guard.Workspace; got != want {
+		t.Fatalf("Guard.Workspace = %q, want %q", got, want)
 	}
 }
 
 func TestGuardWorkspaceRejectsMissingDirectory(t *testing.T) {
 	cfg := &Config{Guard: GuardConfig{Workspace: filepath.Join(t.TempDir(), "missing")}}
 	if err := cfg.NormalizeGuard(); err == nil {
-		t.Fatalf("NormalizeGuard missing workspace succeeded, want error")
+		t.Fatalf("NormalizeGuard() error = nil, want non-nil")
 	}
 }
 
-func TestSaveKeepsGuardWorkspace(t *testing.T) {
-	dir := t.TempDir()
-	workspace := filepath.Join(dir, "workspace")
-	if err := os.Mkdir(workspace, 0755); err != nil {
-		t.Fatalf("mkdir workspace: %v", err)
-	}
-	cfg := &Config{
-		ActiveModel: "test/model",
-		Models:      []ModelConfig{{Provider: "test", Model: "model"}},
-		Guard:       GuardConfig{Mode: "ask", Workspace: workspace},
-		UI:          UIConfig{Theme: "auto", Locale: "en"},
-		DataDir:     dir,
-	}
-	path := filepath.Join(dir, "config.toml")
+func TestConfigSaveKeepsGuardWorkspace(t *testing.T) {
+	cfg, path, workspace := newSaveTestConfig(t, 0)
+
 	if err := cfg.Save(path); err != nil {
-		t.Fatalf("Save error: %v", err)
+		t.Fatalf("Save() error = %v", err)
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read saved config: %v", err)
-	}
-	want, err := filepath.EvalSymlinks(workspace)
-	if err != nil {
-		t.Fatalf("EvalSymlinks workspace: %v", err)
-	}
-	if !strings.Contains(string(data), `workspace = "`+filepath.Clean(want)+`"`) {
-		t.Fatalf("saved config missing workspace: %s", string(data))
+	data := readFile(t, path)
+	want := `workspace = "` + cleanSymlinkPath(t, workspace) + `"`
+	if !strings.Contains(data, want) {
+		t.Fatalf("saved config = %q, want substring %q", data, want)
 	}
 }
 
-func TestSaveOmitsDefaultMaxModelRPS(t *testing.T) {
-	dir := t.TempDir()
-	workspace := filepath.Join(dir, "workspace")
-	if err := os.Mkdir(workspace, 0755); err != nil {
-		t.Fatalf("mkdir workspace: %v", err)
-	}
-	cfg := &Config{
-		ActiveModel: "test/model",
-		Models:      []ModelConfig{{Provider: "test", Model: "model"}},
-		Guard:       GuardConfig{Mode: "ask", Workspace: workspace},
-		UI:          UIConfig{Theme: "auto", Locale: "en"},
-		MaxModelRPS: 0,
-		DataDir:     dir,
-	}
-	path := filepath.Join(dir, "config.toml")
+func TestConfigSaveOmitsDefaultMaxModelRPS(t *testing.T) {
+	cfg, path, _ := newSaveTestConfig(t, 0)
+
 	if err := cfg.Save(path); err != nil {
-		t.Fatalf("Save error: %v", err)
+		t.Fatalf("Save() error = %v", err)
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read saved config: %v", err)
-	}
-	if strings.Contains(string(data), "max_model_rps") {
-		t.Fatalf("saved config should omit default max_model_rps: %s", string(data))
+	data := readFile(t, path)
+	if strings.Contains(data, "max_model_rps") {
+		t.Fatalf("saved config = %q, should not contain max_model_rps", data)
 	}
 	if got := cfg.GetMaxModelRPS(); got != DefaultMaxModelRPS {
 		t.Fatalf("GetMaxModelRPS() = %d, want %d", got, DefaultMaxModelRPS)
 	}
 }
 
-func TestSaveKeepsCustomMaxModelRPS(t *testing.T) {
-	dir := t.TempDir()
-	workspace := filepath.Join(dir, "workspace")
-	if err := os.Mkdir(workspace, 0755); err != nil {
-		t.Fatalf("mkdir workspace: %v", err)
-	}
-	cfg := &Config{
-		ActiveModel: "test/model",
-		Models:      []ModelConfig{{Provider: "test", Model: "model"}},
-		Guard:       GuardConfig{Mode: "ask", Workspace: workspace},
-		UI:          UIConfig{Theme: "auto", Locale: "en"},
-		MaxModelRPS: 20,
-		DataDir:     dir,
-	}
-	path := filepath.Join(dir, "config.toml")
+func TestConfigSaveKeepsCustomMaxModelRPS(t *testing.T) {
+	cfg, path, _ := newSaveTestConfig(t, 20)
+
 	if err := cfg.Save(path); err != nil {
-		t.Fatalf("Save error: %v", err)
+		t.Fatalf("Save() error = %v", err)
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read saved config: %v", err)
-	}
-	if !strings.Contains(string(data), "max_model_rps = 20") {
-		t.Fatalf("saved config missing custom max_model_rps: %s", string(data))
+	data := readFile(t, path)
+	if !strings.Contains(data, "max_model_rps = 20") {
+		t.Fatalf("saved config = %q, want custom max_model_rps", data)
 	}
 }
 
-func TestReasoningRoundTrip(t *testing.T) {
+func TestConfigReasoningRoundTripsInlineTable(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
-	workspace := filepath.Join(dir, "workspace")
-	if err := os.Mkdir(workspace, 0755); err != nil {
-		t.Fatalf("mkdir workspace: %v", err)
-	}
+	workspace := mkdir(t, filepath.Join(dir, "workspace"))
 	cfg := &Config{
 		ActiveModel: "openai/gpt-5",
 		Models: []ModelConfig{{
@@ -136,32 +84,27 @@ func TestReasoningRoundTrip(t *testing.T) {
 		UI:      UIConfig{Theme: "auto", Locale: "en"},
 		DataDir: dir,
 	}
+
 	if err := cfg.Save(path); err != nil {
-		t.Fatalf("Save error: %v", err)
+		t.Fatalf("Save() error = %v", err)
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read saved config: %v", err)
-	}
-	if !strings.Contains(string(data), `reasoning = { reasoning = { effort = "high" } }`) {
-		t.Fatalf("reasoning not saved as inline table: %s", string(data))
+	data := readFile(t, path)
+	if !strings.Contains(data, `reasoning = { reasoning = { effort = "high" } }`) {
+		t.Fatalf("saved config = %q, want inline reasoning table", data)
 	}
 	var loaded Config
 	if err := LoadTOML(path, &loaded); err != nil {
-		t.Fatalf("LoadTOML error: %v", err)
+		t.Fatalf("LoadTOML() error = %v", err)
 	}
 	got := loaded.Models[0].Reasoning["reasoning"].(map[string]any)["effort"]
 	if got != "high" {
-		t.Fatalf("reasoning effort = %#v", got)
+		t.Fatalf("reasoning.effort = %#v, want %q", got, "high")
 	}
 }
 
-func TestReasoningSavesInlineThinkingTable(t *testing.T) {
+func TestConfigReasoningSavesInlineThinkingTable(t *testing.T) {
 	dir := t.TempDir()
-	workspace := filepath.Join(dir, "workspace")
-	if err := os.Mkdir(workspace, 0755); err != nil {
-		t.Fatalf("mkdir workspace: %v", err)
-	}
+	workspace := mkdir(t, filepath.Join(dir, "workspace"))
 	cfg := &Config{
 		ActiveModel: "DF/GLM-5.1",
 		Models: []ModelConfig{{
@@ -178,69 +121,113 @@ func TestReasoningSavesInlineThinkingTable(t *testing.T) {
 		DataDir: dir,
 	}
 	path := filepath.Join(t.TempDir(), "config.toml")
+
 	if err := cfg.Save(path); err != nil {
-		t.Fatalf("Save error: %v", err)
+		t.Fatalf("Save() error = %v", err)
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read saved config: %v", err)
-	}
-	saved := string(data)
+	saved := readFile(t, path)
 	if !strings.Contains(saved, `reasoning = { thinking = { type = "disabled" } }`) {
-		t.Fatalf("reasoning not saved as inline table: %s", saved)
+		t.Fatalf("saved config = %q, want inline thinking table", saved)
 	}
 	if strings.Contains(saved, "[models.reasoning") {
-		t.Fatalf("reasoning saved as nested table: %s", saved)
+		t.Fatalf("saved config = %q, should not contain nested reasoning table", saved)
 	}
 	var loaded Config
 	if err := LoadTOML(path, &loaded); err != nil {
-		t.Fatalf("LoadTOML error: %v", err)
+		t.Fatalf("LoadTOML() error = %v", err)
 	}
 	thinking, ok := loaded.Models[0].Reasoning["thinking"].(map[string]any)
 	if !ok {
-		t.Fatalf("thinking = %#v", loaded.Models[0].Reasoning["thinking"])
+		t.Fatalf("thinking = %#v, want map", loaded.Models[0].Reasoning["thinking"])
 	}
 	if got := thinking["type"]; got != "disabled" {
-		t.Fatalf("thinking.type = %#v", got)
+		t.Fatalf("thinking.type = %#v, want %q", got, "disabled")
 	}
 }
 
-func TestDeleteCredentialRemovesOnlyProvider(t *testing.T) {
+func TestDeleteCredentialRemovesOnlyRequestedProvider(t *testing.T) {
 	dir := t.TempDir()
-	if err := SaveCredential(dir, "openai", "sk-openai"); err != nil {
-		t.Fatalf("SaveCredential openai: %v", err)
-	}
-	if err := SaveCredential(dir, "anthropic", "sk-anthropic"); err != nil {
-		t.Fatalf("SaveCredential anthropic: %v", err)
-	}
+	mustSaveCredential(t, dir, "openai", "sk-openai")
+	mustSaveCredential(t, dir, "anthropic", "sk-anthropic")
+
 	if err := DeleteCredential(dir, "openai"); err != nil {
-		t.Fatalf("DeleteCredential: %v", err)
+		t.Fatalf("DeleteCredential() error = %v", err)
 	}
-	creds, err := readCredentials(dir)
-	if err != nil {
-		t.Fatalf("readCredentials: %v", err)
-	}
+	creds := loadCredentials(t, dir)
 	if _, ok := creds["openai"]; ok {
-		t.Fatalf("openai credential still present: %#v", creds)
+		t.Fatalf("credentials[openai] exists in %#v, want absent", creds)
 	}
 	if got := creds["anthropic"].APIKey; got != "sk-anthropic" {
-		t.Fatalf("anthropic key = %q", got)
+		t.Fatalf("credentials[anthropic].APIKey = %q, want %q", got, "sk-anthropic")
 	}
 }
 
 func TestDeleteCredentialMissingProviderIsNoop(t *testing.T) {
 	dir := t.TempDir()
-	if err := SaveCredential(dir, "openai", "sk-openai"); err != nil {
-		t.Fatalf("SaveCredential: %v", err)
-	}
+	mustSaveCredential(t, dir, "openai", "sk-openai")
+
 	if err := DeleteCredential(dir, "missing"); err != nil {
-		t.Fatalf("DeleteCredential missing provider: %v", err)
+		t.Fatalf("DeleteCredential() error = %v", err)
 	}
+	creds := loadCredentials(t, dir)
+	if got := creds["openai"].APIKey; got != "sk-openai" {
+		t.Fatalf("credentials[openai].APIKey = %q, want %q", got, "sk-openai")
+	}
+}
+
+func newSaveTestConfig(t *testing.T, maxModelRPS int) (*Config, string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	workspace := mkdir(t, filepath.Join(dir, "workspace"))
+	cfg := &Config{
+		ActiveModel: "test/model",
+		Models:      []ModelConfig{{Provider: "test", Model: "model"}},
+		Guard:       GuardConfig{Mode: "ask", Workspace: workspace},
+		UI:          UIConfig{Theme: "auto", Locale: "en"},
+		MaxModelRPS: maxModelRPS,
+		DataDir:     dir,
+	}
+	return cfg, filepath.Join(dir, "config.toml"), workspace
+}
+
+func mkdir(t *testing.T, path string) string {
+	t.Helper()
+	if err := os.Mkdir(path, 0755); err != nil {
+		t.Fatalf("Mkdir(%q) error = %v", path, err)
+	}
+	return path
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	return string(data)
+}
+
+func cleanSymlinkPath(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q) error = %v", path, err)
+	}
+	return filepath.Clean(resolved)
+}
+
+func mustSaveCredential(t *testing.T, dir, provider, key string) {
+	t.Helper()
+	if err := SaveCredential(dir, provider, key); err != nil {
+		t.Fatalf("SaveCredential(%q) error = %v", provider, err)
+	}
+}
+
+func loadCredentials(t *testing.T, dir string) credentialsFile {
+	t.Helper()
 	creds, err := readCredentials(dir)
 	if err != nil {
-		t.Fatalf("readCredentials: %v", err)
+		t.Fatalf("readCredentials() error = %v", err)
 	}
-	if got := creds["openai"].APIKey; got != "sk-openai" {
-		t.Fatalf("openai key = %q", got)
-	}
+	return creds
 }

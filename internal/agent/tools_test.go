@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/alanchenchen/suna/internal/guard"
 	"github.com/alanchenchen/suna/internal/memory"
@@ -63,10 +64,8 @@ func TestSubtaskGuardEventsUseNamespacedToolID(t *testing.T) {
 		if evt.GuardToolCallID != "spawn:spawn-1:call-1" {
 			t.Fatalf("GuardToolCallID = %q, want namespaced id", evt.GuardToolCallID)
 		}
-	case <-context.Background().Done():
-		t.Fatal("unreachable")
-	default:
-		t.Fatal("missing guard event")
+	case <-time.After(time.Second):
+		t.Fatalf("guard event received = false, want true")
 	}
 }
 

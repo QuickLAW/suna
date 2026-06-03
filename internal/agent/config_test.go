@@ -13,137 +13,83 @@ import (
 
 func TestUpdateConfigDeleteModelKeepsCredentialByDefault(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &config.Config{
-		ActiveModel: "openai/gpt-4o-mini",
-		Models:      []config.ModelConfig{{Provider: "openai", Model: "gpt-4o-mini", BaseURL: "https://api.openai.com/v1", APIKey: "sk-openai"}},
-		UI:          config.UIConfig{Theme: "auto", Locale: "en"},
-		Guard:       config.GuardConfig{Mode: "ask"},
-		DataDir:     dir,
-	}
-	if err := config.SaveCredential(dir, "openai", "sk-openai"); err != nil {
-		t.Fatalf("SaveCredential: %v", err)
-	}
+	cfg := newAgentConfig(dir, []config.ModelConfig{openAIModel("gpt-4o-mini")}, "openai/gpt-4o-mini")
+	mustSaveCredential(t, dir, "openai", "sk-openai")
 	a := &Agent{cfg: cfg}
 
 	if _, err := a.UpdateConfig(ConfigSetParams{Action: protocol.ConfigActionDeleteModel, ModelRef: "openai/gpt-4o-mini"}); err != nil {
-		t.Fatalf("UpdateConfig: %v", err)
+		t.Fatalf("UpdateConfig() error = %v", err)
 	}
-	loaded := &config.Config{Models: []config.ModelConfig{{Provider: "openai", Model: "gpt-4o-mini"}}, DataDir: dir}
-	if err := config.LoadCredentials(loaded); err != nil {
-		t.Fatalf("LoadCredentials: %v", err)
-	}
-	if got := loaded.Models[0].APIKey; got != "sk-openai" {
-		t.Fatalf("APIKey = %q", got)
+	if got := loadModelCredential(t, dir, "openai", "gpt-4o-mini"); got != "sk-openai" {
+		t.Fatalf("loaded API key = %q, want %q", got, "sk-openai")
 	}
 }
 
 func TestUpdateConfigDeleteLastProviderModelCanDeleteCredential(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &config.Config{
-		ActiveModel: "openai/gpt-4o-mini",
-		Models:      []config.ModelConfig{{Provider: "openai", Model: "gpt-4o-mini", BaseURL: "https://api.openai.com/v1", APIKey: "sk-openai"}},
-		UI:          config.UIConfig{Theme: "auto", Locale: "en"},
-		Guard:       config.GuardConfig{Mode: "ask"},
-		DataDir:     dir,
-	}
-	if err := config.SaveCredential(dir, "openai", "sk-openai"); err != nil {
-		t.Fatalf("SaveCredential: %v", err)
-	}
+	cfg := newAgentConfig(dir, []config.ModelConfig{openAIModel("gpt-4o-mini")}, "openai/gpt-4o-mini")
+	mustSaveCredential(t, dir, "openai", "sk-openai")
 	a := &Agent{cfg: cfg}
 
 	if _, err := a.UpdateConfig(ConfigSetParams{Action: protocol.ConfigActionDeleteModel, ModelRef: "openai/gpt-4o-mini", DeleteAPIKey: true}); err != nil {
-		t.Fatalf("UpdateConfig: %v", err)
+		t.Fatalf("UpdateConfig() error = %v", err)
 	}
-	loaded := &config.Config{Models: []config.ModelConfig{{Provider: "openai", Model: "gpt-4o-mini"}}, DataDir: dir}
-	if err := config.LoadCredentials(loaded); err != nil {
-		t.Fatalf("LoadCredentials: %v", err)
-	}
-	if got := loaded.Models[0].APIKey; got != "" {
-		t.Fatalf("APIKey = %q, want empty", got)
+	if got := loadModelCredential(t, dir, "openai", "gpt-4o-mini"); got != "" {
+		t.Fatalf("loaded API key = %q, want empty", got)
 	}
 }
 
 func TestUpdateConfigDoesNotDeleteCredentialWhenProviderStillUsed(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &config.Config{
-		ActiveModel: "openai/gpt-4o-mini",
-		Models: []config.ModelConfig{
-			{Provider: "openai", Model: "gpt-4o-mini", BaseURL: "https://api.openai.com/v1", APIKey: "sk-openai"},
-			{Provider: "openai", Model: "gpt-4o", BaseURL: "https://api.openai.com/v1", APIKey: "sk-openai"},
-		},
-		UI:      config.UIConfig{Theme: "auto", Locale: "en"},
-		Guard:   config.GuardConfig{Mode: "ask"},
-		DataDir: dir,
-	}
-	if err := config.SaveCredential(dir, "openai", "sk-openai"); err != nil {
-		t.Fatalf("SaveCredential: %v", err)
-	}
+	cfg := newAgentConfig(dir, []config.ModelConfig{openAIModel("gpt-4o-mini"), openAIModel("gpt-4o")}, "openai/gpt-4o-mini")
+	mustSaveCredential(t, dir, "openai", "sk-openai")
 	a := &Agent{cfg: cfg}
 
 	if _, err := a.UpdateConfig(ConfigSetParams{Action: protocol.ConfigActionDeleteModel, ModelRef: "openai/gpt-4o-mini", DeleteAPIKey: true}); err != nil {
-		t.Fatalf("UpdateConfig: %v", err)
+		t.Fatalf("UpdateConfig() error = %v", err)
 	}
-	loaded := &config.Config{Models: []config.ModelConfig{{Provider: "openai", Model: "gpt-4o"}}, DataDir: dir}
-	if err := config.LoadCredentials(loaded); err != nil {
-		t.Fatalf("LoadCredentials: %v", err)
-	}
-	if got := loaded.Models[0].APIKey; got != "sk-openai" {
-		t.Fatalf("APIKey = %q", got)
+	if got := loadModelCredential(t, dir, "openai", "gpt-4o"); got != "sk-openai" {
+		t.Fatalf("loaded API key = %q, want %q", got, "sk-openai")
 	}
 }
 
 func TestReloadRouterUpdatesMemoryWorkerProvider(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &config.Config{
-		ActiveModel: "openai/gpt-4o-mini",
-		Models: []config.ModelConfig{
-			{Provider: "openai", Model: "gpt-4o-mini", BaseURL: "https://api.openai.com/v1", APIKey: "sk-openai"},
-			{Provider: "anthropic", Model: "claude-sonnet", BaseURL: "https://api.anthropic.com", APIKey: "sk-anthropic"},
-		},
-		UI:      config.UIConfig{Theme: "auto", Locale: "en"},
-		Guard:   config.GuardConfig{Mode: "ask"},
-		DataDir: dir,
-	}
+	cfg := newAgentConfig(dir, []config.ModelConfig{openAIModel("gpt-4o-mini"), anthropicModel("claude-sonnet")}, "openai/gpt-4o-mini")
 	if err := cfg.Save(cfg.ConfigPath()); err != nil {
-		t.Fatalf("Save config: %v", err)
+		t.Fatalf("Save() error = %v", err)
 	}
-	if err := config.SaveCredential(dir, "openai", "sk-openai"); err != nil {
-		t.Fatalf("SaveCredential openai: %v", err)
+	mustSaveCredential(t, dir, "openai", "sk-openai")
+	mustSaveCredential(t, dir, "anthropic", "sk-anthropic")
+	if err := config.LoadCredentials(cfg); err != nil {
+		t.Fatalf("LoadCredentials() error = %v", err)
 	}
-	if err := config.SaveCredential(dir, "anthropic", "sk-anthropic"); err != nil {
-		t.Fatalf("SaveCredential anthropic: %v", err)
-	}
-	store, err := memory.NewStore(memoryDBPath(t, dir))
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	worker := newMemoryWorker(t, cfg)
 	router, err := model.NewRouter(cfg, media.NewStore(t.TempDir()))
 	if err != nil {
-		t.Fatalf("NewRouter: %v", err)
+		t.Fatalf("NewRouter() error = %v", err)
 	}
-	worker := memory.NewWorker(memory.NewExtractQueue(store.DB()), memory.NewMemoryStore(store.DB()), store.DB(), backgroundProvider(router))
 	a := &Agent{cfg: cfg, router: router, mediaStore: media.NewStore(t.TempDir()), compressor: memory.NewCompressor(backgroundProvider(router)), extractWorker: worker}
 
 	initial := worker.Provider()
 	if initial == nil {
-		t.Fatalf("initial provider is nil")
+		t.Fatalf("worker.Provider() = nil, want OpenAIResponsesProvider")
 	}
 	if _, ok := initial.(*model.OpenAIResponsesProvider); !ok {
-		t.Fatalf("initial provider = %T, want OpenAIResponsesProvider", initial)
+		t.Fatalf("worker.Provider() = %T, want OpenAIResponsesProvider", initial)
 	}
 	if _, err := a.UpdateConfig(ConfigSetParams{Action: protocol.ConfigActionActivateModel, ActiveModel: "anthropic/claude-sonnet"}); err != nil {
-		t.Fatalf("UpdateConfig: %v", err)
+		t.Fatalf("UpdateConfig() error = %v", err)
 	}
 	updated := worker.Provider()
 	if updated == nil {
-		t.Fatalf("updated provider is nil")
+		t.Fatalf("worker.Provider() after update = nil, want AnthropicProvider")
 	}
 	if _, ok := updated.(*model.AnthropicProvider); !ok {
-		t.Fatalf("updated provider = %T, want AnthropicProvider", updated)
+		t.Fatalf("worker.Provider() after update = %T, want AnthropicProvider", updated)
 	}
 	if updated == initial {
-		t.Fatalf("worker provider was not replaced after active model switch")
+		t.Fatalf("worker.Provider() after update reused initial provider, want replacement")
 	}
 }
 
@@ -153,16 +99,59 @@ func TestReloadRouterClearsMemoryWorkerProviderWithoutActiveModel(t *testing.T) 
 	a := &Agent{extractWorker: worker}
 
 	if err := a.reloadRouterLocked(&config.Config{}); err != nil {
-		t.Fatalf("reloadRouterLocked: %v", err)
+		t.Fatalf("reloadRouterLocked() error = %v", err)
 	}
 	if got := worker.Provider(); got != nil {
-		t.Fatalf("worker provider = %T, want nil", got)
+		t.Fatalf("worker.Provider() = %T, want nil", got)
 	}
 }
 
-func memoryDBPath(t *testing.T, dir string) string {
+func newAgentConfig(dir string, models []config.ModelConfig, activeModel string) *config.Config {
+	return &config.Config{
+		ActiveModel: activeModel,
+		Models:      models,
+		UI:          config.UIConfig{Theme: "auto", Locale: "en"},
+		Guard:       config.GuardConfig{Mode: "ask"},
+		DataDir:     dir,
+	}
+}
+
+func openAIModel(name string) config.ModelConfig {
+	return config.ModelConfig{Provider: "openai", Model: name, BaseURL: "https://api.openai.com/v1"}
+}
+
+func anthropicModel(name string) config.ModelConfig {
+	return config.ModelConfig{Provider: "anthropic", Model: name, BaseURL: "https://api.anthropic.com"}
+}
+
+func mustSaveCredential(t *testing.T, dir, provider, key string) {
 	t.Helper()
-	return config.DataDirDBPath(dir)
+	if err := config.SaveCredential(dir, provider, key); err != nil {
+		t.Fatalf("SaveCredential(%q) error = %v", provider, err)
+	}
+}
+
+func loadModelCredential(t *testing.T, dir, provider, modelName string) string {
+	t.Helper()
+	loaded := &config.Config{Models: []config.ModelConfig{{Provider: provider, Model: modelName}}, DataDir: dir}
+	if err := config.LoadCredentials(loaded); err != nil {
+		t.Fatalf("LoadCredentials() error = %v", err)
+	}
+	return loaded.Models[0].APIKey
+}
+
+func newMemoryWorker(t *testing.T, cfg *config.Config) *memory.Worker {
+	t.Helper()
+	store, err := memory.NewStore(config.DataDirDBPath(cfg.DataDir))
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	router, err := model.NewRouter(cfg, media.NewStore(t.TempDir()))
+	if err != nil {
+		t.Fatalf("NewRouter() error = %v", err)
+	}
+	return memory.NewWorker(memory.NewExtractQueue(store.DB()), memory.NewMemoryStore(store.DB()), store.DB(), backgroundProvider(router))
 }
 
 type fakeProvider struct{}

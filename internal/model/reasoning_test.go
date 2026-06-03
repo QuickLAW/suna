@@ -8,28 +8,32 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 )
 
-func TestMergeReasoningFields(t *testing.T) {
+func TestReasoningFieldsMergeIntoRequestBody(t *testing.T) {
 	body := map[string]any{"model": "m"}
 	reasoning := map[string]any{
 		"reasoning_effort": "high",
 		"thinking":         map[string]any{"type": "enabled"},
 	}
+
 	if err := mergeReasoningFields(body, reasoning); err != nil {
-		t.Fatalf("mergeReasoningFields error: %v", err)
+		t.Fatalf("mergeReasoningFields() error = %v", err)
 	}
-	if body["reasoning_effort"] != "high" {
-		t.Fatalf("reasoning_effort not merged: %#v", body)
+	if got := body["reasoning_effort"]; got != "high" {
+		t.Fatalf("body[reasoning_effort] = %#v, want %q", got, "high")
 	}
 	thinking, ok := body["thinking"].(map[string]any)
-	if !ok || thinking["type"] != "enabled" {
-		t.Fatalf("thinking not preserved: %#v", body["thinking"])
+	if !ok {
+		t.Fatalf("body[thinking] = %#v, want map", body["thinking"])
+	}
+	if got := thinking["type"]; got != "enabled" {
+		t.Fatalf("body[thinking][type] = %#v, want %q", got, "enabled")
 	}
 }
 
-func TestMergeReasoningFieldsRejectsConflict(t *testing.T) {
+func TestReasoningFieldsRejectConflictingKeys(t *testing.T) {
 	body := map[string]any{"model": "m"}
 	if err := mergeReasoningFields(body, map[string]any{"model": "other"}); err == nil {
-		t.Fatalf("mergeReasoningFields conflict succeeded, want error")
+		t.Fatalf("mergeReasoningFields() error = nil, want non-nil")
 	}
 }
 
@@ -37,13 +41,13 @@ func TestChatReasoningContentReadsExtraField(t *testing.T) {
 	var chunk openai.ChatCompletionChunk
 	raw := []byte(`{"choices":[{"delta":{"reasoning_content":"thinking","content":""}}]}`)
 	if err := json.Unmarshal(raw, &chunk); err != nil {
-		t.Fatalf("unmarshal chunk: %v", err)
+		t.Fatalf("Unmarshal() error = %v", err)
 	}
-	if len(chunk.Choices) != 1 {
-		t.Fatalf("choices = %d", len(chunk.Choices))
+	if got := len(chunk.Choices); got != 1 {
+		t.Fatalf("len(Choices) = %d, want %d", got, 1)
 	}
 	if got := chatReasoningContent(chunk.Choices[0].Delta); got != "thinking" {
-		t.Fatalf("reasoning_content = %q", got)
+		t.Fatalf("chatReasoningContent() = %q, want %q", got, "thinking")
 	}
 }
 
@@ -66,13 +70,14 @@ func TestResponseReasoningContentReadsDeltas(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			var event responses.ResponseStreamEventUnion
 			if err := json.Unmarshal([]byte(tt.raw), &event); err != nil {
-				t.Fatalf("unmarshal event: %v", err)
+				t.Fatalf("Unmarshal() error = %v", err)
 			}
 			if got := responseReasoningContent(event); got != tt.want {
-				t.Fatalf("response reasoning = %q, want %q", got, tt.want)
+				t.Fatalf("responseReasoningContent() = %q, want %q", got, tt.want)
 			}
 		})
 	}

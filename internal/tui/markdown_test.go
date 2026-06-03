@@ -7,11 +7,11 @@ import (
 
 func TestMarkdownCodeBlockUsesThemeWithoutCustomChroma(t *testing.T) {
 	style := markdownStyleConfig()
-	if style.CodeBlock.Theme == "" {
-		t.Fatal("code block theme should be set to enable language-aware highlighting")
+	if got := style.CodeBlock.Theme; got == "" {
+		t.Fatalf("CodeBlock.Theme = %q, want non-empty theme", got)
 	}
-	if style.CodeBlock.Chroma != nil {
-		t.Fatal("code block chroma should stay nil; use upstream Chroma themes instead of custom token backgrounds")
+	if got := style.CodeBlock.Chroma; got != nil {
+		t.Fatalf("CodeBlock.Chroma = %#v, want nil", got)
 	}
 }
 
@@ -19,19 +19,19 @@ func TestDefaultFenceLanguageOnlyAddsOpeningFence(t *testing.T) {
 	input := "before\n```\necho hi\n```\nafter"
 	out := defaultFenceLanguage(input)
 	if !strings.Contains(out, "```bash\necho hi\n```") {
-		t.Fatalf("expected empty opening fence to become bash fence:\n%s", out)
+		t.Fatalf("defaultFenceLanguage() = %q, want opening fence with bash", out)
 	}
-	if strings.Count(out, "```bash") != 1 {
-		t.Fatalf("expected only opening fence to get default language:\n%s", out)
+	if got := strings.Count(out, "```bash"); got != 1 {
+		t.Fatalf("strings.Count(defaultFenceLanguage(), %q) = %d, want %d", "```bash", got, 1)
 	}
 }
 
 func TestWrapLineLimitStopsAfterRequestedLines(t *testing.T) {
 	out := wrapLineLimit(strings.Repeat("x", 5000), 10, 2)
-	if len(out) != 3 {
-		t.Fatalf("expected two wrapped lines plus ellipsis, got %d", len(out))
+	if got := len(out); got != 3 {
+		t.Fatalf("len(wrapLineLimit()) = %d, want %d", got, 3)
 	}
-	if out[2] != "..." {
-		t.Fatalf("expected ellipsis marker, got %q", out[2])
+	if got := out[2]; got != "..." {
+		t.Fatalf("wrapLineLimit()[2] = %q, want %q", got, "...")
 	}
 }

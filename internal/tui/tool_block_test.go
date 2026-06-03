@@ -128,7 +128,7 @@ func TestRenderToolEntryShowsFileChangeSummary(t *testing.T) {
 	plain := stripANSIForTest(rendered)
 	for _, want := range []string{"↳", "File", "internal/tool/writefile.go", "UPDATED", "+18", "-4", "1 repl", "2.1KB", "2.5KB"} {
 		if !strings.Contains(plain, want) {
-			t.Fatalf("rendered summary missing %q:\n%s", want, plain)
+			t.Fatalf("renderToolEntry() = %q, want file summary substring %q", plain, want)
 		}
 	}
 }
@@ -152,7 +152,7 @@ func TestRenderToolEntryShowsGuardSummary(t *testing.T) {
 	plain := stripANSIForTest(rendered)
 	for _, want := range []string{"Guard", "LLM approved", "medium", "matches requested edit"} {
 		if !strings.Contains(plain, want) {
-			t.Fatalf("rendered guard summary missing %q:\n%s", want, plain)
+			t.Fatalf("renderToolEntry() = %q, want guard summary substring %q", plain, want)
 		}
 	}
 }
@@ -170,7 +170,7 @@ func TestRenderSubtaskEntryShowsModelInLabel(t *testing.T) {
 	rendered := tui.renderToolEntry(te, false)
 	plain := stripANSIForTest(rendered)
 	if !strings.Contains(plain, "Subtask [Oio/gpt-5.5] · Analyze code structure") {
-		t.Fatalf("rendered subtask label missing model:\n%s", plain)
+		t.Fatalf("renderToolEntry() = %q, want subtask label with model", plain)
 	}
 }
 
@@ -215,7 +215,7 @@ func mustJSON(t *testing.T, v any) json.RawMessage {
 	t.Helper()
 	b, err := json.Marshal(v)
 	if err != nil {
-		t.Fatalf("marshal json: %v", err)
+		t.Fatalf("Marshal() error = %v", err)
 	}
 	return b
 }

@@ -12,7 +12,7 @@ func TestRenderAttachmentPanelUsesBox(t *testing.T) {
 	panel := stripANSIForTest(tui.renderAttachmentPanel())
 	for _, want := range []string{"╭", "╰", "Pending attachments", "ScreenShot_2026-05-29_121010_728.png"} {
 		if !strings.Contains(panel, want) {
-			t.Fatalf("attachment panel missing %q:\n%s", want, panel)
+			t.Fatalf("renderAttachmentPanel() = %q, want substring %q", panel, want)
 		}
 	}
 }
@@ -27,10 +27,10 @@ func TestRenderInputAreaSeparatesAttachmentBoxFromComposer(t *testing.T) {
 	boxEnd := strings.LastIndex(view, "╰")
 	inputStart := strings.LastIndex(view, "describe this image")
 	if boxEnd < 0 || inputStart < 0 || boxEnd >= inputStart {
-		t.Fatalf("input area should render attachment box before composer:\n%s", view)
+		t.Fatalf("renderInputArea() = %q, want attachment box before composer", view)
 	}
 	between := view[boxEnd:inputStart]
 	if !strings.Contains(between, "──") {
-		t.Fatalf("input area missing separator between attachment box and composer:\n%s", view)
+		t.Fatalf("renderInputArea() = %q, want separator between attachment box and composer", view)
 	}
 }

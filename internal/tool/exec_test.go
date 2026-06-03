@@ -13,19 +13,19 @@ func TestExecLimitsLargeStdout(t *testing.T) {
 		"shell":   "bash",
 	})
 	if res.IsError {
-		t.Fatalf("exec error: %s", res.Error)
+		t.Fatalf("Exec.Execute() error = %s", res.Error)
 	}
 	if !res.Truncated {
-		t.Fatalf("expected truncated output")
+		t.Fatalf("Exec.Execute().Truncated = false, want true")
 	}
-	if len(res.Content) > maxExecOutput+100 {
-		t.Fatalf("output too large: %d", len(res.Content))
+	if got, wantMax := len(res.Content), maxExecOutput+100; got > wantMax {
+		t.Fatalf("len(Exec.Execute().Content) = %d, want <= %d", got, wantMax)
 	}
 	if !strings.Contains(res.Content, "truncated") {
 		start := len(res.Content) - 80
 		if start < 0 {
 			start = 0
 		}
-		t.Fatalf("expected truncation marker, got: %q", res.Content[start:])
+		t.Fatalf("Exec.Execute().Content suffix = %q, want truncation marker", res.Content[start:])
 	}
 }

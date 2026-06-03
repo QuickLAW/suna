@@ -2,19 +2,27 @@ package tui
 
 import "testing"
 
-func TestResolveThemeAutoDefaultsToLight(t *testing.T) {
+func TestResolveThemeUsesExpectedTheme(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "auto defaults to light", input: ThemeAuto, want: ThemeLight},
+		{name: "explicit dark", input: ThemeDark, want: ThemeDark},
+	}
+
 	t.Setenv("COLORFGBG", "")
 	t.Setenv("TERMINAL_THEME", "")
 	t.Setenv("THEME", "")
 	t.Setenv("APPEARANCE", "")
 
-	if got := resolveTheme(ThemeAuto).Name; got != ThemeLight {
-		t.Fatalf("auto theme = %q, want light", got)
-	}
-}
-
-func TestResolveThemeExplicitDark(t *testing.T) {
-	if got := resolveTheme(ThemeDark).Name; got != ThemeDark {
-		t.Fatalf("dark theme = %q, want dark", got)
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveTheme(tt.input).Name; got != tt.want {
+				t.Fatalf("resolveTheme(%q).Name = %q, want %q", tt.input, got, tt.want)
+			}
+		})
 	}
 }

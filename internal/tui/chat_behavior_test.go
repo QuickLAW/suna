@@ -17,18 +17,18 @@ func TestThinkingBoxCollapsedWhileStreamingAndStopsElapsed(t *testing.T) {
 
 	streaming := stripANSIForTest(tui.renderThinkingBox("第一段\n第二段\n最终判断", true, started, time.Time{}))
 	if strings.Contains(streaming, "第一段") || strings.Contains(streaming, "第二段") {
-		t.Fatalf("streaming reasoning should stay collapsed unless Ctrl+R expands it:\n%s", streaming)
+		t.Fatalf("renderThinkingBox(streaming) = %q, should not show hidden reasoning lines", streaming)
 	}
 	if !strings.Contains(streaming, "最终判断") || !strings.Contains(streaming, "Ctrl+R") {
-		t.Fatalf("collapsed streaming reasoning should show a compact summary and hint:\n%s", streaming)
+		t.Fatalf("renderThinkingBox(streaming) = %q, want compact summary and Ctrl+R hint", streaming)
 	}
 
 	completed := stripANSIForTest(tui.renderThinkingBox("第一段\n第二段\n最终判断", false, started, ended))
 	if !strings.Contains(completed, "1.5s") {
-		t.Fatalf("completed reasoning should show fixed duration, not live phase elapsed:\n%s", completed)
+		t.Fatalf("renderThinkingBox(completed) = %q, want fixed duration", completed)
 	}
 	if strings.Contains(completed, "第一段") || strings.Contains(completed, "第二段") {
-		t.Fatalf("completed reasoning should remain collapsed by default:\n%s", completed)
+		t.Fatalf("renderThinkingBox(completed) = %q, should not show hidden reasoning lines", completed)
 	}
 }
 
@@ -45,10 +45,10 @@ func TestSendingMessageForcesScrollToBottom(t *testing.T) {
 
 	tui.handleSend()
 	if !tui.vp.AtBottom() {
-		t.Fatalf("sending a message should force viewport to bottom; y=%d", tui.vp.YOffset())
+		t.Fatalf("vp.AtBottom() = false after message send; YOffset = %d", tui.vp.YOffset())
 	}
 	if !tui.followBottom {
-		t.Fatalf("sending a message should restore follow-bottom mode")
+		t.Fatalf("followBottom = false after message send, want true")
 	}
 }
 
@@ -65,10 +65,10 @@ func TestSlashCommandForcesScrollToBottom(t *testing.T) {
 
 	tui.handleSend()
 	if !tui.vp.AtBottom() {
-		t.Fatalf("sending a slash command should force viewport to bottom; y=%d", tui.vp.YOffset())
+		t.Fatalf("vp.AtBottom() = false after slash command; YOffset = %d", tui.vp.YOffset())
 	}
 	if !tui.followBottom {
-		t.Fatalf("sending a slash command should restore follow-bottom mode")
+		t.Fatalf("followBottom = false after slash command, want true")
 	}
 }
 
@@ -83,10 +83,10 @@ func TestActiveReasoningSuppressesDuplicateStatusLine(t *testing.T) {
 	tui.syncContent()
 	view := stripANSIForTest(tui.vp.View())
 	if count := strings.Count(view, "◎ 思考"); count != 1 {
-		t.Fatalf("active reasoning should render one visible loading indicator, got %d:\n%s", count, view)
+		t.Fatalf("strings.Count(view, %q) = %d, want %d; view = %q", "◎ 思考", count, 1, view)
 	}
 	if strings.Contains(view, "Esc 取消") {
-		t.Fatalf("duplicate bottom status line should be hidden while reasoning box is active:\n%s", view)
+		t.Fatalf("view = %q, should not contain duplicate bottom status line", view)
 	}
 }
 
@@ -100,7 +100,7 @@ func TestWaitingWithoutVisibleProgressShowsStatusLine(t *testing.T) {
 	tui.syncContent()
 	view := stripANSIForTest(tui.vp.View())
 	if !strings.Contains(view, "等待 LLM") || !strings.Contains(view, "Esc 取消") {
-		t.Fatalf("initial wait should still show cancellable status line:\n%s", view)
+		t.Fatalf("view = %q, want cancellable wait status line", view)
 	}
 }
 
@@ -117,7 +117,7 @@ func TestRunningToolSuppressesDuplicateStatusLine(t *testing.T) {
 	tui.syncContent()
 	view := stripANSIForTest(tui.vp.View())
 	if strings.Contains(view, "Esc 取消") {
-		t.Fatalf("duplicate bottom status line should be hidden while a running tool row is active:\n%s", view)
+		t.Fatalf("view = %q, should not contain duplicate bottom status line", view)
 	}
 }
 
@@ -131,10 +131,10 @@ func TestLockedInputShowsStatusPlaceholder(t *testing.T) {
 
 	view := stripANSIForTest(tui.renderInputArea())
 	if !strings.Contains(view, "正在回复") || !strings.Contains(view, "Esc") {
-		t.Fatalf("locked input should show active status and cancel hint:\n%s", view)
+		t.Fatalf("renderInputArea() = %q, want active status and cancel hint", view)
 	}
 	if tui.ta.Focused() {
-		t.Fatalf("textarea should be blurred while input is locked")
+		t.Fatalf("textarea.Focused() = true while input is locked, want false")
 	}
 }
 
@@ -145,12 +145,12 @@ func TestWelcomeNewInitializesChatBeforeResetPhase(t *testing.T) {
 
 	_, cmd := tui.updateWelcome(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	if tui.mode != "chat" {
-		t.Fatalf("expected welcome new action to enter chat mode, got %q", tui.mode)
+		t.Fatalf("mode = %q, want %q", tui.mode, "chat")
 	}
 	if tui.ta.Placeholder == "" {
-		t.Fatalf("chat textarea should be initialized before resetPhase focuses it")
+		t.Fatalf("textarea.Placeholder = empty, want initialized chat textarea")
 	}
 	if cmd == nil {
-		t.Fatalf("expected chat focus command")
+		t.Fatalf("cmd = nil, want chat focus command")
 	}
 }

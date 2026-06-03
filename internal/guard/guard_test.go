@@ -32,6 +32,7 @@ func TestGuardRiskLowOnlyForStrictReadOnlyExec(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			params := map[string]any{"command": tt.command}
 			if tt.shell != "" {
@@ -73,21 +74,21 @@ func TestMarshalParamsEscapesAndMasks(t *testing.T) {
 	}
 	encoded, err := marshalParams(params)
 	if err != nil {
-		t.Fatalf("marshalParams error: %v", err)
+		t.Fatalf("marshalParams() error = %v", err)
 	}
 	if !strings.Contains(encoded, `\"hello\"`) {
-		t.Fatalf("marshalParams did not JSON-escape string: %s", encoded)
+		t.Fatalf("marshalParams() = %q, want JSON-escaped string", encoded)
 	}
 	if strings.Contains(encoded, "sk-123456789012345678901234") || !strings.Contains(encoded, "REDACTED_ENV") {
-		t.Fatalf("marshalParams did not mask secret: %s", encoded)
+		t.Fatalf("marshalParams() = %q, want masked secret", encoded)
 	}
 
 	contentEncoded, err := marshalParams(map[string]any{"content": "secret source code"})
 	if err != nil {
-		t.Fatalf("marshalParams content error: %v", err)
+		t.Fatalf("marshalParams(content) error = %v", err)
 	}
 	if strings.Contains(contentEncoded, "secret source code") || !strings.Contains(contentEncoded, "sha256=") {
-		t.Fatalf("marshalParams did not summarize content safely: %s", contentEncoded)
+		t.Fatalf("marshalParams(content) = %q, want summarized content with sha256", contentEncoded)
 	}
 }
 
@@ -114,6 +115,7 @@ func TestWorkspaceBlocksFileToolsOutsideRoot(t *testing.T) {
 		{tool: "editfile", path: filepath.Join(outside, "old.txt")},
 	}
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.tool, func(t *testing.T) {
 			result := g.Check(context.Background(), tt.tool, map[string]any{"path": tt.path})
 			if result.Decision != Reject || !strings.Contains(result.Reason, "outside workspace") {
@@ -145,6 +147,7 @@ func TestGuardBlockedRulesApplyToReadToolsAndHTTP(t *testing.T) {
 		{name: "readhttp", tool: "readhttp", params: map[string]any{"url": "http://169.254.169.254/latest/meta-data"}},
 	}
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			result := g.Check(context.Background(), tt.tool, tt.params)
 			if result.Decision != Reject {
@@ -197,6 +200,7 @@ func TestWorkspaceBlocksExecCWDAndCommandPaths(t *testing.T) {
 		{name: "shell expansion", params: map[string]any{"command": `cat "$HOME/.ssh/id_rsa"`, "cwd": root}, reasonPart: "cannot be safely checked"},
 	}
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			result := g.Check(context.Background(), "exec", tt.params)
 			if result.Decision != Reject || !strings.Contains(result.Reason, tt.reasonPart) {
@@ -224,7 +228,7 @@ func TestSmartReviewReceivesIntentContext(t *testing.T) {
 		t.Fatalf("smart review decision/source = %s/%s, want approve/llm", result.Decision, result.Source)
 	}
 	if got.Context.UserRequest != ctx.UserRequest || got.Context.ToolIntent != ctx.ToolIntent || got.Context.AssistantContext != ctx.AssistantContext {
-		t.Fatalf("review context not propagated: %#v", got.Context)
+		t.Fatalf("review request context = %#v, want %#v", got.Context, ctx)
 	}
 	if got.Risk != "medium" || got.ToolName != "writefile" || got.Target != "report.md" {
 		t.Fatalf("review request metadata = %#v", got)
@@ -238,6 +242,6 @@ func TestSmartReviewModifyIsDecision(t *testing.T) {
 	})
 	result := g.Check(context.Background(), "writefile", map[string]any{"path": "out.txt", "content": "hello"}, ReviewContext{UserRequest: "create output"})
 	if result.Decision != Modify || result.Suggestion != "use a narrower operation" {
-		t.Fatalf("modify result = %#v", result)
+		t.Fatalf("Check() result = %#v, want modify with suggestion", result)
 	}
 }

@@ -16,10 +16,10 @@ func TestCompatibleSSEDecoderSkipsHeartbeat(t *testing.T) {
 		t.Fatalf("Next() = false, err = %v", decoder.Err())
 	}
 	if got := strings.TrimSpace(string(decoder.Event().Data)); got != `{"ok":true}` {
-		t.Fatalf("data = %q", got)
+		t.Fatalf("Event().Data = %q, want %q", got, `{"ok":true}`)
 	}
-	if decoder.Next() {
-		t.Fatal("Next() returned unexpected extra event")
+	if got := decoder.Next(); got {
+		t.Fatalf("Next() = %v, want false after last event", got)
 	}
 }
 
@@ -29,6 +29,6 @@ func TestCompatibleSSEDecoderSkipsEmptyData(t *testing.T) {
 		t.Fatalf("Next() = false, err = %v", decoder.Err())
 	}
 	if got := strings.TrimSpace(string(decoder.Event().Data)); got != "[DONE]" {
-		t.Fatalf("data = %q", got)
+		t.Fatalf("Event().Data = %q, want %q", got, "[DONE]")
 	}
 }

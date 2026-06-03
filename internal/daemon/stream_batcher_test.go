@@ -20,23 +20,23 @@ func TestStreamBatcherMergesStream(t *testing.T) {
 	sink := &captureSink{}
 	b := &streamBatcher{}
 
-	if b.addStream(context.Background(), sink, "hel") {
-		t.Fatal("addStream flushed too early")
+	if got := b.addStream(context.Background(), sink, "hel"); got {
+		t.Fatalf("addStream() = %v, want false before threshold", got)
 	}
-	if b.addStream(context.Background(), sink, "lo") {
-		t.Fatal("addStream flushed too early")
+	if got := b.addStream(context.Background(), sink, "lo"); got {
+		t.Fatalf("addStream() = %v, want false before threshold", got)
 	}
 	b.flush(context.Background(), sink)
 
-	if len(sink.events) != 1 {
-		t.Fatalf("events = %d, want 1", len(sink.events))
+	if got := len(sink.events); got != 1 {
+		t.Fatalf("len(events) = %d, want %d", got, 1)
 	}
-	if sink.events[0].Method != protocol.NotifyStream {
-		t.Fatalf("method = %q", sink.events[0].Method)
+	if got := sink.events[0].Method; got != protocol.NotifyStream {
+		t.Fatalf("events[0].Method = %q, want %q", got, protocol.NotifyStream)
 	}
 	params := sink.events[0].Params.(protocol.StreamParams)
-	if params.Chunk != "hello" {
-		t.Fatalf("chunk = %q", params.Chunk)
+	if got := params.Chunk; got != "hello" {
+		t.Fatalf("StreamParams.Chunk = %q, want %q", got, "hello")
 	}
 }
 
@@ -48,11 +48,14 @@ func TestStreamBatcherFlushesOnTypeSwitch(t *testing.T) {
 	b.addReasoning(context.Background(), sink, "think")
 	b.flush(context.Background(), sink)
 
-	if len(sink.events) != 2 {
-		t.Fatalf("events = %d, want 2", len(sink.events))
+	if got := len(sink.events); got != 2 {
+		t.Fatalf("len(events) = %d, want %d", got, 2)
 	}
-	if sink.events[0].Method != protocol.NotifyStream || sink.events[1].Method != protocol.NotifyReasoning {
-		t.Fatalf("methods = %q, %q", sink.events[0].Method, sink.events[1].Method)
+	if got := sink.events[0].Method; got != protocol.NotifyStream {
+		t.Fatalf("events[0].Method = %q, want %q", got, protocol.NotifyStream)
+	}
+	if got := sink.events[1].Method; got != protocol.NotifyReasoning {
+		t.Fatalf("events[1].Method = %q, want %q", got, protocol.NotifyReasoning)
 	}
 }
 
@@ -62,8 +65,8 @@ func TestStreamBatcherSizeThreshold(t *testing.T) {
 	for i := range large {
 		large[i] = 'x'
 	}
-	if !b.addStream(context.Background(), &captureSink{}, string(large)) {
-		t.Fatal("addStream did not request flush at threshold")
+	if got := b.addStream(context.Background(), &captureSink{}, string(large)); !got {
+		t.Fatalf("addStream() = %v, want true at threshold", got)
 	}
 }
 
@@ -71,7 +74,7 @@ func TestStreamBatcherEmptyFlush(t *testing.T) {
 	sink := &captureSink{}
 	b := &streamBatcher{}
 	b.flush(context.Background(), sink)
-	if len(sink.events) != 0 {
-		t.Fatalf("events = %d, want 0", len(sink.events))
+	if got := len(sink.events); got != 0 {
+		t.Fatalf("len(events) = %d, want %d", got, 0)
 	}
 }
