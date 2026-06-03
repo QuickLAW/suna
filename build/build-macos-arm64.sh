@@ -6,9 +6,11 @@ DIST_DIR="$ROOT_DIR/dist"
 
 mkdir -p "$DIST_DIR"
 
+BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
 GOOS=darwin GOARCH=arm64 go build \
   -trimpath \
-  -ldflags "-s -w" \
+  -ldflags "-s -w -X 'github.com/alanchenchen/suna/internal/tui.appVersion=dev+$BUILD_TIME'" \
   -o "$DIST_DIR/suna-darwin-arm64" \
   "$ROOT_DIR"
 

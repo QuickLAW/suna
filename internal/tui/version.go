@@ -1,3 +1,3 @@
 package tui
 
-const appVersion = "dev"
+var appVersion = "dev"

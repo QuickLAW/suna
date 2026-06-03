@@ -6,9 +6,11 @@ DIST_DIR="$ROOT_DIR/dist"
 
 mkdir -p "$DIST_DIR"
 
+BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
 GOOS=windows GOARCH=amd64 go build \
   -trimpath \
-  -ldflags "-s -w" \
+  -ldflags "-s -w -X 'github.com/alanchenchen/suna/internal/tui.appVersion=dev+$BUILD_TIME'" \
   -o "$DIST_DIR/suna-windows-amd64.exe" \
   "$ROOT_DIR"
 
