@@ -341,8 +341,7 @@ func (t *TUI) renderCurrentStatusLine() string {
 	if !t.phaseStart.IsZero() {
 		elapsed = time.Since(t.phaseStart).Seconds()
 	}
-	cancel := styleDim.Render(" · Esc " + t.tr("tui.key.cancel"))
-	return fmt.Sprintf("    %s %s %s%s\n", t.sp.View(), styleDim.Render(label), styleDim.Render(fmt.Sprintf("%.1fs", elapsed)), cancel)
+	return fmt.Sprintf("    %s %s %s\n", t.sp.View(), styleDim.Render(label), styleDim.Render(fmt.Sprintf("%.1fs", elapsed)))
 }
 
 func (t *TUI) currentStatusLabel() string {

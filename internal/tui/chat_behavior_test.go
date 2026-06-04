@@ -99,8 +99,15 @@ func TestWaitingWithoutVisibleProgressShowsStatusLine(t *testing.T) {
 
 	tui.syncContent()
 	view := stripANSIForTest(tui.vp.View())
-	if !strings.Contains(view, "等待 LLM") || !strings.Contains(view, "Esc 取消") {
-		t.Fatalf("view = %q, want cancellable wait status line", view)
+	if !strings.Contains(view, "等待 LLM") {
+		t.Fatalf("view = %q, want wait status line", view)
+	}
+	if strings.Contains(view, "Esc 取消") {
+		t.Fatalf("view = %q, should not contain duplicate cancel hint in status line", view)
+	}
+	input := stripANSIForTest(tui.renderInputArea())
+	if !strings.Contains(input, "等待 LLM") || !strings.Contains(input, "Esc 取消") {
+		t.Fatalf("renderInputArea() = %q, want cancellable locked input placeholder", input)
 	}
 }
 
