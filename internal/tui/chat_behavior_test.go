@@ -72,6 +72,40 @@ func TestSlashCommandForcesScrollToBottom(t *testing.T) {
 	}
 }
 
+func TestCompactLocksInputWithoutCancelHint(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleZH), width: 80, height: 24}
+	tui.initChatComponents()
+	tui.compacting = true
+	tui.ta.Blur()
+
+	if !tui.inputLocked() {
+		t.Fatalf("inputLocked() = false during compact, want true")
+	}
+	view := stripANSIForTest(tui.renderInputArea())
+	if !strings.Contains(view, "正在压缩上下文") {
+		t.Fatalf("renderInputArea() = %q, want compact running placeholder", view)
+	}
+	if strings.Contains(view, "Esc") || strings.Contains(view, "取消") {
+		t.Fatalf("renderInputArea() = %q, should not advertise cancellation for compact", view)
+	}
+}
+
+func TestCompactResultUnlocksInput(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleZH), width: 80, height: 24}
+	tui.initChatComponents()
+	tui.compacting = true
+
+	data := []byte(`{"before_tokens":100,"after_tokens":50,"context_window":1000}`)
+	tui.handleLocalNotification(localNotification{method: protocol.NotifyCompactResult, params: data})
+
+	if tui.compacting {
+		t.Fatalf("compacting = true after compact result, want false")
+	}
+	if tui.inputLocked() {
+		t.Fatalf("inputLocked() = true after compact result, want false")
+	}
+}
+
 func TestActiveReasoningSuppressesDuplicateStatusLine(t *testing.T) {
 	tui := &TUI{i18n: newTranslator(LocaleZH), width: 80, height: 24}
 	tui.initChatComponents()

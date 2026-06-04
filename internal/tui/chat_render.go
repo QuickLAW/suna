@@ -285,6 +285,9 @@ func (t *TUI) renderInputArea() string {
 }
 
 func (t *TUI) lockedInputPlaceholder() string {
+	if t.compacting {
+		return t.sp.View() + " " + t.tr("compact.running")
+	}
 	label := t.currentStatusLabel()
 	if label == "" {
 		label = t.tr("status.responding")

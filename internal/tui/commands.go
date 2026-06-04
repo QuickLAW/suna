@@ -40,8 +40,10 @@ func (t *TUI) handleCommand(input string) tea.Cmd {
 	case "/memory":
 		return t.handleMemory(parts)
 	case "/compact":
+		t.compacting = true
+		t.ta.Blur()
 		t.appendNonToolMessage(chatMsg{role: "system", content: t.i18n.T("compact.running")})
-		return t.compactCmd()
+		return tea.Batch(t.compactCmd(), t.sp.Tick)
 	case "/config":
 		t.mode = "config"
 		t.configFromMode = "chat"

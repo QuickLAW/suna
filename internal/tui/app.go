@@ -128,6 +128,7 @@ type TUI struct {
 	hasUsage         bool
 	contextTokens    int
 	contextWindow    int
+	compacting       bool
 }
 
 type guardConfirmView struct {
@@ -546,13 +547,17 @@ func (t *TUI) handleLocalNotification(notif localNotification) {
 	case protocol.NotifyCompactResult:
 		var p protocol.CompactResult
 		json.Unmarshal(notif.params, &p)
+		t.compacting = false
 		t.appendNonToolMessage(chatMsg{role: "system", content: t.renderCompactPanel(p)})
+		_ = t.syncInputFocus()
 	case "compact.error":
 		var p struct {
 			Message string `json:"message"`
 		}
 		json.Unmarshal(notif.params, &p)
+		t.compacting = false
 		t.appendNonToolMessage(chatMsg{role: "error", content: p.Message})
+		_ = t.syncInputFocus()
 	case protocol.NotifyMemoryListResult:
 		var p protocol.MemoryListResult
 		json.Unmarshal(notif.params, &p)

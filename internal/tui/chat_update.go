@@ -6,10 +6,18 @@ import (
 )
 
 func (t *TUI) inputLocked() bool {
-	return t.loading && t.pendingAskID == "" && t.pendingGuard == nil || t.pendingAskID != "" && !t.pendingAskCustom
+	return t.compacting || t.loading && t.pendingAskID == "" && t.pendingGuard == nil || t.pendingAskID != "" && !t.pendingAskCustom
 }
 
 func (t *TUI) allowLockedInputKey(ks string) bool {
+	if t.compacting {
+		switch ks {
+		case "ctrl+c", "?", "ctrl+t", "ctrl+r", "pgup", "pgdown", "up", "down":
+			return true
+		default:
+			return false
+		}
+	}
 	switch ks {
 	case "ctrl+c", "?", "esc", "enter", "ctrl+t", "ctrl+r", "pgup", "pgdown", "up", "down":
 		return true
@@ -196,7 +204,7 @@ func (t *TUI) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case spinner.TickMsg:
-		if t.loading {
+		if t.loading || t.compacting {
 			var cmd tea.Cmd
 			t.sp, cmd = t.sp.Update(msg)
 			t.syncContent()
