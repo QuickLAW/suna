@@ -226,6 +226,14 @@ reasons = ["includes scripts/ helper files", "contains network access commands"]
 
 `scripts/` 中的辅助脚本可由 Agent 按 `SKILL.md` 说明，在现有工具和 Guard 规则下通过 `exec` 使用；Suna 不为 Skill scripts 提供单独 sandbox。MCP server 独立配置在 `config.toml`。
 
+## 文档
+
+- [架构说明](docs/architecture.md)：当前 CLI、TUI、daemon、protocol 和核心包边界。
+- [TUI 架构](docs/tui.md)：TUI 重构后的目录结构、Bubble Tea 约定和维护边界。
+- [开发指南](docs/development.md)：本地构建、测试、提交前检查和代码约定。
+
+`plans/` 保留规划、调研和历史设计；`docs/` 记录当前稳定事实。
+
 ## 当前边界
 
 以下能力目前不要按完整产品能力依赖：

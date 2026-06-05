@@ -1,0 +1,127 @@
+# 开发指南
+
+本文记录 Suna 本地开发、测试和提交前检查约定。
+
+## 本地构建
+
+```bash
+go build -o suna .
+```
+
+也可以直接运行：
+
+```bash
+go run .
+```
+
+项目内置 release 脚本：
+
+```bash
+./build/build-macos-arm64.sh
+./build/build-release.sh
+```
+
+## 常用运行命令
+
+```bash
+./suna              # 打开 TUI，必要时自动启动 daemon
+./suna start        # 后台启动 daemon
+./suna status       # 查看 daemon 状态
+./suna stop         # 停止 daemon
+```
+
+运行数据默认位于 `~/.suna/`，排查问题时优先查看：
+
+```text
+~/.suna/config.toml
+~/.suna/credentials.toml
+~/.suna/memory.db
+~/.suna/skills/
+~/.suna/attachments/
+~/.suna/logs/app.log
+```
+
+## 测试
+
+提交前建议至少运行：
+
+```bash
+go test ./...
+git diff --check
+```
+
+如果只改 TUI，可先跑局部测试：
+
+```bash
+go test ./internal/tui/...
+```
+
+涉及工具、Guard、memory、skill、daemon 时，应运行对应包测试和全量测试。
+
+## 提交前检查
+
+建议检查：
+
+```bash
+git status --short
+git diff --stat
+git diff --check
+go test ./...
+```
+
+注意不要误提交：
+
+- 本地构建产物，例如根目录 `suna` 二进制。
+- 截图、临时文件、调试输出。
+- `~/.suna` 下的配置、凭据或数据库。
+
+## 代码边界
+
+### TUI 改动
+
+TUI 改动应聚焦 `internal/tui/**`，必要时只在 `main.go` 做启动入口胶水适配。
+
+不应在 TUI 中直接引入：
+
+- `internal/agent`
+- `internal/runner`
+- `internal/tool`
+- `internal/guard`
+- daemon 内部业务实现
+
+TUI 与 daemon 的交互必须通过 protocol 和 local transport。
+
+### daemon 和核心包改动
+
+daemon、agent、runner、tool、guard、memory、skill 等核心包应独立维护业务语义。UI 不应为了展示方便改变这些包的默认值、超时、权限边界或持久化格式。
+
+## 注释约定
+
+代码注释使用中文。
+
+以下情况建议写注释：
+
+- 并发、channel、timer、context timeout。
+- 非直观状态机或错误恢复逻辑。
+- 安全边界和权限判断。
+- protocol 兼容或迁移 glue。
+- 为性能、背压、流式渲染做的特殊处理。
+
+不建议写无信息量注释，例如简单重复函数名或字段名。过时注释应随代码同步删除。
+
+## 硬编码与默认值
+
+默认值、超时、上下文窗口、路径规则等应集中维护：
+
+- 属于模型/provider/router 的默认值放在模型或路由相关层。
+- 属于 daemon 生命周期的默认值放在 daemon 或统一配置层。
+- 属于 TUI 展示的默认值可放在 TUI 常量中。
+
+避免在 runner、daemon、agent、TUI 之间层层猜测或重复维护同一个默认值。
+
+## 文档维护
+
+- `README.md` 面向使用者，保持简洁。
+- `docs/` 记录稳定架构和开发约定。
+- `plans/` 保留设计规划、调研和历史记录。
+- 新增复杂模块时，优先更新 `docs/`；只有当说明必须贴近代码维护时，才考虑子包 README。

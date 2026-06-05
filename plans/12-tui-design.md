@@ -1,8 +1,9 @@
 # 12 — TUI 交互设计
 
-> 最后更新: 2026-05-28
+> 最后更新: 2026-06-05
 > 本文档以当前 `internal/tui` 实现为准，描述已经可用的 TUI 行为、仍需保留的设计约束，以及尚未实现的功能。
 > 范围只包含 TUI 前端视觉、布局、交互和 protocol/local transport 展示数据，不定义 daemon/agent 业务逻辑。
+> 本轮 TUI 已按 Bubble Tea 最佳实践拆分为 root/pages/components/events/transport；稳定维护约定见 [`../docs/tui.md`](../docs/tui.md)。
 
 ---
 
@@ -16,10 +17,10 @@ TUI 现在已经能跑通基本使用流：启动后进入 Welcome，进入 Chat
 
 | Mode | 文件 | 状态 | 说明 |
 |---|---|---|---|
-| Welcome | `internal/tui/welcome.go` | 已实现 | 宠物 logo、版本、模型/daemon 概览、Guard/Workspace 状态、菜单入口 |
-| Chat | `internal/tui/chat.go`, `chat_render.go` | 已实现 | 对话、流式输出、工具事件、AskUser、命令、状态栏 |
-| Config | `internal/tui/config.go`, `config_model.go`, `config_workspace.go` | 可用但不完整 | 模型连接、凭证、context window、语言、主题、Guard Mode、Workspace |
-| Help | `internal/tui/help.go` | 已实现 | 功能发现 + 场景式说明：Start Here、Chat、Commands、Details、Tools & Safety、Config、Troubleshooting |
+| Welcome | `internal/tui/pages/welcome`, root adapter | 已实现 | 宠物 logo、版本、模型/daemon 概览、Guard/Workspace 状态、菜单入口 |
+| Chat | `internal/tui/pages/chat`, `chat.go`, `chat_render.go`, `chat_view.go` | 已实现 | 对话、流式输出、工具事件、AskUser、命令、状态栏 |
+| Config | `internal/tui/pages/config`, `config.go`, `config_forms.go`, `config_view.go` | 可用但不完整 | 模型连接、凭证、context window、语言、主题、Guard Mode、Workspace |
+| Help | `internal/tui/pages/help`, root adapter | 已实现 | 功能发现 + 场景式说明：Start Here、Chat、Commands、Details、Tools & Safety、Config、Troubleshooting |
 
 ---
 
@@ -27,32 +28,32 @@ TUI 现在已经能跑通基本使用流：启动后进入 Welcome，进入 Chat
 
 | 功能 | 当前状态 | 关键文件 | 备注 |
 |---|---|---|---|
-| Bubble Tea 主状态机 | 已实现 | `app.go` | mode 分发、AltScreen、local notification 分发 |
-| Welcome 菜单 | 已实现 | `welcome.go` | 有 last session 时 `Resume` 置顶；状态区显示版本、模型、usage、uptime、memory、Guard、Workspace |
-| Chat 布局 | 已实现 | `chat_render.go` | mini pet 顶栏、viewport、textarea、命令建议、底栏、复制模式提示 |
-| 流式回答 | 已实现 | `app.go`, `chat.go` | `agent.stream` 追加 assistant 内容 |
-| Reasoning/Thinking | 已实现 | `app.go`, `chat.go` | 默认折叠，`Ctrl+R` 展开 |
-| Tool 展示 | 已实现 | `app.go`, `chat.go`, `chat_render.go`, `tool_view.go` | running/done/error，展示 Guard 与 file metadata 注解，归入 Suna 回合，`Ctrl+T` 打开 tool detail overlay |
-| AskUser 选项 | 已实现 | `app.go`, `chat.go` | options 为 `[]string`，支持上下选择、Enter、数字输入、自定义答案 |
-| Slash command | 已实现 | `commands.go` | `/new`, `/model`, `/memory`, `/compact`, `/config`, `/help` |
-| Model picker | 已实现 | `commands.go`, `chat_render.go` | `/model` 无参数时打开列表 |
+| Bubble Tea 主状态机 | 已实现 | `app_model.go`, `app_update.go`, `app_view.go`, `pages.go` | 页面路由、AltScreen、local notification 分发 |
+| Welcome 菜单 | 已实现 | `pages/welcome`, root adapter | 有 last session 时 `Resume` 置顶；状态区显示版本、模型、usage、uptime、memory、Guard、Workspace |
+| Chat 布局 | 已实现 | `pages/chat`, `chat_render.go`, `chat_view.go` | mini pet 顶栏、viewport、textarea、命令建议、底栏、复制模式提示 |
+| 流式回答 | 已实现 | `events/`, `events.go`, `chat.go` | `agent.stream` 追加 assistant 内容；高频 delta 由 event batcher 合并 |
+| Reasoning/Thinking | 已实现 | `events/`, `chat.go`, `chat_render.go` | 默认折叠，`Ctrl+R` 展开 |
+| Tool 展示 | 已实现 | `components/toolview`, `tool.go`, `chat_render.go` | running/done/error，展示 Guard 与 file metadata 注解，归入 Suna 回合，`Ctrl+T` 打开 tool detail overlay |
+| AskUser 选项 | 已实现 | `pages/chat`, `chat.go` | options 为 `[]string`，支持上下选择、Enter、数字输入、自定义答案 |
+| Slash command | 已实现 | `pages/chat/commands.go`, `chat.go`, `local_commands.go` | `/new`, `/model`, `/memory`, `/skills`, `/compact`, `/config`, `/help` |
+| Model picker | 已实现 | `pages/chat/model_picker*.go`, `chat_render.go` | `/model` 无参数时打开列表 |
 | Markdown 渲染 | 已实现 | `markdown.go` | Glamour v2，assistant 和 expanded thinking 使用 |
-| Compact 面板 | 已实现 | `ui.go`, `commands.go` | 展示 before/after、context window 百分比、压缩消息数 |
-| Config 模型管理 | 已实现基础版 | `config.go`, `config_model.go` | add/edit/delete/activate model；底部根据当前选中行显示 context-aware help |
-| Config 本地文件入口 | 已实现 | `config_model.go`, `open_dir_*.go` | Config Home 展示 config/credentials 路径，`Enter` 打开 config 目录 |
-| Provider kind 选择 | 已实现 | `config.go` | openai-compatible / openai / anthropic |
-| Context Window | 已打通 | `config.go`, `protocol/messages.go`, `chat_render.go` | config/protocol/顶栏/compact 均可使用 |
-| Credentials | 已实现基础版 | `config.go`, daemon config protocol | API Key 通过 protocol 保存到 credentials，不在 TUI 明文展示 |
-| 语言切换 | 已实现 | `i18n.go`, `i18n_keys.go`, `config_model.go` | 中文/英文内置翻译，Config 可切换 |
-| 主题切换 | 已实现 | `theme.go`, `config_model.go` | auto/dark/light |
+| Compact 面板 | 已实现 | `ui.go`, `chat.go`, `local_commands.go` | 展示 before/after、context window 百分比、压缩消息数 |
+| Config 模型管理 | 已实现基础版 | `pages/config`, `config.go`, `config_forms.go`, `config_view.go` | add/edit/delete/activate model；底部根据当前选中行显示 context-aware help |
+| Config 本地文件入口 | 已实现 | `pages/config`, `open_dir_*.go` | Config Home 展示 config/credentials 路径，`Enter` 打开 config 目录 |
+| Provider kind 选择 | 已实现 | `pages/config`, `config_forms.go` | openai-compatible / openai / anthropic |
+| Context Window | 已打通 | `pages/config`, `protocol/messages.go`, `chat_render.go` | config/protocol/顶栏/compact 均可使用 |
+| Credentials | 已实现基础版 | `config_forms.go`, daemon config protocol | API Key 通过 protocol 保存到 credentials，不在 TUI 明文展示 |
+| 语言切换 | 已实现 | `i18n.go`, `i18n_keys.go`, `pages/config` | 中文/英文内置翻译，Config 可切换 |
+| 主题切换 | 已实现 | `theme.go`, `pages/config` | auto/dark/light |
 | Provider Test | 未实现真实 ping | `config.go` | `T` 只显示 `local config only; API ping not implemented` |
-| Guard confirm overlay | 已实现 | `chat_render.go`, `chat.go` | 独立面板显示 tool/risk/reason/suggestion/params，支持 `Y/A` approve、`N/R/Esc` reject |
-| Copy mode | 已实现 | `app.go`, `chat_render.go`, `help.go` | 默认保留鼠标滚轮，`Ctrl+Y` 临时关闭鼠标捕获以便终端原生选中文本 |
-| Guard Mode 配置 | 已实现 | `config_model.go` | Config home 可切换 ask→smart→auto→readonly |
-| Workspace 配置 | 已实现 | `config.go`, `config_model.go`, `config_workspace.go` | Config home 可编辑/清空 `guard.workspace`，保存后回到 Config home |
-| Config 删除确认 | 已实现 | `config.go`, `config_model.go` | 按钮式确认，默认 Cancel，`←→` 选择、`Enter` 确认、`Esc` 取消 |
-| 图片附件 | 已实现 MVP | `attachments.go` | Ctrl+V 检测图片 path/url/data URI，确认后加入附件列表；只发送 path/url/attachment ref |
-| 附件空间管理 | 已实现基础版 | `config_model.go`, protocol `attachment.*` | Config Home 展示附件占用，Enter 一键清理 |
+| Guard confirm overlay | 已实现 | `pages/chat/guard*.go`, `chat.go`, `chat_render.go` | 独立面板显示 tool/risk/reason/suggestion/params，支持 `Y/A` approve、`N/R/Esc` reject |
+| Copy mode | 已实现 | `app_view.go`, `chat_render.go`, `pages/help` | 默认保留鼠标滚轮，`Ctrl+Y` 临时关闭鼠标捕获以便终端原生选中文本 |
+| Guard Mode 配置 | 已实现 | `pages/config`, `config.go` | Config home 可切换 ask→smart→auto→readonly |
+| Workspace 配置 | 已实现 | `pages/config`, `config_forms.go` | Config home 可编辑/清空 `guard.workspace`，保存后回到 Config home |
+| Config 删除确认 | 已实现 | `pages/config/delete.go`, `config.go` | 按钮式确认，默认 Cancel，`←→` 选择、`Enter` 确认、`Esc` 取消 |
+| 图片附件 | 已实现 MVP | `components/attachment`, `pages/chat/attachments.go` | Ctrl+V 检测图片 path/url/data URI，确认后加入附件列表；只发送 path/url/attachment ref |
+| 附件空间管理 | 已实现基础版 | `pages/config`, protocol `attachment.*` | Config Home 展示附件占用，Enter 一键清理 |
 | 外部 i18n 文件加载 | 未接入主流程 | `i18n.go` | 有 `LoadLocale`，但当前主要用内置翻译表 |
 | Config 高级项 | 未实现 | `config.go` | 未编辑 guard rules/hooks/max_model_rps |
 
@@ -830,31 +831,42 @@ type ConfigModel struct {
 
 ```text
 internal/tui/
-├── app.go                # TUI struct, Init/Update/View, mode 切换、local notification 分发
-├── chat.go               # Chat 状态、输入、AskUser、Guard confirm、tool/thinking 渲染核心
-├── chat_render.go        # Chat 布局、顶栏/底栏、命令建议、model picker、Guard overlay、渲染辅助
-├── commands.go           # slash commands
-├── config.go             # Config 表单、provider kind、表单校验和保存
-├── config_model.go       # Config 页面行模型、导航、渲染、Guard Mode 切换
-├── help.go               # Help 页面、Chat/Config help overlay、key bindings
-├── i18n.go               # translator 和 fallback
-├── i18n_keys.go          # 内置中文/英文文案（含 Guard confirm 文案）
-├── local_client.go         # 当前 TUI local client 公共逻辑
-├── local_client_unix.go    # Unix socket local client
-├── local_client_windows.go # Windows named pipe local client
-├── markdown.go           # Glamour renderer
-├── pet.go                # Welcome pet 和 Chat mini pet
-├── theme.go              # auto/dark/light 主题
-└── ui.go                 # 通用样式、布局 helper、compact 面板
+├── app.go                  # TUI 构造与 Init
+├── app_model.go            # root TUI 状态结构
+├── app_update.go           # root Update 与页面路由
+├── app_view.go             # root View 与复制模式鼠标捕获切换
+├── pages.go                # Welcome/Chat/Config/Help 页面 glue
+├── events.go               # root notification handler，分发到页面状态
+├── local_commands.go       # 以 tea.Cmd 封装 daemon request，避免阻塞 Update
+├── chat.go                 # Chat root adapter：输入、命令、AskUser、Guard、Skill glue
+├── chat_render.go          # Chat transcript/工具/markdown 渲染适配
+├── chat_view.go            # Chat 页面视图 glue
+├── config.go               # Config root adapter 和 daemon 配置保存 glue
+├── config_forms.go         # Config 表单保存和校验 glue
+├── config_view.go          # Config 页面视图 glue
+├── components/             # 附件、浮层、虚拟滚动、文本、工具视图等复用组件
+├── events/                 # daemon notification 解码和 stream/reasoning batcher
+├── pages/                  # chat/config/help/welcome/page 子页面 model/view/state
+├── transport/              # TUI 到 daemon 的 local transport 适配
+├── i18n.go                 # translator 和 fallback
+├── i18n_keys.go            # 内置中文/英文文案
+├── markdown.go             # Glamour renderer
+├── pet.go                  # Welcome pet 和 Chat mini pet
+├── theme.go                # auto/dark/light 主题
+└── ui.go                   # 通用样式、布局 helper、compact 面板
 ```
 
 结构规则：
 
+- root TUI 只负责页面路由、daemon notification 分发、样式/i18n 注入和 tea.Cmd glue。
+- `pages/*` 持有页面级状态和纯交互逻辑，不直接访问 daemon。
+- `components/*` 优先保持纯渲染/低状态，不读取 root 全局状态，不直接使用 i18n。
+- `events/*` 负责 notification 解码和 stream/reasoning 合并；非文本事件前必须 flush 已合并文本。
+- `transport/*` 只做 protocol/local transport 适配，不持有业务状态，不绕过 daemon 调用核心包。
 - 不新增独立 `setup.go`，首次配置继续复用 Config setup mode。
 - 不新增独立 `compact` mode，compact 继续作为 Chat 命令和结果面板。
-- Chat 继续保持 `chat.go` 负责状态和 Update，`chat_render.go` 负责布局和辅助渲染。
-- Config 如果继续增长，可以按功能拆文件，但不要把同一层级的表单逻辑散落到多个文件里。
 - `ui.go` 只放跨页面小工具和小面板，不承载页面状态机。
+- 稳定维护约定以 `docs/tui.md` 为准；本文件保留交互设计和历史上下文。
 
 ---
 
