@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,6 +37,51 @@ func TestSpawnToolResultMarksFailedSubtaskAsToolError(t *testing.T) {
 	}
 	if out.Content == "" || out.Content[0] != '{' {
 		t.Fatalf("spawnToolResult Content = %q, want JSON payload preserved", out.Content)
+	}
+}
+
+func TestSpawnToolSchemaDoesNotExposeTimeout(t *testing.T) {
+	a := &Agent{registry: tool.NewRegistry()}
+	a.registry.Register(tool.ReadFile{})
+
+	var spawnDef *model.ToolDef
+	for _, def := range a.buildToolDefs() {
+		if def.Name == "spawn" {
+			spawnDef = &def
+			break
+		}
+	}
+	if spawnDef == nil {
+		t.Fatalf("spawn tool def not found")
+	}
+	props, ok := spawnDef.Parameters["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("spawn properties missing")
+	}
+	if _, ok := props["timeout"]; ok {
+		t.Fatalf("spawn schema exposes timeout, want no subtask-level timeout")
+	}
+}
+
+func TestReadGuardReviewStreamTimesOutWithoutChunks(t *testing.T) {
+	ch := make(chan model.Chunk)
+	_, err := readGuardReviewStream(context.Background(), ch, time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "guard review LLM stream timeout") {
+		t.Fatalf("readGuardReviewStream error = %v, want timeout", err)
+	}
+}
+
+func TestReadGuardReviewStreamResetsTimeoutOnChunk(t *testing.T) {
+	ch := make(chan model.Chunk, 2)
+	ch <- model.Chunk{Content: `{"decision":"approve"}`}
+	ch <- model.Chunk{Done: true}
+
+	got, err := readGuardReviewStream(context.Background(), ch, time.Second)
+	if err != nil {
+		t.Fatalf("readGuardReviewStream error = %v", err)
+	}
+	if got != `{"decision":"approve"}` {
+		t.Fatalf("readGuardReviewStream = %q, want approve JSON", got)
 	}
 }
 

@@ -19,6 +19,10 @@ import (
 	"github.com/alanchenchen/suna/internal/tool"
 )
 
+const defaultGuardReviewStreamTimeout = 60 * time.Second
+
+var guardReviewStreamTimeout = defaultGuardReviewStreamTimeout
+
 func (a *Agent) ExecuteTool(ctx context.Context, id string, name string, params map[string]any) tool.Result {
 	return a.executeTool(ctx, runner.ToolExecution{ID: id, Name: name, Params: params}, nil)
 }
@@ -173,10 +177,6 @@ func (a *Agent) executeSpawn(ctx context.Context, id string, params map[string]a
 	if _, err := a.router.Provider(modelRef); err != nil {
 		return tool.ErrorResult(fmt.Sprintf("invalid spawn model %q. Choose one of: %s", modelRef, strings.Join(a.availableModelRefs(), ", ")))
 	}
-	timeout := 300
-	if t, ok := params["timeout"].(float64); ok && int(t) > 0 {
-		timeout = int(t)
-	}
 	subRegistry, errResult := a.buildSubtaskRegistry(params["tools"])
 	if errResult.IsError {
 		return errResult
@@ -207,7 +207,7 @@ func (a *Agent) executeSpawn(ctx context.Context, id string, params map[string]a
 		spawnID = uuid.New().String()
 	}
 	r := a.newSubtaskRunner(events, spawnID, subRegistry)
-	st := subtask.New(subtask.Request{ID: spawnID, Task: task, Input: inputBlocks, ModelRef: modelRef, ModelID: resolveModelID(a.cfg, modelRef), System: subtaskPrompt, Tools: subRegistry, Timeout: time.Duration(timeout) * time.Second})
+	st := subtask.New(subtask.Request{ID: spawnID, Task: task, Input: inputBlocks, ModelRef: modelRef, ModelID: resolveModelID(a.cfg, modelRef), System: subtaskPrompt, Tools: subRegistry})
 	res, err := st.Run(ctx, r)
 	if err != nil && res.Text == "" {
 		res.Text = err.Error()
@@ -521,7 +521,7 @@ func (a *Agent) toolParamKeys(name string) map[string]bool {
 	case "askuser":
 		return map[string]bool{"question": true, "options": true, "allow_custom": true}
 	case "spawn":
-		return map[string]bool{"task": true, "model": true, "system": true, "tools": true, "timeout": true, "context": true, "input_images": true}
+		return map[string]bool{"task": true, "model": true, "system": true, "tools": true, "context": true, "input_images": true}
 	default:
 		return nil
 	}
@@ -616,11 +616,44 @@ func (a *Agent) guardLLMReview(ctx context.Context, req guard.ReviewRequest) (st
 	if err != nil {
 		return "", err
 	}
+	return readGuardReviewStream(ctx, ch, guardReviewStreamTimeout)
+}
+
+func readGuardReviewStream(ctx context.Context, ch <-chan model.Chunk, timeout time.Duration) (string, error) {
+	// Guard review 只需要短 JSON；长时间无响应时回退到人工确认，不能阻塞工具执行链路。
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	resetTimer := func() {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(timeout)
+	}
+
 	var result string
-	for chunk := range ch {
-		if chunk.Content != "" {
-			result += chunk.Content
+	for {
+		select {
+		case chunk, ok := <-ch:
+			if !ok {
+				return result, nil
+			}
+			resetTimer()
+			if chunk.Error != "" {
+				return "", fmt.Errorf("%s", chunk.Error)
+			}
+			if chunk.Content != "" {
+				result += chunk.Content
+			}
+			if chunk.Done {
+				return result, nil
+			}
+		case <-timer.C:
+			return "", fmt.Errorf("guard review LLM stream timeout")
+		case <-ctx.Done():
+			return "", ctx.Err()
 		}
 	}
-	return result, nil
 }

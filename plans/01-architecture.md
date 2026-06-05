@@ -210,7 +210,7 @@ Main agent:  模型请求按 loop iteration 串行
 
 Subtasks:    Spawn 作为 tool call 执行
               多个 Spawn 出现在同一批 tool_calls 时会并发运行
-              每个 subtask 有独立 working memory 和 timeout
+              每个 subtask 有独立 working memory；自身不限制总运行时长
               Subtask 的 tool call/guard/guard confirm/result 通过 main 事件流转发
               Subtask tool ID 使用 spawn:<parentToolCallID>:<subToolCallID>，Guard 事件使用同一 ID 挂载到对应子工具
               Subtask stream/reasoning 不对外展示

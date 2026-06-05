@@ -254,7 +254,6 @@ allow_custom 参数:
   model: string,             // 必填: subtask 使用的模型 ref (provider/model)
   tools: [string],           // 必填: subtask 可用工具列表；[] 表示纯模型任务
   input_images?: [int],      // 当前用户消息图片索引，例如 [0]
-  timeout?: int,             // 默认 300 秒
   context?: string,          // 传给 subtask 的额外上下文
   system?: string            // 可选 fallback；正常由 subtask_system.md 模板生成
 }
@@ -288,8 +287,10 @@ allow_custom 参数:
   subtask 返回 final result/status 给 main，不保存独立长期记忆
 
 超时:
-  默认 300 秒
-  subtask 超时后自动终止，返回超时错误
+  spawn 不限制 subtask 总运行时长，长任务可以自然运行到完成
+  主 LLM 流式无响应由 runner stream timeout 处理
+  工具卡住由各工具自己的 timeout 处理
+  smart Guard review 有独立短超时，失败时回退到人工确认
 
 并发:
   Main 可以同时发起多个 Spawn

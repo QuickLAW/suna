@@ -2,7 +2,6 @@ package subtask
 
 import (
 	"context"
-	"time"
 
 	"github.com/alanchenchen/suna/internal/memory"
 	"github.com/alanchenchen/suna/internal/model"
@@ -18,7 +17,6 @@ type Request struct {
 	ModelID  string
 	System   string
 	Tools    *tool.Registry
-	Timeout  time.Duration
 
 	MaxTurns     int
 	MaxToolCalls int
@@ -39,11 +37,6 @@ func New(req Request) *Subtask {
 }
 
 func (s *Subtask) Run(ctx context.Context, r *runner.Runner) (Result, error) {
-	if s.req.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, s.req.Timeout)
-		defer cancel()
-	}
 	working := memory.NewWorkingMemory()
 	blocks := s.req.Input
 	if len(blocks) == 0 {
