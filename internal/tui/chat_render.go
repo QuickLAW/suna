@@ -1,128 +1,175 @@
 package tui
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
+
+	"github.com/alanchenchen/suna/internal/protocol"
+	attachmentmodel "github.com/alanchenchen/suna/internal/tui/components/attachment"
+	textutil "github.com/alanchenchen/suna/internal/tui/components/text"
 )
 
-// viewChat 是 Chat 页面的布局入口。
-// Chat 页只展示 daemon 推送的状态、消息、token 和工具事件；模型执行、上下文统计和速率计算均由 daemon/core 负责。
-func (t *TUI) viewChat() string {
-	if t.width == 0 {
+func (t *TUI) renderErrorMessage(content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
 		return ""
 	}
-	t.layoutChat()
-
+	width := max(24, t.width-8)
+	bodyWidth := max(20, width-4)
+	wrapped := lipgloss.NewStyle().Width(bodyWidth).Render(content)
+	lines := strings.Split(wrapped, "\n")
+	for i := range lines {
+		if i == 0 {
+			lines[i] = styleErrLine.Render("  ✗ " + lines[i])
+		} else {
+			lines[i] = styleErrLine.Render("    " + lines[i])
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+func (t *TUI) renderThinkingBox(content string, running bool, startedAt, endedAt time.Time) string {
+	width := max(24, min(t.width-8, 62))
+	inner := width - 4
+	elapsed := reasoningElapsed(running, startedAt, endedAt)
+	title := " ◎ " + t.tr("tui.chat.thinking") + " "
+	if running {
+		title = fmt.Sprintf(" ◎ %s %s %.1fs ", t.tr("tui.chat.thinking"), t.chat.Spinner.View(), elapsed.Seconds())
+	} else if elapsed > 0 {
+		title = fmt.Sprintf(" ◎ %s %.1fs ", t.tr("tui.chat.thinking"), elapsed.Seconds())
+	}
+	display := strings.TrimSpace(content)
+	if running && display == "" {
+		display = t.tr("status.thinking")
+	}
+	if !t.chat.ShowReasoningDetail {
+		display = extractLastSentence(display)
+		if display == "" {
+			display = t.tr("tui.chat.thought_done")
+		}
+		display += "    [Ctrl+R " + t.tr("tui.key.reasoning_detail") + "]"
+	} else {
+		if running {
+			display = renderStreamingText(strings.TrimSpace(content), inner)
+		} else {
+			display = RenderMarkdown(strings.TrimSpace(content), inner)
+		}
+	}
+	lines := strings.Split(strings.TrimRight(display, "\n"), "\n")
+	if running && !t.chat.ShowReasoningDetail && len(lines) > 4 {
+		lines = append([]string{"..."}, lines[len(lines)-4:]...)
+	}
+	if t.chat.ShowReasoningDetail && len(lines) > 15 {
+		if running {
+			lines = append([]string{"..."}, lines[len(lines)-15:]...)
+		} else {
+			lines = append(lines[:15], "...")
+		}
+	}
 	var sb strings.Builder
-	petState := t.chatPetState()
-	smallPet := strings.Split(renderMiniPet(petState), "\n")
-	topMeta := t.chatTopMeta()
-	conn := t.chatConnectionDot(petState)
-
-	sb.WriteString(smallPet[0] + "\n")
-	sb.WriteString(smallPet[1])
-	gap := 2
-	used := lipgloss.Width(smallPet[1]) + gap + lipgloss.Width(topMeta) + gap + lipgloss.Width(conn)
-	pad := max(gap, t.width-used)
-	sb.WriteString(strings.Repeat(" ", gap) + topMeta + strings.Repeat(" ", pad) + conn + "\n")
-	sb.WriteString(smallPet[2] + "\n")
-	sb.WriteString(styleDim.Render(strings.Repeat("─", t.width)) + "\n")
-
-	content := t.vp.View()
-	if t.showToolDetail {
-		content = overlayBlock(content, t.renderToolDetailOverlay(t.width))
+	sb.WriteString("    " + styleDim.Render("┌─"+title+strings.Repeat("─", max(0, width-lipgloss.Width(title)-3))+"┐") + "\n")
+	for _, line := range lines {
+		for _, wrapped := range textutil.WrapLine(line, inner) {
+			sb.WriteString("    " + styleDim.Render("│ ") + wrapped + strings.Repeat(" ", max(0, inner-lipgloss.Width(wrapped))) + styleDim.Render(" │") + "\n")
+		}
 	}
-	if t.showHelp {
-		content = overlayBlock(content, t.renderHelpOverlay(t.width))
-	}
-	if t.skillsOverlayOpen {
-		content = overlayBlock(content, t.renderSkillsOverlay(t.width))
-	}
-	if t.pendingGuard != nil {
-		content = overlayBlock(content, t.renderGuardOverlay(t.width))
-	}
-	sb.WriteString(content)
-	sb.WriteString(styleDim.Render(strings.Repeat("─", t.width)) + "\n")
-	sb.WriteString(t.renderInputArea())
-	if len(t.cmdSuggestions) > 0 {
-		sb.WriteString("\n" + t.renderCommandSuggestions())
-	}
-	sb.WriteString("\n" + t.renderChatStatusBar() + "\n")
+	sb.WriteString("    " + styleDim.Render("└"+strings.Repeat("─", width-2)+"┘") + "\n")
 	return sb.String()
 }
-
-func (t *TUI) renderGuardOverlay(width int) string {
-	g := t.pendingGuard
-	if g == nil {
+func reasoningElapsed(running bool, startedAt, endedAt time.Time) time.Duration {
+	if startedAt.IsZero() {
+		return 0
+	}
+	if running {
+		return time.Since(startedAt).Truncate(100 * time.Millisecond)
+	}
+	if endedAt.IsZero() || endedAt.Before(startedAt) {
+		return 0
+	}
+	return endedAt.Sub(startedAt).Truncate(100 * time.Millisecond)
+}
+func (t *TUI) renderSkillLoadMessage(p protocol.SkillLoadParams) string {
+	name := strings.TrimSpace(p.Name)
+	if name == "" {
+		name = "unknown"
+	}
+	body := styleMetaPill.Render(t.tr("tui.skill.loaded")) + " " + styleHL.Render(name)
+	return textutil.IndentLines(boxStyle.BorderForeground(ColorBrand).Width(max(36, min(72, t.width-6))).Padding(1, 2).Render(body), "  ")
+}
+func (t *TUI) hasVisibleActiveProgress() bool {
+	if t.hasRunningTools() {
+		return true
+	}
+	for i := len(t.chat.Messages) - 1; i >= 0; i-- {
+		msg := t.chat.Messages[i]
+		switch msg.Role {
+		case "reasoning":
+			return msg.Streaming
+		case "assistant", "user", "error", "system", "restore_summary", "panel":
+			return false
+		}
+	}
+	return false
+}
+func (t *TUI) renderCurrentStatusLine() string {
+	label := t.currentStatusLabel()
+	if label == "" {
+		label = t.tr("status.responding")
+	}
+	elapsed := 0.0
+	if !t.chat.PhaseStart.IsZero() {
+		elapsed = time.Since(t.chat.PhaseStart).Seconds()
+	}
+	return fmt.Sprintf("    %s %s %s\n", t.chat.Spinner.View(), styleDim.Render(label), styleDim.Render(fmt.Sprintf("%.1fs", elapsed)))
+}
+func (t *TUI) currentStatusLabel() string {
+	if n := t.runningToolCount(); n > 0 {
+		return fmt.Sprintf("%s · %d running", t.tr("status.exec_tool"), n)
+	}
+	if t.chat.PendingAskID != "" {
+		return t.tr("tui.ask.waiting")
+	}
+	switch t.chat.Phase {
+	case phaseFirstLLM:
+		return t.tr("status.waiting_llm")
+	case phaseLLM:
+		return t.tr("status.responding")
+	case phaseThinking:
+		return t.tr("status.thinking")
+	case phaseTool:
+		return t.tr("status.exec_tool")
+	case phaseWaitingAfterTool:
+		return t.tr("status.waiting_after_tool")
+	default:
 		return ""
 	}
-	w := max(44, min(76, width-4))
-	bodyHeight := t.guardOverlayBodyHeight()
-	body := t.guardOverlayBodyLines()
-	body, start, total := scrollWindow(body, bodyHeight, &t.guardScroll)
-
-	var lines []string
-	lines = append(lines, styleError.Render("⚠ "+t.tr("tui.guard.title")))
-	lines = append(lines, "")
-	lines = append(lines, styleDim.Render(t.tr("tui.guard.tool"))+" "+styleTool.Render(g.tool))
-	lines = append(lines, styleDim.Render(t.tr("tui.guard.risk"))+" "+t.guardRiskStyle(g.risk).Render(g.risk))
-	if len(body) > 0 {
-		lines = append(lines, "")
-		lines = append(lines, body...)
-	}
-	approve := t.guardButton(0, t.tr("tui.guard.approve"))
-	reject := t.guardButton(1, t.tr("tui.guard.reject"))
-	lines = append(lines, "", approve+"  "+reject, styleDim.Render(t.guardHelpText(start, bodyHeight, total)))
-	return boxStyle.Width(w).Padding(1, 2).Render(strings.Join(lines, "\n"))
 }
 
-func (t *TUI) guardOverlayBodyLines() []string {
-	g := t.pendingGuard
-	if g == nil {
-		return nil
+func extractLastSentence(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
 	}
-	w := max(44, min(76, t.width-4))
-	inner := max(20, w-8)
-	var body []string
-	if strings.TrimSpace(g.reason) != "" {
-		body = append(body, styleDim.Render(t.tr("tui.guard.reason")))
-		body = append(body, splitWrapped(g.reason, inner, 0)...)
-	}
-	if strings.TrimSpace(g.suggestion) != "" {
-		if len(body) > 0 {
-			body = append(body, "")
+	sentences := strings.FieldsFunc(text, func(r rune) bool {
+		return r == '.' || r == '。' || r == '\n'
+	})
+	for i := len(sentences) - 1; i >= 0; i-- {
+		s := strings.TrimSpace(sentences[i])
+		if s != "" {
+			if len(s) > 80 {
+				return s[:80] + "..."
+			}
+			return s
 		}
-		body = append(body, styleDim.Render(t.tr("tui.guard.suggestion")))
-		body = append(body, splitWrapped(g.suggestion, inner, 0)...)
 	}
-	params := formatToolParams(g.params)
-	if params != "" {
-		if len(body) > 0 {
-			body = append(body, "")
-		}
-		body = append(body, styleDim.Render(t.tr("tui.tool.params")))
-		body = append(body, splitWrapped(params, inner, 0)...)
-	}
-	return body
-}
-
-func (t *TUI) guardOverlayBodyHeight() int {
-	return max(0, min(12, t.overlayMaxHeight()-12))
-}
-
-func (t *TUI) guardHelpText(start, height, total int) string {
-	base := t.tr("tui.guard.help")
-	if total <= height {
-		return base
-	}
-	if height <= 0 {
-		return base + " · " + t.tr("tui.overlay.content_hidden")
-	}
-	return fmt.Sprintf("%s · ↑↓ PgUp/PgDn %s %d-%d/%d", base, t.tr("tui.overlay.scroll"), start+1, min(total, start+height), total)
+	return ""
 }
 
 func (t *TUI) renderRestoreSummaryBox(content string) string {
@@ -142,7 +189,7 @@ func (t *TUI) renderRestoreSummaryBox(content string) string {
 		if line == "" {
 			continue
 		}
-		for _, wrapped := range wrapLine(line, inner) {
+		for _, wrapped := range textutil.WrapLine(line, inner) {
 			body = append(body, styleDim.Render(wrapped))
 		}
 	}
@@ -150,365 +197,11 @@ func (t *TUI) renderRestoreSummaryBox(content string) string {
 		body = []string{styleDim.Render(content)}
 	}
 	title := styleHL.Render("上一轮操作摘要")
-	return indentLines(boxStyle.Width(width).Padding(1, 2).Render(title+"\n"+strings.Join(body, "\n")), "  ")
-}
-
-func (t *TUI) guardButton(idx int, label string) string {
-	if t.guardCursor == idx {
-		return styleCursor.Render("▶ ") + styleHL.Render(label)
-	}
-	return styleDim.Render("  " + label)
-}
-
-func (t *TUI) guardRiskStyle(risk string) lipgloss.Style {
-	switch strings.ToLower(risk) {
-	case "high":
-		return styleError
-	case "medium":
-		return styleTool
-	default:
-		return styleAgent
-	}
-}
-
-func (t *TUI) layoutChat() {
-	if t.width == 0 || t.height == 0 {
-		return
-	}
-	inputH := max(1, t.ta.Height())
-	attachmentH := 0
-	if panel := t.renderAttachmentPanel(); panel != "" {
-		attachmentH = strings.Count(panel, "\n") + 1
-	}
-	suggestionH := 0
-	if len(t.cmdSuggestions) > 0 {
-		suggestionH = min(4, len(t.cmdSuggestions)) + 3
-	}
-	confirmH := 0
-	if t.confirmDiscardDraft {
-		confirmH = 1
-	}
-	fixedH := 6 + attachmentH + inputH + suggestionH + confirmH
-	vpHeight := max(3, t.height-fixedH)
-	t.vp.SetWidth(t.width)
-	t.vp.SetHeight(vpHeight)
-	t.ta.SetWidth(max(20, t.width-4))
-}
-
-func (t *TUI) renderChatStatusBar() string {
-	copyHint := ""
-	if t.copyMode {
-		copyHint = styleDim.Render(" · ") + styleHL.Render(t.tr("tui.key.copy_mode")) + styleDim.Render(" [Ctrl+Y/Esc]")
-	}
-	if !t.hasUsage {
-		return "  " + styleDim.Render("↑? ↓? ⟳? · ?t/s") + copyHint
-	}
-	tokParts := []string{
-		styleUser.Render("↑" + fmtTok(t.lastInputTok)),
-		styleAgent.Render("↓" + fmtTok(t.lastOutputTok)),
-		styleDim.Render("⟳" + fmtTok(t.lastCachedTok)),
-	}
-	parts := []string{joinNonEmpty(tokParts, " ")}
-	if t.lastTokensPerSec > 0 {
-		parts = append(parts, fmt.Sprintf("%.0ft/s", t.lastTokensPerSec))
-	} else if t.lastOutputTok > 0 && t.lastDuration.Seconds() > 0 {
-		parts = append(parts, fmt.Sprintf("%.0ft/s", float64(t.lastOutputTok)/t.lastDuration.Seconds()))
-	} else {
-		parts = append(parts, "0t/s")
-	}
-	return "  " + joinNonEmpty(parts, styleDim.Render(" · ")) + copyHint
-}
-
-func (t *TUI) renderCommandSuggestions() string {
-	width := max(24, t.width-4)
-	var lines []string
-	for i, c := range t.cmdSuggestions {
-		prefix := "  "
-		style := lipgloss.NewStyle()
-		if i == t.cmdSuggestionIdx {
-			prefix = styleCursor.Render("▶ ")
-			style = styleHL
-		}
-		line := prefix + style.Render(fmt.Sprintf("%-16s", c.cmd)) + styleDim.Render(t.tr(c.descKey))
-		lines = append(lines, line)
-	}
-	lines = append(lines, styleDim.Render(t.tr("tui.command.suggestion_help")))
-	return boxStyle.Width(width).Render(strings.Join(lines, "\n"))
-}
-
-func (t *TUI) renderModelPicker() string {
-	models := t.configModelsSnapshot()
-	if len(models) == 0 {
-		return "  " + styleDim.Render(t.tr("cmd.model_none")) + "\n"
-	}
-	var lines []string
-	lines = append(lines, styleHL.Render(t.tr("cmd.model_choose")))
-	for i, mc := range models {
-		cursor := "  "
-		st := lipgloss.NewStyle()
-		if i == t.modelPickerCursor {
-			cursor = styleCursor.Render("▶ ")
-			st = styleHL
-		}
-		mark := modelStatusMark(mc, t.isActiveModelRef(mc.Ref()))
-		lines = append(lines, cursor+st.Render(mark+" "+mc.Ref())+styleDim.Render("  "+t.modelSummary(mc)))
-	}
-	lines = append(lines, styleDim.Render(t.tr("cmd.model_picker_help")))
-	return indentLines(boxStyle.Width(max(40, min(72, t.width-6))).Padding(1, 2).Render(strings.Join(lines, "\n")), "  ") + "\n"
-}
-
-func (t *TUI) renderInputArea() string {
-	view := strings.TrimRight(t.ta.View(), "\n")
-	if view == "" {
-		view = "> "
-	}
-	if t.inputLocked() && !t.hasDraft() {
-		view = "> " + styleDim.Render(t.lockedInputPlaceholder())
-	}
-	confirm := ""
-	if t.confirmDiscardDraft {
-		confirm = styleError.Render(t.tr("tui.chat.discard_draft")) + " " + styleDim.Render(t.tr("tui.chat.discard_draft_help"))
-	}
-	if panel := t.renderAttachmentPanel(); panel != "" {
-		separator := "  " + styleDim.Render(strings.Repeat("─", max(10, t.width-4)))
-		body := indentLines(panel, "  ") + "\n" + separator + "\n" + "  " + strings.ReplaceAll(view, "\n", "\n  ")
-		if confirm != "" {
-			body += "\n  " + confirm
-		}
-		return body
-	}
-	body := "  " + strings.ReplaceAll(view, "\n", "\n  ")
-	if confirm != "" {
-		body += "\n  " + confirm
-	}
-	return body
-}
-
-func (t *TUI) lockedInputPlaceholder() string {
-	if t.compacting {
-		return t.sp.View() + " " + t.tr("compact.running")
-	}
-	label := t.currentStatusLabel()
-	if label == "" {
-		label = t.tr("status.responding")
-	}
-	return label + " · Esc " + t.tr("tui.key.cancel")
-}
-
-func (t *TUI) chatPetState() petState {
-	if !t.loading {
-		return petIdle
-	}
-	if t.phase == phaseThinking {
-		return petThinking
-	}
-	return petWorking
-}
-
-func (t *TUI) chatConnectionDot(state petState) string {
-	if t.localCli == nil || !t.localCli.Connected() {
-		return styleDim.Render("○")
-	}
-	switch state {
-	case petWorking:
-		return styleToolRun.Render("●")
-	case petThinking:
-		return styleBrand.Render("●")
-	default:
-		return styleAgent.Render("●")
-	}
-}
-
-func (t *TUI) chatTopMeta() string {
-	provider, model := t.providerName, t.modelName
-	if p, m := t.activeProviderModel(); p != "" || m != "" {
-		provider, model = p, m
-	}
-	if provider == "" {
-		provider = "-"
-	}
-	if model == "" {
-		model = "-"
-	}
-	modelRef := provider + "/" + model
-	reasoning := ""
-	if mc, ok := t.activeConfigModel(); ok {
-		reasoning = t.reasoningDisplay(mc)
-	}
-	if reasoning != "" {
-		modelRef += " · " + reasoning
-	}
-	if t.contextWindow <= 0 {
-		return styleHL.Render(modelRef)
-	}
-	ctxTokens := t.contextTokens
-	ctx := "?"
-	if ctxTokens > 0 {
-		ctx = fmtTok(ctxTokens)
-	}
-	return styleHL.Render(truncateRunes(modelRef, max(10, t.width/3))) + strings.Repeat(" ", 4) + styleDim.Render("ctx "+ctx+"/"+fmtTok(t.contextWindow))
-}
-
-func toolParamSummary(name string, params map[string]any) string {
-	if len(params) == 0 {
-		return ""
-	}
-	pick := func(keys ...string) string {
-		for _, key := range keys {
-			if v, ok := params[key]; ok {
-				s := fmt.Sprintf("%v", v)
-				if s != "" {
-					return truncateRunes(s, 32)
-				}
-			}
-		}
-		return ""
-	}
-	switch name {
-	case "readfile", "writefile", "editfile", "listdir":
-		return pick("path")
-	case "exec":
-		return pick("command")
-	case "readhttp", "writehttp":
-		return pick("url")
-	case "spawn":
-		return pick("task")
-	case "askuser":
-		return pick("question")
-	default:
-		return pick("name", "id", "path", "query")
-	}
-}
-
-func (t *TUI) mouseInComposer(msg tea.MouseMsg) bool {
-	if t.height <= 0 {
-		return false
-	}
-	m := msg.Mouse()
-	inputH := max(1, t.ta.Height())
-	attachmentH := 0
-	if panel := t.renderAttachmentPanel(); panel != "" {
-		attachmentH = strings.Count(panel, "\n") + 1
-	}
-	suggestionH := 0
-	if len(t.cmdSuggestions) > 0 {
-		suggestionH = min(4, len(t.cmdSuggestions)) + 3
-	}
-	confirmH := 0
-	if t.confirmDiscardDraft {
-		confirmH = 1
-	}
-	composerStart := t.height - (attachmentH + inputH + suggestionH + confirmH + 1)
-	return m.Y >= composerStart
-}
-
-func (t *TUI) overlayMaxHeight() int {
-	if t.vp.Height() > 0 {
-		return max(8, t.vp.Height())
-	}
-	if t.height > 0 {
-		return max(8, t.height-8)
-	}
-	return 16
-}
-
-func scrollWindow(lines []string, height int, offset *int) ([]string, int, int) {
-	total := len(lines)
-	if height <= 0 || total == 0 {
-		if offset != nil {
-			*offset = 0
-		}
-		return nil, 0, total
-	}
-	maxOffset := max(0, total-height)
-	start := 0
-	if offset != nil {
-		if *offset < 0 {
-			*offset = 0
-		}
-		if *offset > maxOffset {
-			*offset = maxOffset
-		}
-		start = *offset
-	}
-	end := min(total, start+height)
-	return lines[start:end], start, total
-}
-
-func (t *TUI) scrollGuardOverlay(delta int) {
-	maxOffset := max(0, len(t.guardOverlayBodyLines())-t.guardOverlayBodyHeight())
-	t.guardScroll += delta
-	if t.guardScroll < 0 {
-		t.guardScroll = 0
-	}
-	if t.guardScroll > maxOffset {
-		t.guardScroll = maxOffset
-	}
-}
-
-func (t *TUI) toolDetailPageStep() int {
-	return max(1, t.toolDetailBodyHeight()-1)
-}
-
-func (t *TUI) scrollToolDetailOverlay(delta int) {
-	te := t.findTool(t.selectedToolID)
-	if te == nil {
-		t.toolDetailScroll = 0
-		return
-	}
-	bodyHeight := t.toolDetailBodyHeight()
-	maxOffset := max(0, t.toolDetailLineSource(te).Len()-bodyHeight)
-	t.toolDetailScroll += delta
-	if t.toolDetailScroll < 0 {
-		t.toolDetailScroll = 0
-	}
-	if t.toolDetailScroll > maxOffset {
-		t.toolDetailScroll = maxOffset
-	}
-}
-
-func overlayBlock(base, overlay string) string {
-	if overlay == "" {
-		return base
-	}
-	baseLines := strings.Split(base, "\n")
-	overlayLines := strings.Split(strings.TrimRight(overlay, "\n"), "\n")
-	for i, line := range overlayLines {
-		if i < len(baseLines) {
-			baseLines[i] = line
-		} else {
-			baseLines = append(baseLines, line)
-		}
-	}
-	return strings.Join(baseLines, "\n")
-}
-
-func indentLines(s, prefix string) string {
-	if s == "" {
-		return ""
-	}
-	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
-	for i, line := range lines {
-		lines[i] = prefix + line
-	}
-	return strings.Join(lines, "\n")
-}
-
-func indentWrappedPlain(s, prefix string, width int) string {
-	if s == "" {
-		return prefix
-	}
-	var out []string
-	for _, line := range strings.Split(strings.TrimRight(s, "\n"), "\n") {
-		for _, wrapped := range wrapLine(line, width) {
-			out = append(out, prefix+wrapped)
-		}
-	}
-	return strings.Join(out, "\n")
+	return textutil.IndentLines(boxStyle.Width(width).Padding(1, 2).Render(title+"\n"+strings.Join(body, "\n")), "  ")
 }
 
 func renderInlineUserMessage(content string, width int) string {
-	lines := strings.Split(indentWrappedPlain(content, "", width), "\n")
+	lines := strings.Split(textutil.IndentWrappedPlain(content, "", width), "\n")
 	if len(lines) == 0 {
 		return "  " + styleUserLine.Render("●")
 	}
@@ -517,33 +210,6 @@ func renderInlineUserMessage(content string, width int) string {
 		lines[i] = "    " + lines[i]
 	}
 	return strings.Join(lines, "\n")
-}
-
-func truncateRunes(s string, maxWidth int) string {
-	if lipgloss.Width(s) <= maxWidth {
-		return s
-	}
-	runes := []rune(s)
-	for len(runes) > 0 && lipgloss.Width(string(runes))+3 > maxWidth {
-		runes = runes[:len(runes)-1]
-	}
-	return string(runes) + "..."
-}
-
-func wrapLine(s string, maxWidth int) []string {
-	return wrapLineLimit(s, maxWidth, 0)
-}
-
-func wrapLineLimit(s string, maxWidth int, maxLines int) []string {
-	if maxWidth <= 0 || lipgloss.Width(s) <= maxWidth {
-		return []string{s}
-	}
-	wrappedText := ansi.GraphemeWidth.Hardwrap(s, maxWidth, true)
-	lines := strings.Split(wrappedText, "\n")
-	if maxLines > 0 && len(lines) > maxLines {
-		return append(append([]string(nil), lines[:maxLines]...), "...")
-	}
-	return lines
 }
 
 func parseOptionIndex(input string, maxOptions int) (int, bool) {
@@ -556,4 +222,249 @@ func parseOptionIndex(input string, maxOptions int) (int, bool) {
 		}
 	}
 	return -1, false
+}
+
+func (t *TUI) renderAssistantMessage(msg *chatMsg) string {
+	content, _ := msg.Content.(string)
+	width := max(20, t.width-6)
+	if msg.Streaming {
+		// 流式阶段避免每个 delta 都跑 Glamour；最终 done 后仍使用完整 Markdown 渲染。
+		return textutil.IndentLines(renderStreamingText(content, width), "  ")
+	}
+	return textutil.IndentLines(t.cachedMarkdown(msg, content, width), "  ")
+}
+
+func (t *TUI) renderReasoningMessage(msg *chatMsg) string {
+	content, _ := msg.Content.(string)
+	return t.renderThinkingBox(content, msg.Streaming, msg.StartedAt, msg.EndedAt)
+}
+
+func (t *TUI) cachedMarkdown(msg *chatMsg, content string, width int) string {
+	cache := msg.Render
+	if cache.Width == width && cache.Theme == currentTheme.Name && cache.Content == content {
+		return cache.Output
+	}
+	out := RenderMarkdown(content, width)
+	msg.Render = msgRenderCache{Width: width, Theme: currentTheme.Name, Content: content, Output: out}
+	return out
+}
+
+func renderStreamingText(content string, width int) string {
+	if content == "" {
+		return ""
+	}
+	var lines []string
+	for _, line := range strings.Split(strings.TrimRight(content, "\n"), "\n") {
+		lines = append(lines, textutil.WrapLine(line, width)...)
+	}
+	return strings.Join(lines, "\n")
+}
+
+type attachmentItem = attachmentmodel.Item
+type pendingImagePaste = attachmentmodel.PendingImagePaste
+
+func (t *TUI) handlePaste(content string) tea.Cmd {
+	pending, ok, blocked := attachmentmodel.DetectImagePaste(content)
+	if blocked {
+		t.appendNonToolMessage(chatMsg{Role: "error", Content: t.tr("tui.attachment.base64_blocked")})
+		return nil
+	}
+	if !ok {
+		t.chat.Textarea.InsertString(content)
+		t.layoutChat()
+		return nil
+	}
+	t.chat.SetPendingImagePaste(pending)
+	return nil
+}
+
+func (t *TUI) updatePendingImagePaste(key string) tea.Cmd {
+	if t.chat.PendingImagePaste == nil {
+		return nil
+	}
+	switch key {
+	case "enter":
+		return t.confirmPendingImagePaste()
+	case "esc":
+		p := t.chat.CancelPendingImagePaste()
+		if t.chat.PendingPasteShouldRestoreRaw(p) {
+			t.chat.Textarea.InsertString(p.Raw)
+			t.layoutChat()
+		}
+	}
+	return nil
+}
+
+func (t *TUI) confirmPendingImagePaste() tea.Cmd {
+	p := t.chat.PendingImagePaste
+	if p == nil {
+		return nil
+	}
+	t.chat.CancelPendingImagePaste()
+	if p.SourceKind == "data_uri" {
+		path, name, size, err := t.savePastedImage(p)
+		if err != nil {
+			t.appendNonToolMessage(chatMsg{Role: "error", Content: err.Error()})
+			return nil
+		}
+		p.SourceKind = protocol.AttachmentKindAttachment
+		p.Path = path
+		p.Name = name
+		p.Size = size
+	}
+	t.chat.AddConfirmedImageAttachment(p)
+	return nil
+}
+
+func (t *TUI) updateAttachmentMode(key string) bool {
+	return t.chat.UpdateAttachmentMode(key)
+}
+
+func (t *TUI) deleteSelectedAttachment() {
+	t.chat.DeleteSelectedAttachment()
+}
+
+func (t *TUI) renderUserMessage(content any, width int) string {
+	switch v := content.(type) {
+	case userMessageContent:
+		text := renderInlineUserMessage(v.Text, width)
+		if len(v.Attachments) == 0 {
+			return text
+		}
+		return text + "\n" + textutil.IndentLines(t.renderAttachmentList(v.Attachments, -1, false), "  ")
+	case string:
+		return renderInlineUserMessage(v, width)
+	default:
+		return renderInlineUserMessage(fmt.Sprint(v), width)
+	}
+}
+
+func (t *TUI) renderAttachmentPanel() string {
+	view := t.chat.AttachmentPanelView(t.attachmentHelp())
+	if !view.Visible {
+		return ""
+	}
+	if view.Pending != nil {
+		return t.renderPendingImagePaste()
+	}
+	return t.renderAttachmentBox(view.Items, view.Cursor, view.Mode, view.Help)
+}
+
+func (t *TUI) renderAttachmentBox(items []attachmentItem, cursor int, selectable bool, help string) string {
+	width := max(36, t.width-4)
+	inner := max(24, width-8)
+	title := fmt.Sprintf("%s · %d %s", t.tr("tui.attachment.pending_title"), len(items), attachmentTypeSummary(items))
+	var lines []string
+	limit := min(len(items), 4)
+	for i := 0; i < limit; i++ {
+		item := items[i]
+		prefix := "  "
+		st := lipgloss.NewStyle()
+		if selectable && i == cursor {
+			prefix = styleCursor.Render("▶ ")
+			st = styleHL
+		}
+		nameWidth := max(10, inner-22)
+		line := fmt.Sprintf("%s%d  %-5s  %-*s  %s", prefix, i+1, item.Type, nameWidth, truncateMiddle(item.Name, nameWidth), formatAttachmentSize(item.Size))
+		lines = append(lines, st.Render(line))
+	}
+	if len(items) > limit {
+		lines = append(lines, styleDim.Render(fmt.Sprintf("  +%d more", len(items)-limit)))
+	}
+	if strings.TrimSpace(help) != "" {
+		if len(lines) > 0 {
+			lines = append(lines, styleDim.Render(strings.Repeat("─", inner)))
+		}
+		lines = append(lines, styleDim.Render(help))
+	}
+	return boxStyle.Width(width).Padding(0, 1).Render(styleHL.Render(title) + "\n" + strings.Join(lines, "\n"))
+}
+
+func attachmentTypeSummary(items []attachmentItem) string {
+	if len(items) == 1 {
+		if strings.TrimSpace(items[0].Type) != "" {
+			return items[0].Type
+		}
+		return "item"
+	}
+	images := 0
+	for _, item := range items {
+		if item.Type == "image" {
+			images++
+		}
+	}
+	if images == len(items) {
+		return "images"
+	}
+	return "items"
+}
+
+func (t *TUI) renderAttachmentList(items []attachmentItem, cursor int, selectable bool) string {
+	var lines []string
+	lines = append(lines, styleHL.Render(t.tr("tui.attachment.title")))
+	limit := min(len(items), 4)
+	for i := 0; i < limit; i++ {
+		item := items[i]
+		prefix := "  "
+		st := lipgloss.NewStyle()
+		if selectable && i == cursor {
+			prefix = styleCursor.Render("▶ ")
+			st = styleHL
+		}
+		line := fmt.Sprintf("%s%d  %-5s  %-24s  %s", prefix, i+1, item.Type, truncateMiddle(item.Name, 24), formatAttachmentSize(item.Size))
+		lines = append(lines, st.Render(line))
+	}
+	if len(items) > limit {
+		lines = append(lines, styleDim.Render(fmt.Sprintf("  +%d more", len(items)-limit)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (t *TUI) renderPendingImagePaste() string {
+	p := t.chat.PendingImagePaste
+	if p == nil {
+		return ""
+	}
+	title := t.tr("tui.attachment.detected") + " " + p.Name
+	help := t.tr("tui.attachment.confirm_help")
+	if p.SourceKind == "data_uri" {
+		title = t.tr("tui.attachment.detected_data")
+		help = t.tr("tui.attachment.confirm_data_help")
+	}
+	return styleHL.Render(title) + "\n" + styleDim.Render(help)
+}
+
+func (t *TUI) attachmentHelp() string {
+	if t.chat.AttachmentDelete && len(t.chat.Attachments) > 0 {
+		name := t.chat.Attachments[t.chat.AttachmentCursor].Name
+		return styleError.Render(t.tr("tui.attachment.delete")+" "+name+"?") + " " + styleDim.Render(t.tr("tui.attachment.delete_help"))
+	}
+	if t.chat.AttachmentMode {
+		return styleDim.Render(t.tr("tui.attachment.mode_help"))
+	}
+	return styleDim.Render(t.tr("tui.attachment.normal_help"))
+}
+
+func (t *TUI) savePastedImage(p *pendingImagePaste) (string, string, int64, error) {
+	root := strings.TrimSpace(t.attachmentStatus.Root)
+	if root == "" {
+		return "", "", 0, fmt.Errorf("attachments directory is unavailable")
+	}
+	if err := os.MkdirAll(root, 0700); err != nil {
+		return "", "", 0, fmt.Errorf("create attachments dir: %w", err)
+	}
+	sum := sha256.Sum256(p.Data)
+	name := "sha256-" + hex.EncodeToString(sum[:]) + attachmentmodel.ExtFromMime(p.MimeType)
+	path := filepath.Join(root, name)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if err := os.WriteFile(path, p.Data, 0600); err != nil {
+			return "", "", 0, fmt.Errorf("save pasted image: %w", err)
+		}
+	}
+	return path, name, int64(len(p.Data)), nil
+}
+
+func formatAttachmentSize(n int64) string { return attachmentmodel.FormatSize(n) }
+func truncateMiddle(s string, maxWidth int) string {
+	return attachmentmodel.TruncateMiddle(s, maxWidth)
 }

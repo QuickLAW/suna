@@ -75,6 +75,7 @@ func defaultTranslationKeys() map[string]map[LocaleID]string {
 		"tui.tool.prev":                      {LocaleEN: "previous", LocaleZH: "上一个"},
 		"tui.tool.next":                      {LocaleEN: "next", LocaleZH: "下一个"},
 		"tui.tool.close":                     {LocaleEN: "close", LocaleZH: "关闭"},
+		"tui.ask.waiting":                    {LocaleEN: "Waiting for your reply...", LocaleZH: "等待你的回复..."},
 		"tui.ask.help":                       {LocaleEN: "↑↓ choose · Enter confirm · type a custom answer", LocaleZH: "↑↓ 选择 · Enter 确认 · 也可直接输入自定义回答"},
 		"tui.ask.choice_help":                {LocaleEN: "↑↓ choose · Enter confirm", LocaleZH: "↑↓ 选择 · Enter 确认"},
 		"tui.attachment.title":               {LocaleEN: "Attachments", LocaleZH: "附件"},

@@ -1,0 +1,57 @@
+package tui
+
+import (
+	tea "charm.land/bubbletea/v2"
+	uipage "github.com/alanchenchen/suna/internal/tui/pages/page"
+)
+
+func (t *TUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if notif, ok := msg.(localNotification); ok {
+		msg = decodeLocalNotification(notif)
+	}
+	if notif, ok := msg.(notificationMsg); ok {
+		t.handleNotificationMsg(notif)
+		if t.mode == uipage.Welcome && t.ready {
+			t.initWelcomeList()
+		}
+		if t.mode == uipage.Chat {
+			t.syncContent()
+		}
+		return t, nil
+	}
+	if !t.ready {
+		if ws, ok := msg.(tea.WindowSizeMsg); ok {
+			t.width = ws.Width
+			t.height = ws.Height
+			t.ready = true
+			if t.mode == uipage.Chat {
+				return t, t.initChatComponents()
+			}
+			return t, nil
+		}
+		return t, nil
+	}
+	if key, ok := msg.(tea.KeyPressMsg); ok {
+		switch key.String() {
+		case "ctrl+y":
+			t.copyMode = !t.copyMode
+			return t, nil
+		case "esc":
+			if t.copyMode {
+				t.copyMode = false
+				return t, nil
+			}
+		}
+	}
+
+	switch t.mode {
+	case uipage.Welcome:
+		return t.updateWelcome(msg)
+	case uipage.Config:
+		return t.updateConfig(msg)
+	case uipage.Help:
+		return t.updateHelp(msg)
+	default:
+		return t.updateChat(msg)
+	}
+}

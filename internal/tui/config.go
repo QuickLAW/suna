@@ -2,123 +2,43 @@ package tui
 
 import (
 	"fmt"
-	"net/url"
-	"strconv"
+	"os"
 	"strings"
 
-	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 
+	"github.com/alanchenchen/suna/internal/config"
 	"github.com/alanchenchen/suna/internal/protocol"
+	tuiconfig "github.com/alanchenchen/suna/internal/tui/pages/config"
+	uipage "github.com/alanchenchen/suna/internal/tui/pages/page"
 )
 
-type providerFormValues struct {
-	Provider      string
-	Model         string
-	APIKey        string
-	Endpoint      string
-	ContextWindow string
-	Strengths     string
-}
-
-type tuiModelConfig struct {
-	Provider      string
-	Model         string
-	BaseURL       string
-	ContextWindow int
-	Strengths     []string
-	Reasoning     map[string]any
-	HasAPIKey     bool
-}
-
-func (m tuiModelConfig) Ref() string { return m.Provider + "/" + m.Model }
-
-func (t *TUI) hasConfiguredModel() bool {
-	if len(t.configState.Models) > 0 {
-		return true
-	}
-	return t.providerName != "" && t.modelName != ""
-}
-
-func (t *TUI) activeProviderModel() (string, string) {
-	if mc, ok := t.activeConfigModel(); ok {
-		return mc.Provider, mc.Model
-	}
-	provider, model := t.providerName, t.modelName
-	if t.daemonStatus.Provider != "" {
-		provider = t.daemonStatus.Provider
-	}
-	if t.daemonStatus.Model != "" {
-		model = t.daemonStatus.Model
-	}
-	if provider == "" && model == "" && len(t.configState.Models) > 0 {
-		cm := t.configState.Models[0]
-		return cm.Provider, cm.Model
-	}
-	return provider, model
-}
-
-func (t *TUI) activeConfigModel() (tuiModelConfig, bool) {
-	active := t.configState.ActiveModel
-	if active == "" {
-		provider, model := t.providerName, t.modelName
-		if t.daemonStatus.Provider != "" {
-			provider = t.daemonStatus.Provider
-		}
-		if t.daemonStatus.Model != "" {
-			model = t.daemonStatus.Model
-		}
-		if provider != "" && model != "" {
-			active = provider + "/" + model
-		}
-	}
-	for _, mc := range t.configModelsSnapshot() {
-		if mc.Ref() == active {
-			return mc, true
-		}
-	}
-	return tuiModelConfig{}, false
-}
-
-func defaultContextWindow(mc tuiModelConfig) int {
-	if mc.ContextWindow > 0 {
-		return mc.ContextWindow
-	}
-	switch mc.Provider {
-	case "anthropic":
-		return 200000
-	default:
-		return 128000
-	}
-}
-
 func (t *TUI) updateConfig(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if t.configReasoningOpen {
+	if t.config.ReasoningOpen {
 		return t.updateReasoning(msg)
 	}
-	if t.configKindOpen {
+	if t.config.KindOpen {
 		return t.updateProviderKind(msg)
 	}
-	if t.configWorkspaceOpen {
+	if t.config.WorkspaceOpen {
 		return t.updateWorkspaceForm(msg)
 	}
-	if t.configFormOpen {
+	if t.config.FormOpen {
 		return t.updateProviderForm(msg)
 	}
-	if t.configPage == "" {
-		t.configPage = "home"
+	if t.config.Page == "" {
+		t.config.Page = "home"
 	}
 	switch m := msg.(type) {
 	case tea.WindowSizeMsg:
 		t.width, t.height, t.ready = m.Width, m.Height, true
 		return t, nil
 	case tea.KeyPressMsg:
-		if t.configSetupMode && !t.configFormOpen && len(t.configState.Models) == 0 {
+		if t.config.SetupMode && !t.config.FormOpen && len(t.configState.Models) == 0 {
 			t.openProviderForm("", nil)
-			return t, t.configInputs[t.configInputFocus].Focus()
+			return t, t.config.Inputs[t.config.InputFocus].Focus()
 		}
-		if t.configDeleteConfirm != "" {
+		if t.config.DeleteConfirm != "" {
 			switch m.String() {
 			case "ctrl+c":
 				t.doQuit()
@@ -132,22 +52,16 @@ func (t *TUI) updateConfig(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.String() == "left" {
 					delta = -1
 				}
-				t.configDeleteCursor = (t.configDeleteCursor + delta + len(options)) % len(options)
+				t.config.MoveDeleteCursor(delta, len(options))
 				return t, nil
 			case "enter":
-				if t.configDeleteCursor == 0 {
-					t.configDeleteConfirm = ""
-					t.configDeleteCursor = 0
+				ref, deleteAPIKey, ok := t.config.ConfirmDelete(t.shouldOfferDeleteAPIKey(t.config.DeleteConfirm))
+				if !ok {
 					return t, nil
 				}
-				ref := t.configDeleteConfirm
-				deleteAPIKey := t.configDeleteCursor == 2 && t.shouldOfferDeleteAPIKey(ref)
-				t.configDeleteConfirm = ""
-				t.configDeleteCursor = 0
 				return t, t.sendConfigSet(protocol.ConfigSetParams{Action: protocol.ConfigActionDeleteModel, ModelRef: ref, DeleteAPIKey: deleteAPIKey})
 			case "esc":
-				t.configDeleteConfirm = ""
-				t.configDeleteCursor = 0
+				t.config.CancelDelete()
 				return t, nil
 			}
 		}
@@ -176,291 +90,389 @@ func (t *TUI) updateConfig(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return t, nil
 }
 
-func (t *TUI) openProviderKind() {
-	t.configKindOpen = true
-	t.configKindCursor = 0
-	t.configProviderKind = "openai-compatible"
+func (t *TUI) moveConfigCursor(rows []tuiconfig.Row, delta int) {
+	t.config.MoveCursor(rows, delta)
 }
 
-func (t *TUI) providerKindOptions() []string {
-	return []string{"openai-compatible", "openai", "anthropic"}
+// tuiconfig.Row 是配置页列表的最小渲染/交互单元；配置持久化始终由 daemon 处理。
+func (t *TUI) hasConfiguredModel() bool {
+	if len(t.configState.Models) > 0 {
+		return true
+	}
+	return t.providerName != "" && t.modelName != ""
 }
 
-func (t *TUI) updateProviderKind(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch m := msg.(type) {
-	case tea.KeyPressMsg:
-		options := t.providerKindOptions()
-		switch m.String() {
-		case "ctrl+c":
-			t.doQuit()
-			return t, tea.Quit
-		case "esc":
-			t.configKindOpen = false
-			return t, nil
-		case "up":
-			if t.configKindCursor > 0 {
-				t.configKindCursor--
-			}
-			return t, nil
-		case "down":
-			if t.configKindCursor < len(options)-1 {
-				t.configKindCursor++
-			}
-			return t, nil
-		case "enter":
-			t.configProviderKind = options[t.configKindCursor]
-			t.configKindOpen = false
-			t.openProviderForm("", nil)
-			return t, t.configInputs[t.configInputFocus].Focus()
+func (t *TUI) activeProviderModel() (string, string) {
+	if mc, ok := t.activeConfigModel(); ok {
+		return mc.Provider, mc.Model
+	}
+	provider, model := t.providerName, t.modelName
+	if t.daemonStatus.Provider != "" {
+		provider = t.daemonStatus.Provider
+	}
+	if t.daemonStatus.Model != "" {
+		model = t.daemonStatus.Model
+	}
+	if provider == "" && model == "" && len(t.configState.Models) > 0 {
+		cm := t.configState.Models[0]
+		return cm.Provider, cm.Model
+	}
+	return provider, model
+}
+
+func (t *TUI) activeConfigModel() (tuiconfig.ModelConfig, bool) {
+	return tuiconfig.ActiveModel(t.configModelsSnapshot(), tuiconfig.ActiveModelRef(
+		t.configState,
+		t.providerName,
+		t.modelName,
+		t.daemonStatus.Provider,
+		t.daemonStatus.Model,
+	))
+}
+
+func (t *TUI) configModelsSnapshot() []tuiconfig.ModelConfig {
+	return tuiconfig.SnapshotFromProtocol(t.configState)
+}
+
+func (t *TUI) modelByRef(ref string) (tuiconfig.ModelConfig, bool) {
+	for _, mc := range t.configModelsSnapshot() {
+		if mc.Ref() == ref {
+			return mc, true
 		}
 	}
-	return t, nil
+	return tuiconfig.ModelConfig{}, false
 }
 
-func (t *TUI) moveConfigCursor(rows []configRow, delta int) {
-	if len(rows) == 0 {
-		t.configCursor = 0
-		return
-	}
-	idx := t.configCursor
-	for step := 0; step < len(rows); step++ {
-		idx += delta
-		if idx < 0 {
-			idx = len(rows) - 1
-		}
-		if idx >= len(rows) {
-			idx = 0
-		}
-		if rows[idx].selectable() {
-			t.configCursor = idx
-			return
+func (t *TUI) updateConfigModelReasoning(ref string, reasoning map[string]any) bool {
+	for i, mc := range t.configState.Models {
+		if mc.Provider+"/"+mc.Model == ref {
+			t.configState.Models[i].Reasoning = reasoning
+			return true
 		}
 	}
+	return false
 }
 
-func (t *TUI) updateProviderForm(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch m := msg.(type) {
-	case tea.WindowSizeMsg:
-		t.width, t.height, t.ready = m.Width, m.Height, true
-		return t, nil
-	case tea.KeyPressMsg:
-		t.configError = ""
-		switch m.String() {
-		case "ctrl+c":
-			t.doQuit()
-			return t, tea.Quit
-		case "esc":
-			if t.configSetupMode {
-				t.configFormOpen = false
-				t.mode = "welcome"
-				return t, nil
-			}
-			t.configFormOpen = false
-			return t, nil
-		case "enter":
-			if t.configInputFocus == len(t.configInputs)-1 {
-				return t, t.saveProviderForm()
-			}
-			return t, t.focusConfigInput(t.configInputFocus + 1)
-		case "shift+tab", "up":
-			return t, t.focusConfigInput(max(0, t.configInputFocus-1))
-		case "tab", "down":
-			return t, t.focusConfigInput(min(len(t.configInputs)-1, t.configInputFocus+1))
-		}
-	}
-	var cmd tea.Cmd
-	t.configInputs[t.configInputFocus], cmd = t.configInputs[t.configInputFocus].Update(msg)
-	return t, cmd
-}
-
-func (t *TUI) openProviderForm(ref string, mc *tuiModelConfig) {
-	t.configWorkspaceOpen = false
-	t.configFormOpen = true
-	t.configFormTitle = "tui.config.provider.edit"
-	t.configEditingName = ref
+func (t *TUI) isActiveModelRef(ref string) bool {
 	if ref == "" {
-		t.configFormTitle = "tui.config.provider.add"
+		return false
 	}
-	t.initProviderForm(mc)
+	if t.configState.ActiveModel != "" {
+		return ref == t.configState.ActiveModel
+	}
+	provider, model := t.activeProviderModel()
+	return ref == provider+"/"+model
 }
 
-func (t *TUI) openWorkspaceForm() tea.Cmd {
-	t.configWorkspaceOpen = true
-	t.configFormOpen = true
-	t.configFormTitle = "tui.config.workspace.edit"
-	t.configEditingName = ""
-	t.initWorkspaceForm()
-	return t.configInputs[t.configInputFocus].Focus()
-}
-
-func (t *TUI) initWorkspaceForm() {
-	in := textinput.New()
-	in.Prompt = t.tr("tui.config.workspace") + ": "
-	in.Placeholder = t.tr("tui.config.workspace.placeholder")
-	in.SetValue(t.configState.Workspace)
-	in.SetWidth(64)
-	styles := textinput.DefaultStyles(false)
-	styles.Focused.Prompt = lipgloss.NewStyle().Foreground(ColorBrand).Bold(true)
-	styles.Blurred.Prompt = lipgloss.NewStyle().Foreground(ColorDim)
-	in.SetStyles(styles)
-	t.configInputs = []textinput.Model{in}
-	t.configInputFocus = 0
-	t.focusConfigInput(0)
-}
-
-func (t *TUI) updateWorkspaceForm(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch m := msg.(type) {
-	case tea.WindowSizeMsg:
-		t.width, t.height, t.ready = m.Width, m.Height, true
-		return t, nil
-	case tea.KeyPressMsg:
-		t.configError = ""
-		switch m.String() {
-		case "ctrl+c":
-			t.doQuit()
-			return t, tea.Quit
-		case "esc":
-			t.configWorkspaceOpen = false
-			t.configFormOpen = false
-			return t, nil
-		case "enter":
-			return t, t.saveWorkspaceForm()
+func (t *TUI) shouldOfferDeleteAPIKey(ref string) bool {
+	mc, ok := t.modelByRef(ref)
+	if !ok || !mc.HasAPIKey {
+		return false
+	}
+	count := 0
+	for _, existing := range t.configModelsSnapshot() {
+		if existing.Provider == mc.Provider {
+			count++
 		}
 	}
-	var cmd tea.Cmd
-	t.configInputs[t.configInputFocus], cmd = t.configInputs[t.configInputFocus].Update(msg)
-	return t, cmd
+	return count == 1
 }
 
-func (t *TUI) saveWorkspaceForm() tea.Cmd {
-	workspace := ""
-	if len(t.configInputs) > 0 {
-		workspace = strings.TrimSpace(t.configInputs[0].Value())
-	}
-	t.configState.Workspace = workspace
-	return t.sendConfigSet(protocol.ConfigSetParams{Action: protocol.ConfigActionUpdateGeneral, Locale: string(t.i18n.Locale()), Theme: t.theme, GuardMode: t.configState.GuardMode, Workspace: &workspace})
+func (t *TUI) configDeleteOptions() []string {
+	options := tuiconfig.DeleteOptions(
+		t.tr("tui.config.cancel"),
+		t.tr("tui.config.delete_model"),
+		t.tr("tui.config.delete_model_and_api_key"),
+		t.shouldOfferDeleteAPIKey(t.config.DeleteConfirm),
+	)
+	t.config.ClampDeleteCursor(len(options))
+	return options
 }
 
-func (t *TUI) initProviderForm(mc *tuiModelConfig) {
-	labels := []string{t.tr("tui.config.provider.type"), t.tr("tui.config.provider.model"), t.tr("tui.config.provider.api_key"), t.tr("tui.config.provider.endpoint"), t.tr("tui.config.provider.context_window"), t.tr("tui.config.provider.strengths")}
-	placeholders := []string{"Zhipu", "glm-5.1", "sk-...", "https://api.example.com/v1", "128000", t.tr("tui.config.strengths_placeholder")}
-	values := []string{"", "", "", "", "", ""}
-	if mc != nil {
-		values[0] = mc.Provider
-		values[1] = mc.Model
-		values[3] = mc.BaseURL
-		if mc.ContextWindow > 0 {
-			values[4] = strconv.Itoa(mc.ContextWindow)
-		}
-		values[5] = strings.Join(mc.Strengths, ", ")
-	} else {
-		switch t.configProviderKind {
-		case "openai":
-			values[0] = "openai"
-			values[3] = "https://api.openai.com/v1"
-			placeholders[1] = "gpt-4o-mini"
-		case "anthropic":
-			values[0] = "anthropic"
-			values[3] = "https://api.anthropic.com"
-			placeholders[1] = "claude-sonnet-4-20250514"
-			placeholders[4] = "200000"
-		default:
-			values[0] = ""
-		}
+func (t *TUI) currentLangDisplay() string {
+	if t.i18n.Locale() == LocaleZH {
+		return t.tr("tui.lang.zh")
 	}
-	t.configInputs = make([]textinput.Model, len(labels))
-	for i := range labels {
-		in := textinput.New()
-		in.Prompt = labels[i] + ": "
-		in.Placeholder = placeholders[i]
-		in.SetValue(values[i])
-		in.SetWidth(46)
-		if i == 2 {
-			in.EchoMode = textinput.EchoPassword
-			in.EchoCharacter = '*'
-		}
-		styles := textinput.DefaultStyles(false)
-		styles.Focused.Prompt = lipgloss.NewStyle().Foreground(ColorBrand).Bold(true)
-		styles.Blurred.Prompt = lipgloss.NewStyle().Foreground(ColorDim)
-		in.SetStyles(styles)
-		t.configInputs[i] = in
-	}
-	t.configInputFocus = 0
-	t.focusConfigInput(0)
+	return t.tr("tui.lang.en")
 }
 
-func (t *TUI) focusConfigInput(idx int) tea.Cmd {
-	if idx < 0 || idx >= len(t.configInputs) {
+func (t *TUI) guardModeDisplay() string {
+	switch tuiconfig.NormalizeGuardMode(t.configState.GuardMode) {
+	case "readonly":
+		return t.tr("tui.guard.mode.readonly") + " · " + t.tr("tui.guard.mode.readonly.desc")
+	case "auto":
+		return t.tr("tui.guard.mode.auto") + " · " + t.tr("tui.guard.mode.auto.desc")
+	case "smart":
+		return t.tr("tui.guard.mode.smart") + " · " + t.tr("tui.guard.mode.smart.desc")
+	default:
+		return t.tr("tui.guard.mode.ask") + " · " + t.tr("tui.guard.mode.ask.desc")
+	}
+}
+
+func (t *TUI) workspaceDisplay() string {
+	workspace := strings.TrimSpace(t.configState.Workspace)
+	if workspace == "" {
+		return t.tr("tui.config.disabled")
+	}
+	return workspace
+}
+
+func (t *TUI) attachmentUsageDisplay() string {
+	return fmt.Sprintf("%s / %d files", formatAttachmentSize(t.attachmentStatus.Bytes), t.attachmentStatus.Count)
+}
+
+func (t *TUI) displayEndpoint(endpoint string) string {
+	if endpoint == "" {
+		return t.tr("tui.config.missing")
+	}
+	return endpoint
+}
+
+func contextDisplay(mc tuiconfig.ModelConfig) string {
+	return fmtTok(tuiconfig.DefaultContextWindow(mc))
+}
+
+func (t *TUI) modelNeedsAttention(mc tuiconfig.ModelConfig) bool {
+	return tuiconfig.ModelNeedsAttention(mc)
+}
+
+func configDataDir() string {
+	return config.DefaultDataDir()
+}
+
+func configFilePath() string {
+	return config.DataDirConfigPath(configDataDir())
+}
+
+func credentialsFilePath() string {
+	return config.DataDirCredentialsPath(configDataDir())
+}
+
+func (t *TUI) modelSummary(mc tuiconfig.ModelConfig) string {
+	raw := tuiconfig.ModelSummary(mc, t.isActiveModelRef(mc.Ref()), fmtTok)
+	parts := strings.Split(raw, " · ")
+	for i, part := range parts {
+		switch part {
+		case "active":
+			parts[i] = t.tr("tui.config.activated_status")
+		case "missing_api_key":
+			parts[i] = t.tr("tui.config.missing_api_key")
+		case "invalid":
+			parts[i] = t.tr("tui.config.invalid")
+		case "endpoint_configured":
+			parts[i] = t.tr("tui.config.endpoint_configured")
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
+func (t *TUI) configRows() []tuiconfig.Row {
+	return t.config.Rows(t.configRowsDeps())
+}
+
+func (t *TUI) configRowsDeps() tuiconfig.RowsDeps {
+	return tuiconfig.RowsDeps{
+		Tr:               func(key string) string { return t.tr(key) },
+		ProvidersSummary: func(total, needs int) string { return t.i18n.Tf("tui.config.providers_summary", total, needs) },
+		Models:           t.configModelsSnapshot(),
+		ActiveModel:      t.configState.ActiveModel,
+		IsActive:         t.isActiveModelRef,
+		NeedsAttention:   t.modelNeedsAttention,
+		ModelSummary:     t.modelSummary,
+		CurrentLanguage:  t.currentLangDisplay(),
+		Theme:            t.themeDisplay(),
+		GuardMode:        t.guardModeDisplay(),
+		Workspace:        t.workspaceDisplay(),
+		ConfigPath:       configFilePath(),
+		CredentialsPath:  credentialsFilePath(),
+		AttachmentUsage:  t.attachmentUsageDisplay(),
+		ConfigDir:        configDataDir(),
+		DisplayEndpoint:  t.displayEndpoint,
+		ContextDisplay:   contextDisplay,
+		ReasoningDisplay: t.reasoningDisplay,
+	}
+}
+
+func (t *TUI) configHomeRows() []tuiconfig.Row {
+	return t.config.HomeRows(t.configRowsDeps())
+}
+
+func (t *TUI) configModelRows() []tuiconfig.Row {
+	return t.config.ModelRows(t.configRowsDeps())
+}
+
+func (t *TUI) configDetailRows() []tuiconfig.Row {
+	return t.config.DetailRows(t.configRowsDeps())
+}
+
+func (t *TUI) ensureConfigCursor(rows []tuiconfig.Row) {
+	t.config.EnsureCursor(rows)
+}
+
+func (t *TUI) selectedConfigModel(rows []tuiconfig.Row) (string, bool) {
+	return t.config.SelectedModel(rows)
+}
+
+func (t *TUI) handleConfigAction(rows []tuiconfig.Row) tea.Cmd {
+	if t.config.Cursor < 0 || t.config.Cursor >= len(rows) {
 		return nil
 	}
-	var cmds []tea.Cmd
-	for i := range t.configInputs {
-		if i == idx {
-			cmds = append(cmds, t.configInputs[i].Focus())
-		} else {
-			t.configInputs[i].Blur()
+	switch row := rows[t.config.Cursor]; row.Kind {
+	case "section":
+		t.config.Page = row.Name
+		t.config.Cursor = 0
+	case "general_language":
+		return t.toggleLanguage()
+	case "general_theme":
+		return t.toggleTheme()
+	case "general_guard":
+		return t.toggleGuardMode()
+	case "general_workspace":
+		return t.openWorkspaceForm()
+	case "clear_attachments":
+		t.chat.Attachments = nil
+		return t.attachmentClearCmd()
+	case "open_config_dir":
+		return t.openConfigDirCmd()
+	case "add_model":
+		t.openProviderKind()
+	case "edit_model":
+		if mc, ok := t.modelByRef(t.config.DetailRef); ok {
+			t.openProviderForm(t.config.DetailRef, &mc)
+			return t.config.Inputs[t.config.InputFocus].Focus()
 		}
-	}
-	t.configInputFocus = idx
-	return tea.Batch(cmds...)
-}
-
-func (t *TUI) saveProviderForm() tea.Cmd {
-	v := t.providerFormValues()
-	if err := t.validateProviderForm(v); err != nil {
-		t.configError = err.Error()
-		return nil
-	}
-	params := protocol.ConfigSetParams{
-		Action:   protocol.ConfigActionUpsertModel,
-		ModelRef: t.configEditingName,
-		APIKey:   v.APIKey,
-		Model: protocol.ConfigModel{
-			Provider:      v.Provider,
-			Model:         v.Model,
-			BaseURL:       v.Endpoint,
-			ContextWindow: parsePositiveInt(v.ContextWindow),
-		},
-	}
-	params.Model.Strengths = splitCSV(v.Strengths)
-	if existing, ok := t.modelByRef(t.configEditingName); ok {
-		params.Model.Reasoning = existing.Reasoning
-	}
-	if t.configSetupMode {
-		params.ActiveModel = v.Provider + "/" + v.Model
-	}
-	return t.sendConfigSet(params)
-}
-
-func (t *TUI) providerFormValues() providerFormValues {
-	vals := make([]string, 6)
-	for i := range vals {
-		if i < len(t.configInputs) {
-			vals[i] = strings.TrimSpace(t.configInputs[i].Value())
+	case "edit_reasoning":
+		if mc, ok := t.modelByRef(t.config.DetailRef); ok {
+			t.openReasoning(mc)
 		}
-	}
-	return providerFormValues{Provider: vals[0], Model: vals[1], APIKey: vals[2], Endpoint: vals[3], ContextWindow: vals[4], Strengths: vals[5]}
-}
-
-func (t *TUI) validateProviderForm(v providerFormValues) error {
-	if v.Provider == "" || v.Model == "" {
-		return fmt.Errorf("%s", t.tr("tui.error.required"))
-	}
-	if t.configSetupMode && v.APIKey == "" {
-		return fmt.Errorf("%s", t.tr("tui.error.api_key_required"))
-	}
-	if v.Endpoint == "" {
-		return fmt.Errorf("%s", t.tr("tui.error.endpoint_required"))
-	}
-	u, err := url.Parse(v.Endpoint)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return fmt.Errorf("%s", t.tr("tui.error.invalid_endpoint"))
-	}
-	if v.ContextWindow != "" {
-		ctx, err := strconv.Atoi(v.ContextWindow)
-		if err != nil || ctx <= 0 {
-			return fmt.Errorf("%s", t.tr("tui.error.invalid_context_window"))
-		}
+	case "activate_model":
+		return t.activateModelRef(row.Name)
+	case "delete_model":
+		t.config.BeginDelete(t.config.DetailRef)
+	case "model":
+		t.openConfigDetail(row.Name)
 	}
 	return nil
+}
+func (t *TUI) openConfigDirCmd() tea.Cmd {
+	return func() tea.Msg {
+		if err := os.MkdirAll(configDataDir(), 0755); err != nil {
+			return ipcErrorNotification(notifyConfigError, err)
+		}
+		if err := openDirectory(configDataDir()); err != nil {
+			return ipcErrorNotification(notifyConfigError, err)
+		}
+		return nil
+	}
+}
+func (t *TUI) activateSelectedConfigModel(rows []tuiconfig.Row) tea.Cmd {
+	if t.config.Page != "models" {
+		return nil
+	}
+	if ref, ok := t.selectedConfigModel(rows); ok {
+		return t.activateModelRef(ref)
+	}
+	return nil
+}
+func (t *TUI) activateModelRef(ref string) tea.Cmd {
+	if mc, ok := t.modelByRef(ref); ok && t.modelNeedsAttention(mc) {
+		t.openConfigDetail(ref)
+		t.config.Error = t.tr("tui.error.provider_incomplete")
+		return nil
+	}
+	t.setActiveModelRef(ref)
+	return t.sendConfigSet(protocol.ConfigSetParams{Action: protocol.ConfigActionActivateModel, ActiveModel: ref})
+}
+func (t *TUI) setActiveModelRef(ref string) {
+	t.configState.ActiveModel = ref
+	if mc, ok := t.modelByRef(ref); ok {
+		t.providerName = mc.Provider
+		t.modelName = mc.Model
+		t.contextWindow = tuiconfig.DefaultContextWindow(mc)
+	}
+}
+func (t *TUI) sendConfigSet(params protocol.ConfigSetParams) tea.Cmd {
+	return func() tea.Msg {
+		if t.localCli == nil || !t.localCli.Connected() {
+			return localNotification{method: notifyConfigError, params: []byte(fmt.Sprintf(`{"message":%q}`, t.tr("tui.error.daemon_not_connected")))}
+		}
+		if err := t.localCli.ConfigSet(params); err != nil {
+			return localNotification{method: notifyConfigError, params: []byte(fmt.Sprintf(`{"message":%q}`, err.Error()))}
+		}
+		return nil
+	}
+}
+func (t *TUI) leaveConfig() tea.Cmd {
+	target := t.config.LeaveTarget()
+	if target != uipage.None {
+		t.mode = target
+	}
+	return nil
+}
+func (t *TUI) toggleLanguage() tea.Cmd {
+	locale := string(LocaleZH)
+	if t.i18n.Locale() == LocaleZH {
+		locale = string(LocaleEN)
+	}
+	t.i18n.SetLocale(LocaleID(locale))
+	return t.sendConfigSet(protocol.ConfigSetParams{Action: protocol.ConfigActionUpdateGeneral, Locale: locale, Theme: t.theme})
+}
+func (t *TUI) toggleTheme() tea.Cmd {
+	theme := nextTheme(t.theme)
+	t.setTheme(theme)
+	if t.mode == uipage.Chat {
+		t.syncContent()
+	}
+	return t.sendConfigSet(protocol.ConfigSetParams{Action: protocol.ConfigActionUpdateGeneral, Locale: string(t.i18n.Locale()), Theme: theme})
+}
+func (t *TUI) toggleGuardMode() tea.Cmd {
+	mode := tuiconfig.NextGuardMode(t.configState.GuardMode)
+	t.configState.GuardMode = mode
+	return t.sendConfigSet(protocol.ConfigSetParams{Action: protocol.ConfigActionUpdateGeneral, Locale: string(t.i18n.Locale()), Theme: t.theme, GuardMode: mode})
+}
+
+func (t *TUI) openConfigDetail(ref string) {
+	t.config.OpenDetail(ref, t.configDetailDefaultCursor(ref))
+}
+func (t *TUI) openConfigDetailIfPresent(ref string) bool {
+	if ref == "" {
+		return false
+	}
+	if _, ok := t.modelByRef(ref); !ok {
+		return false
+	}
+	t.openConfigDetail(ref)
+	return true
+}
+
+func (t *TUI) returnToConfigModels() {
+	t.config.ReturnToModels(t.configModelCursorForActive())
+}
+func (t *TUI) configProviderFormRef() string {
+	return tuiconfig.ProviderFormRef(t.providerFormValues())
+}
+func (t *TUI) configModelCursorForActive() int {
+	active := t.configState.ActiveModel
+	if active == "" {
+		provider, model := t.activeProviderModel()
+		if provider != "" && model != "" {
+			active = provider + "/" + model
+		}
+	}
+	return tuiconfig.ModelCursorForActive(t.configModelRows(), active)
+}
+func (t *TUI) configDetailDefaultCursor(ref string) int {
+	preferred := "edit_model"
+	if mc, ok := t.modelByRef(ref); ok && !t.modelNeedsAttention(mc) && !t.isActiveModelRef(mc.Ref()) {
+		preferred = "activate_model"
+	}
+	return tuiconfig.DetailDefaultCursor(t.configDetailRowsForRef(ref), preferred)
+}
+
+func (t *TUI) configDetailRowsForRef(ref string) []tuiconfig.Row {
+	old := t.config.DetailRef
+	t.config.DetailRef = ref
+	rows := t.config.DetailRows(t.configRowsDeps())
+	t.config.DetailRef = old
+	return rows
 }

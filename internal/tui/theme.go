@@ -1,6 +1,7 @@
 package tui
 
 import (
+	uipage "github.com/alanchenchen/suna/internal/tui/pages/page"
 	"image/color"
 	"os"
 	"strings"
@@ -157,10 +158,10 @@ func applyTheme(name string) {
 func (t *TUI) setTheme(name string) {
 	t.theme = normalizeThemeName(name)
 	applyTheme(t.theme)
-	if t.mode == "chat" {
+	if t.mode == uipage.Chat {
 		t.applyTextAreaTheme()
 	}
-	t.sp.Style = lipgloss.NewStyle().Foreground(ColorBrand)
+	t.chat.Spinner.Style = lipgloss.NewStyle().Foreground(ColorBrand)
 }
 
 func nextTheme(name string) string {
@@ -187,7 +188,7 @@ func (t *TUI) themeDisplay() string {
 
 func (t *TUI) applyTextAreaTheme() {
 	styles := textareaStyles()
-	t.ta.SetStyles(styles)
+	t.chat.Textarea.SetStyles(styles)
 }
 
 func textareaStyles() textarea.Styles {

@@ -3,28 +3,29 @@ package tui
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"charm.land/bubbles/v2/spinner"
-	"charm.land/bubbles/v2/textarea"
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/alanchenchen/suna/internal/protocol"
+	textutil "github.com/alanchenchen/suna/internal/tui/components/text"
+	"github.com/alanchenchen/suna/internal/tui/components/toolview"
+	chatpage "github.com/alanchenchen/suna/internal/tui/pages/chat"
+	uipage "github.com/alanchenchen/suna/internal/tui/pages/page"
 )
 
-const inputMaxHeight = 6
+const chatMaxCommandSuggestions = chatpage.MaxCommandSuggestions
 
-type phase int
+type phase = chatpage.Phase
 
 const (
-	phaseIdle phase = iota
-	phaseFirstLLM
-	phaseLLM
-	phaseThinking
-	phaseTool
-	phaseWaitingAfterTool
+	phaseIdle             = chatpage.PhaseIdle
+	phaseFirstLLM         = chatpage.PhaseFirstLLM
+	phaseLLM              = chatpage.PhaseLLM
+	phaseThinking         = chatpage.PhaseThinking
+	phaseTool             = chatpage.PhaseTool
+	phaseWaitingAfterTool = chatpage.PhaseWaitingAfterTool
 )
 
 var (
@@ -46,551 +47,215 @@ var (
 	styleErrLine   = lipgloss.NewStyle().Foreground(ColorError).Bold(true)
 )
 
-type toolStatus int
+type toolStatus = toolview.Status
 
 const (
-	toolRunning toolStatus = iota
-	toolDone
-	toolError
+	toolRunning = toolview.StatusRunning
+	toolDone    = toolview.StatusDone
+	toolError   = toolview.StatusError
 )
 
-type toolEntry struct {
-	id              string
-	localID         string
-	parentID        string
-	name            string
-	rawName         string
-	intent          string
-	params          string
-	paramsRaw       map[string]any
-	summary         string
-	status          toolStatus
-	startedAt       time.Time
-	endedAt         time.Time
-	duration        time.Duration
-	result          string
-	resultTruncated bool
-	resultBytes     int
-	metadata        map[string]any
-	guard           *guardInfo
-}
+type toolEntry = toolview.Entry
+type guardInfo = toolview.GuardInfo
+type toolBlock = toolview.Block
 
-type guardInfo struct {
-	risk       string
-	decision   string
-	source     string
-	reason     string
-	suggestion string
-}
-
-type toolBlock struct {
-	entries map[string]*toolEntry
-	order   []string
-}
-
-type commandSpec struct {
-	cmd     string
-	descKey string
-}
+type commandSpec = chatpage.CommandSpec
 
 func (t *TUI) initChatComponents() tea.Cmd {
-	t.vp = viewport.New()
-	t.vp.SoftWrap = false
-	t.vp.MouseWheelEnabled = true
-	t.vp.MouseWheelDelta = 3
-
-	ta := textarea.New()
-	ta.Prompt = "> "
-	ta.Placeholder = t.tr("tui.chat.input_placeholder")
-	ta.DynamicHeight = true
-	ta.MaxHeight = inputMaxHeight
-	ta.MinHeight = 1
-	ta.ShowLineNumbers = false
-	ta.CharLimit = 0
-	ta.SetStyles(textareaStyles())
-	t.ta = ta
-
-	t.sp = spinner.New(spinner.WithSpinner(spinner.Dot))
-	t.sp.Style = lipgloss.NewStyle().Foreground(ColorBrand)
-
-	t.phase = phaseIdle
-	t.activeTools = make(map[string]*toolEntry)
-	t.toolStartTimes = make(map[string]time.Time)
-	t.currentToolBlock = nil
-	t.selectedToolID = ""
+	t.chat.InitComponents(chatpage.ComponentDeps{
+		Placeholder:    t.tr("tui.chat.input_placeholder"),
+		TextareaStyles: textareaStyles(),
+		SpinnerStyle:   lipgloss.NewStyle().Foreground(ColorBrand),
+	})
 
 	t.syncContent()
 	t.layoutChat()
 	t.syncContent()
-
-	if t.pendingInput != "" {
-		t.ta.SetValue(t.pendingInput)
-		t.ta.CursorEnd()
-		t.pendingInput = ""
-	}
+	t.chat.RestorePendingInput()
 
 	return t.syncInputFocus()
 }
 
 func (t *TUI) syncContent() {
-	// 用户没有主动上滚时保持贴底；主动上滚后不打断阅读。
-	// 发送新消息这类明确动作会设置 forceBottom，下一次内容同步必须回到底部。
-	followBottom := t.forceBottom || t.followBottom || t.vp.AtBottom()
-	if t.forceBottom {
-		t.forceBottom = false
-	}
-	var sb strings.Builder
-	inSunaBlock := false
-	renderSunaHeader := func() {
-		if inSunaBlock {
-			return
-		}
-		// reasoning、tool 和最终回答归为同一个 Suna 回合，避免思考/工具块看起来像用户消息的一部分。
-		sb.WriteString("\n  " + styleAgentLine.Render("● "+t.tr("tui.chat.suna")) + "\n")
-		inSunaBlock = true
-	}
+	t.chat.SyncTranscript(chatpage.TranscriptDeps{
+		Width:         t.width,
+		SunaLabel:     t.tr("tui.chat.suna"),
+		AskHelp:       t.tr("tui.ask.help"),
+		AskChoiceHelp: t.tr("tui.ask.choice_help"),
+		RenderSunaHeader: func(label string) string {
+			return "\n  " + styleAgentLine.Render("● "+label) + "\n"
+		},
+		RenderUserMessage:    t.renderUserMessage,
+		RenderAssistant:      t.renderAssistantMessage,
+		RenderReasoning:      t.renderReasoningMessage,
+		RenderToolBlock:      t.renderToolBlock,
+		RenderError:          t.renderErrorMessage,
+		RenderRestoreSummary: t.renderRestoreSummaryBox,
+		RenderSkillLoad:      t.renderSkillLoadMessage,
+		RenderSystem: func(content string) string {
+			return styleSysLine.Render("  ◆ " + content)
+		},
+		RenderAskSelected: func(opt string) string {
+			return fmt.Sprintf("  %s %s\n", styleToolOk.Render("●"), styleAgentLine.Render(opt))
+		},
+		RenderAskOption: func(opt string) string {
+			return fmt.Sprintf("  %s %s\n", styleToolDim.Render("○"), styleSysLine.Render(opt))
+		},
+		RenderAskHelp: func(help string) string {
+			return styleDim.Render("  "+help) + "\n\n"
+		},
+		RenderModelPicker:  t.renderModelPicker,
+		RenderStatusLine:   t.renderCurrentStatusLine,
+		HasVisibleProgress: t.hasVisibleActiveProgress,
+	})
+}
 
-	for i := range t.messages {
-		msg := &t.messages[i]
-		switch msg.role {
-		case "user":
-			sb.WriteString("\n" + t.renderUserMessage(msg.content, max(20, t.width-8)) + "\n")
-			inSunaBlock = false
-		case "assistant":
-			renderSunaHeader()
-			sb.WriteString(t.renderAssistantMessage(msg) + "\n")
-		case "reasoning":
-			renderSunaHeader()
-			sb.WriteString(t.renderReasoningMessage(msg))
-		case "tool":
-			if v, ok := msg.content.(*toolBlock); ok {
-				renderSunaHeader()
-				sb.WriteString(t.renderToolBlock(v))
+func (t *TUI) currentInputPolicy() chatpage.InputPolicy {
+	return chatpage.CurrentInputPolicy(chatpage.InputPolicyState{
+		Compacting:      t.chat.Compacting,
+		Loading:         t.chat.Loading,
+		PendingAskID:     t.chat.PendingAskID,
+		PendingAskCustom: t.chat.PendingAskCustom,
+		PendingGuard:     t.chat.PendingGuard != nil,
+		StatusLabel:     t.currentStatusLabel(),
+		SpinnerView:     t.chat.Spinner.View(),
+		CompactRunning:  t.tr("compact.running"),
+		RespondingLabel: t.tr("status.responding"),
+	})
+}
+
+func (t *TUI) inputLocked() bool {
+	return t.currentInputPolicy().Locked
+}
+
+func (t *TUI) allowLockedInputKey(ks string) bool {
+	return chatpage.AllowLockedInputKey(ks, t.chat.Compacting)
+}
+
+func (t *TUI) syncInputFocus() tea.Cmd {
+	if t.chat.SyncInputFocus(t.inputLocked()) {
+		return t.chat.Textarea.Focus()
+	}
+	return nil
+}
+
+func (t *TUI) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch m := msg.(type) {
+	case tea.WindowSizeMsg:
+		t.width = m.Width
+		t.height = m.Height
+		t.ready = true
+		t.layoutChat()
+		t.syncContent()
+		return t, nil
+
+	case tea.KeyPressMsg:
+		return t.updateChatKey(m.String(), msg)
+
+	case spinner.TickMsg:
+		if t.chat.Loading || t.chat.Compacting {
+			var cmd tea.Cmd
+			t.chat.Spinner, cmd = t.chat.Spinner.Update(msg)
+			t.syncContent()
+			return t, cmd
+		}
+		return t, nil
+
+	case tea.PasteMsg:
+		if t.inputLocked() {
+			return t, nil
+		}
+		cmd := t.handlePaste(m.Content)
+		t.syncContent()
+		return t, cmd
+
+	case tea.MouseMsg:
+		if t.mouseInComposer(m) {
+			return t, nil
+		}
+		if t.chat.PendingGuard != nil {
+			if mm, ok := any(m).(tea.MouseWheelMsg); ok {
+				if mm.Mouse().Button == tea.MouseWheelUp {
+					t.scrollGuardOverlay(-3)
+				} else if mm.Mouse().Button == tea.MouseWheelDown {
+					t.scrollGuardOverlay(3)
+				}
+				t.syncContent()
 			}
-		case "error":
-			content, _ := msg.content.(string)
-			sb.WriteString("\n" + t.renderErrorMessage(content) + "\n")
-			inSunaBlock = false
-		case "restore_summary":
-			content, _ := msg.content.(string)
-			sb.WriteString("\n" + t.renderRestoreSummaryBox(content) + "\n")
-			inSunaBlock = false
-		case "panel":
-			content, _ := msg.content.(string)
-			sb.WriteString("\n" + content + "\n")
-			inSunaBlock = false
-		case "skill":
-			if p, ok := msg.content.(protocol.SkillLoadParams); ok {
-				sb.WriteString("\n" + t.renderSkillLoadMessage(p) + "\n")
+			return t, nil
+		}
+		if t.chat.ShowToolDetail {
+			if mm, ok := any(m).(tea.MouseWheelMsg); ok {
+				if mm.Mouse().Button == tea.MouseWheelUp {
+					t.scrollToolDetailOverlay(-3)
+				} else if mm.Mouse().Button == tea.MouseWheelDown {
+					t.scrollToolDetailOverlay(3)
+				}
 			}
-			inSunaBlock = false
-		default:
-			content, _ := msg.content.(string)
-			sb.WriteString("\n" + styleSysLine.Render("  ◆ "+content) + "\n")
-			inSunaBlock = false
+			return t, nil
 		}
+		var cmd tea.Cmd
+		t.chat.Viewport, cmd = t.chat.Viewport.Update(msg)
+		t.chat.FollowBottom = t.chat.Viewport.AtBottom()
+		return t, cmd
 	}
 
-	if t.pendingAskID != "" && len(t.pendingAskOptions) > 0 {
-		for i, opt := range t.pendingAskOptions {
-			if i == t.pendingAskCursor {
-				sb.WriteString(fmt.Sprintf("  %s %s\n",
-					styleToolOk.Render("●"),
-					styleAgentLine.Render(opt)))
-			} else {
-				sb.WriteString(fmt.Sprintf("  %s %s\n",
-					styleToolDim.Render("○"),
-					styleSysLine.Render(opt)))
-			}
-		}
-		helpKey := "tui.ask.help"
-		if !t.pendingAskCustom {
-			helpKey = "tui.ask.choice_help"
-		}
-		sb.WriteString(styleDim.Render("  "+t.tr(helpKey)) + "\n\n")
-	}
-	if t.modelPickerOpen {
-		sb.WriteString(t.renderModelPicker())
+	if t.chat.ConfirmDiscardDraft {
+		t.chat.ConfirmDiscardDraft = false
 	}
 
-	if t.loading && t.phaseStart.After(time.Time{}) && !t.hasVisibleActiveProgress() {
-		renderSunaHeader()
-		sb.WriteString(t.renderCurrentStatusLine())
-	}
-	t.vp.SetContent(sb.String())
-	if followBottom {
-		t.vp.GotoBottom()
-		t.followBottom = true
-	} else {
-		t.followBottom = t.vp.AtBottom()
-	}
-}
+	var cmd tea.Cmd
+	t.chat.Textarea, cmd = t.chat.Textarea.Update(msg)
 
-func (t *TUI) renderErrorMessage(content string) string {
-	content = strings.TrimSpace(content)
-	if content == "" {
-		return ""
-	}
-	width := max(24, t.width-8)
-	bodyWidth := max(20, width-4)
-	wrapped := lipgloss.NewStyle().Width(bodyWidth).Render(content)
-	lines := strings.Split(wrapped, "\n")
-	for i := range lines {
-		if i == 0 {
-			lines[i] = styleErrLine.Render("  ✗ " + lines[i])
-		} else {
-			lines[i] = styleErrLine.Render("    " + lines[i])
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-func (t *TUI) renderThinkingBox(content string, running bool, startedAt, endedAt time.Time) string {
-	width := max(24, min(t.width-8, 62))
-	inner := width - 4
-	elapsed := reasoningElapsed(running, startedAt, endedAt)
-	title := " ◎ " + t.tr("tui.chat.thinking") + " "
-	if running {
-		title = fmt.Sprintf(" ◎ %s %s %.1fs ", t.tr("tui.chat.thinking"), t.sp.View(), elapsed.Seconds())
-	} else if elapsed > 0 {
-		title = fmt.Sprintf(" ◎ %s %.1fs ", t.tr("tui.chat.thinking"), elapsed.Seconds())
-	}
-	display := strings.TrimSpace(content)
-	if running && display == "" {
-		display = t.tr("status.thinking")
-	}
-	if !t.showReasoningDetail {
-		display = extractLastSentence(display)
-		if display == "" {
-			display = t.tr("tui.chat.thought_done")
-		}
-		display += "    [Ctrl+R " + t.tr("tui.key.reasoning_detail") + "]"
-	} else {
-		if running {
-			display = renderStreamingText(strings.TrimSpace(content), inner)
-		} else {
-			display = RenderMarkdown(strings.TrimSpace(content), inner)
-		}
-	}
-	lines := strings.Split(strings.TrimRight(display, "\n"), "\n")
-	if running && !t.showReasoningDetail && len(lines) > 4 {
-		lines = append([]string{"..."}, lines[len(lines)-4:]...)
-	}
-	if t.showReasoningDetail && len(lines) > 15 {
-		if running {
-			lines = append([]string{"..."}, lines[len(lines)-15:]...)
-		} else {
-			lines = append(lines[:15], "...")
-		}
-	}
-	var sb strings.Builder
-	sb.WriteString("    " + styleDim.Render("┌─"+title+strings.Repeat("─", max(0, width-lipgloss.Width(title)-3))+"┐") + "\n")
-	for _, line := range lines {
-		for _, wrapped := range wrapLine(line, inner) {
-			sb.WriteString("    " + styleDim.Render("│ ") + wrapped + strings.Repeat(" ", max(0, inner-lipgloss.Width(wrapped))) + styleDim.Render(" │") + "\n")
-		}
-	}
-	sb.WriteString("    " + styleDim.Render("└"+strings.Repeat("─", width-2)+"┘") + "\n")
-	return sb.String()
-}
-
-func reasoningElapsed(running bool, startedAt, endedAt time.Time) time.Duration {
-	if startedAt.IsZero() {
-		return 0
-	}
-	if running {
-		return time.Since(startedAt).Truncate(100 * time.Millisecond)
-	}
-	if endedAt.IsZero() || endedAt.Before(startedAt) {
-		return 0
-	}
-	return endedAt.Sub(startedAt).Truncate(100 * time.Millisecond)
-}
-
-func (t *TUI) renderSkillLoadMessage(p protocol.SkillLoadParams) string {
-	name := strings.TrimSpace(p.Name)
-	if name == "" {
-		name = "unknown"
-	}
-	body := styleMetaPill.Render(t.tr("tui.skill.loaded")) + " " + styleHL.Render(name)
-	return indentLines(boxStyle.BorderForeground(ColorBrand).Width(max(36, min(72, t.width-6))).Padding(1, 2).Render(body), "  ")
-}
-
-func (t *TUI) hasVisibleActiveProgress() bool {
-	if t.hasRunningTools() {
-		return true
-	}
-	for i := len(t.messages) - 1; i >= 0; i-- {
-		msg := t.messages[i]
-		switch msg.role {
-		case "reasoning":
-			return msg.streaming
-		case "assistant", "user", "error", "system", "restore_summary", "panel":
-			return false
-		}
-	}
-	return false
-}
-
-func (t *TUI) renderCurrentStatusLine() string {
-	label := t.currentStatusLabel()
-	if label == "" {
-		label = t.tr("status.responding")
-	}
-	elapsed := 0.0
-	if !t.phaseStart.IsZero() {
-		elapsed = time.Since(t.phaseStart).Seconds()
-	}
-	return fmt.Sprintf("    %s %s %s\n", t.sp.View(), styleDim.Render(label), styleDim.Render(fmt.Sprintf("%.1fs", elapsed)))
-}
-
-func (t *TUI) currentStatusLabel() string {
-	if n := t.runningToolCount(); n > 0 {
-		return fmt.Sprintf("%s · %d running", t.tr("status.exec_tool"), n)
-	}
-	switch t.phase {
-	case phaseFirstLLM:
-		return t.tr("status.waiting_llm")
-	case phaseLLM:
-		return t.tr("status.responding")
-	case phaseThinking:
-		return t.tr("status.thinking")
-	case phaseTool:
-		return t.tr("status.exec_tool")
-	case phaseWaitingAfterTool:
-		return t.tr("status.waiting_after_tool")
-	default:
-		return ""
-	}
-}
-
-func (t *TUI) hasDraft() bool {
-	return strings.TrimSpace(t.ta.Value()) != "" || len(t.attachments) > 0
-}
-
-func (t *TUI) discardDraft() {
-	t.confirmDiscardDraft = false
-	t.ta.Reset()
-	t.attachments = nil
-	t.attachmentMode = false
-	t.attachmentDelete = false
-	t.attachmentCursor = 0
-	t.cmdSuggestions = nil
-	t.cmdSuggestionIdx = 0
+	t.updateCmdSuggestionState()
 	t.layoutChat()
+
+	return t, cmd
 }
 
-func (t *TUI) updateCmdSuggestionState() {
-	val := t.ta.Value()
-	if strings.HasPrefix(val, "/") && !strings.Contains(strings.TrimPrefix(val, "/"), " ") {
-		t.updateCmdSuggestions(val)
-		return
-	}
-	t.cmdSuggestions = nil
-	t.cmdSuggestionIdx = 0
-}
-
-func (t *TUI) updateGuardConfirm(ks string) (tea.Model, tea.Cmd) {
+func (t *TUI) updateDiscardDraftConfirm(ks string, msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch ks {
 	case "ctrl+c":
 		t.doQuit()
 		return t, tea.Quit
-	case "left", "right":
-		if t.guardCursor == 0 {
-			t.guardCursor = 1
-		} else {
-			t.guardCursor = 0
-		}
-		t.syncContent()
-		return t, nil
-	case "up":
-		t.scrollGuardOverlay(-1)
-		t.syncContent()
-		return t, nil
-	case "down":
-		t.scrollGuardOverlay(1)
-		t.syncContent()
-		return t, nil
-	case "pgup":
-		t.scrollGuardOverlay(-max(1, t.guardOverlayBodyHeight()-1))
-		t.syncContent()
-		return t, nil
-	case "pgdown":
-		t.scrollGuardOverlay(max(1, t.guardOverlayBodyHeight()-1))
-		t.syncContent()
-		return t, nil
-	case "esc":
-		return t, t.submitGuardDecision("reject")
 	case "enter":
-		if t.guardCursor == 0 {
-			return t, t.submitGuardDecision("approve")
-		}
-		return t, t.submitGuardDecision("reject")
+		t.discardDraft()
+		return t, t.syncInputFocus()
+	case "esc":
+		t.chat.CancelDiscardDraft()
+		t.layoutChat()
+		return t, t.syncInputFocus()
 	}
-	return t, nil
-}
 
-func (t *TUI) submitGuardDecision(decision string) tea.Cmd {
-	if t.pendingGuard == nil {
-		return nil
-	}
-	id := t.pendingGuard.id
-	guardToolID := t.pendingGuard.toolCallID
-	if decision == "reject" {
-		t.markToolRejected(guardToolID)
-	}
-	t.advanceGuardQueue()
-	restartSpinner := false
-	if t.pendingGuard == nil {
-		t.loading = true
-		t.ta.Blur()
-		t.phase = phaseTool
-		t.phaseStart = time.Now()
-		restartSpinner = true
-	}
-	cmd := t.guardReplyCmd(id, decision)
-	if restartSpinner {
-		return tea.Batch(cmd, t.sp.Tick)
-	}
-	return cmd
-}
-
-func (t *TUI) enqueueGuardConfirm(g *guardConfirmView) {
-	if g == nil {
-		return
-	}
-	if t.pendingGuard != nil {
-		t.guardQueue = append(t.guardQueue, g)
-		return
-	}
-	t.pendingGuard = g
-	t.guardCursor = 1
-	t.guardScroll = 0
-	t.loading = false
-	t.phase = phaseIdle
-	t.phaseStart = time.Time{}
-}
-
-func (t *TUI) advanceGuardQueue() {
-	if len(t.guardQueue) == 0 {
-		t.pendingGuard = nil
-		t.guardCursor = 0
-		t.guardScroll = 0
-		return
-	}
-	t.pendingGuard = t.guardQueue[0]
-	t.guardScroll = 0
-	copy(t.guardQueue, t.guardQueue[1:])
-	t.guardQueue[len(t.guardQueue)-1] = nil
-	t.guardQueue = t.guardQueue[:len(t.guardQueue)-1]
-	t.guardCursor = 1
-	t.loading = false
-	t.phase = phaseIdle
-	t.phaseStart = time.Time{}
-}
-
-func (t *TUI) resetPhase() {
-	t.finishStreamingMessages()
-	t.loading = false
-	t.phase = phaseIdle
-	t.phaseStart = time.Time{}
-	t.activeTools = make(map[string]*toolEntry)
-	t.toolStartTimes = make(map[string]time.Time)
-	t.currentToolBlock = nil
-	_ = t.syncInputFocus()
-}
-
-func (t *TUI) moveSelectedTool(delta int) {
-	ids := t.visibleToolIDs()
-	if len(ids) == 0 {
-		return
-	}
-	idx := 0
-	for i, id := range ids {
-		if id == t.selectedToolID {
-			idx = i
-			break
-		}
-	}
-	idx += delta
-	if idx < 0 {
-		idx = 0
-	}
-	if idx >= len(ids) {
-		idx = len(ids) - 1
-	}
-	if t.selectedToolID != ids[idx] {
-		t.selectedToolID = ids[idx]
-		t.toolDetailScroll = 0
-	}
-}
-
-func (t *TUI) allCommands() []commandSpec {
-	return []commandSpec{
-		{"/new", "tui.command.new.desc"},
-		{"/model", "tui.command.model.desc"},
-		{"/memory", "tui.command.memory.desc"},
-		{"/skills", "tui.command.skills.desc"},
-		{"/compact", "tui.command.compact.desc"},
-		{"/config", "tui.command.config.desc"},
-		{"/help", "tui.command.help.desc"},
-	}
-}
-
-func (t *TUI) updateCmdSuggestions(input string) {
-	t.cmdSuggestions = nil
-	for _, c := range t.allCommands() {
-		if strings.HasPrefix(c.cmd, input) && c.cmd != input {
-			t.cmdSuggestions = append(t.cmdSuggestions, c)
-			if len(t.cmdSuggestions) == 4 {
-				break
-			}
-		}
-	}
-	if t.cmdSuggestionIdx >= len(t.cmdSuggestions) {
-		t.cmdSuggestionIdx = 0
-	}
-}
-
-func (t *TUI) acceptCommandSuggestion() tea.Cmd {
-	if len(t.cmdSuggestions) == 0 || t.cmdSuggestionIdx >= len(t.cmdSuggestions) {
-		return nil
-	}
-	cmdText := t.cmdSuggestions[t.cmdSuggestionIdx].cmd
-	t.ta.Reset()
-	t.cmdSuggestions = nil
-	t.cmdSuggestionIdx = 0
-	cmd := t.handleCommand(cmdText)
-	t.syncContent()
-	return cmd
-}
-
-func (t *TUI) scrollToBottomOnNextSync() {
-	t.followBottom = true
-	t.forceBottom = true
+	t.chat.CancelDiscardDraft()
+	var cmd tea.Cmd
+	t.chat.Textarea, cmd = t.chat.Textarea.Update(msg)
+	t.updateCmdSuggestionState()
+	t.layoutChat()
+	return t, cmd
 }
 
 func (t *TUI) handleSend() tea.Cmd {
-	input := strings.TrimSpace(t.ta.Value())
-	attachments := append([]attachmentItem(nil), t.attachments...)
-	t.ta.Reset()
+	input := strings.TrimSpace(t.chat.Textarea.Value())
+	attachments := append([]attachmentItem(nil), t.chat.Attachments...)
+	t.chat.Textarea.Reset()
 	if input == "" && len(attachments) == 0 {
 		return t.syncInputFocus()
 	}
-	t.appendNonToolMessage(chatMsg{role: "user", content: userMessageContent{text: input, attachments: attachments}})
+	t.appendNonToolMessage(chatMsg{Role: "user", Content: userMessageContent{Text: input, Attachments: attachments}})
 	t.scrollToBottomOnNextSync()
-	t.attachments = nil
-	t.attachmentMode = false
-	t.attachmentDelete = false
-	t.attachmentCursor = 0
+	t.chat.Attachments = nil
+	t.chat.AttachmentMode = false
+	t.chat.AttachmentDelete = false
+	t.chat.AttachmentCursor = 0
 	t.syncContent()
 
-	if t.pendingAskID != "" {
-		askID := t.pendingAskID
-		t.pendingAskID = ""
-		options := t.pendingAskOptions
-		t.pendingAskOptions = nil
-		t.pendingAskCustom = true
+	if t.chat.PendingAskID != "" {
+		askID := t.chat.PendingAskID
+		t.chat.PendingAskID = ""
+		options := t.chat.PendingAskOptions
+		t.chat.PendingAskOptions = nil
+		t.chat.PendingAskCustom = true
 		answer := input
 		if len(options) > 0 {
 			if idx, ok := parseOptionIndex(input, len(options)); ok {
@@ -598,10 +263,10 @@ func (t *TUI) handleSend() tea.Cmd {
 			}
 		}
 		t.startLLMWait()
-		return tea.Batch(t.askReplyCmd(askID, answer), t.sp.Tick)
+		return tea.Batch(t.askReplyCmd(askID, answer), t.chat.Spinner.Tick)
 	}
 
-	if strings.HasPrefix(input, "/") && t.isRegisteredSlashCommand(input) {
+	if strings.HasPrefix(input, "/") && chatpage.IsRegisteredSlashCommand(input) {
 		cmd := t.handleCommand(input)
 		t.syncContent()
 		if cmd != nil {
@@ -612,16 +277,28 @@ func (t *TUI) handleSend() tea.Cmd {
 	return t.runAgent(input, attachments)
 }
 
-func (t *TUI) setInputValue(input string) {
-	if t.mode == "chat" && t.ta.Placeholder != "" {
-		t.ta.SetValue(input)
-		t.ta.CursorEnd()
-		t.layoutChat()
-		return
-	}
-	t.pendingInput = input
+func (t *TUI) hasDraft() bool {
+	return t.chat.HasDraft()
 }
-
+func (t *TUI) discardDraft() {
+	t.chat.Textarea.Reset()
+	t.chat.ResetDraft()
+	t.layoutChat()
+}
+func (t *TUI) resetPhase() {
+	t.finishStreamingMessages()
+	t.chat.ResetPhase()
+	_ = t.syncInputFocus()
+}
+func (t *TUI) scrollToBottomOnNextSync() {
+	t.chat.FollowBottom = true
+	t.chat.ForceBottom = true
+}
+func (t *TUI) setInputValue(input string) {
+	if t.chat.SetInputValue(input, t.mode == uipage.Chat) {
+		t.layoutChat()
+	}
+}
 func (t *TUI) resetConversationStats() {
 	t.sessionInputTok = 0
 	t.sessionOutputTok = 0
@@ -636,4 +313,497 @@ func (t *TUI) resetConversationStats() {
 	if t.daemonStatus.ContextTokens != 0 {
 		t.daemonStatus.ContextTokens = 0
 	}
+}
+
+func (t *TUI) updateCmdSuggestionState() {
+	val := t.chat.Textarea.Value()
+	if strings.HasPrefix(val, "/") && !strings.Contains(strings.TrimPrefix(val, "/"), " ") {
+		t.updateCmdSuggestions(val)
+		return
+	}
+	t.chat.ClearCommandSuggestions()
+}
+func (t *TUI) updateCmdSuggestions(input string) {
+	t.chat.UpdateCommandSuggestions(input, chatMaxCommandSuggestions)
+}
+func (t *TUI) acceptCommandSuggestion() tea.Cmd {
+	suggestion, ok := t.chat.AcceptCommandSuggestion()
+	if !ok {
+		return nil
+	}
+	cmd := t.handleCommand(suggestion.Cmd)
+	t.syncContent()
+	return cmd
+}
+
+func (t *TUI) updateChatKey(ks string, msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch t.chat.RouteKey(ks, t.inputLocked(), t.chat.Compacting) {
+	case chatpage.KeyTargetDiscardDraft:
+		return t.updateDiscardDraftConfirm(ks, msg)
+	case chatpage.KeyTargetGuard:
+		return t.updateGuardConfirm(ks)
+	case chatpage.KeyTargetModelPicker:
+		return t.updateModelPicker(ks)
+	case chatpage.KeyTargetSkills:
+		return t.updateSkillsOverlay(ks)
+	case chatpage.KeyTargetPendingImagePaste:
+		cmd := t.updatePendingImagePaste(ks)
+		t.syncContent()
+		return t, cmd
+	case chatpage.KeyTargetAttachment:
+		if t.updateAttachmentMode(ks) {
+			t.syncContent()
+			return t, nil
+		}
+	case chatpage.KeyTargetBlocked:
+		return t, nil
+	}
+	return t.updateChatKeyNormal(ks, msg)
+}
+
+func (t *TUI) updateChatKeyNormal(ks string, msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch {
+	case ks == "ctrl+c":
+		t.doQuit()
+		return t, tea.Quit
+	case ks == "?":
+		t.showHelp = !t.showHelp
+		return t, nil
+	case ks == "enter":
+		return t.updateChatEnter()
+	case ks == "shift+enter":
+		t.chat.InsertNewline()
+		t.layoutChat()
+		return t, nil
+	case ks == "esc":
+		return t.updateChatEsc()
+	case ks == "ctrl+t":
+		t.toggleToolDetail()
+		return t, nil
+	case ks == "ctrl+r":
+		t.chat.ToggleReasoningDetail()
+		t.syncContent()
+		return t, nil
+	case ks == "pgup":
+		t.scrollChatPage(-1)
+		return t, nil
+	case ks == "pgdown":
+		t.scrollChatPage(1)
+		return t, nil
+	case ks == "up":
+		t.moveChatCursor(-1)
+		return t, nil
+	case ks == "down":
+		t.moveChatCursor(1)
+		return t, nil
+	}
+
+	var cmd tea.Cmd
+	t.chat.Textarea, cmd = t.chat.Textarea.Update(msg)
+	t.updateCmdSuggestionState()
+	t.layoutChat()
+	return t, cmd
+}
+
+func (t *TUI) updateChatEnter() (tea.Model, tea.Cmd) {
+	t.chat.ConfirmDiscardDraft = false
+	if len(t.chat.CmdSuggestions) > 0 {
+		cmd := t.acceptCommandSuggestion()
+		if cmd != nil {
+			return t, cmd
+		}
+		return t, t.syncInputFocus()
+	}
+	if t.chat.PendingAskID != "" && len(t.chat.PendingAskOptions) > 0 && t.chat.Textarea.Value() == "" {
+		idx := t.chat.PendingAskCursor
+		if idx >= 0 && idx < len(t.chat.PendingAskOptions) {
+			answer := t.chat.PendingAskOptions[idx]
+			askID := t.chat.PendingAskID
+			t.chat.PendingAskID = ""
+			t.chat.PendingAskOptions = nil
+			t.chat.PendingAskCustom = true
+			t.appendNonToolMessage(chatMsg{Role: "user", Content: answer})
+			t.scrollToBottomOnNextSync()
+			t.startLLMWait()
+			t.syncContent()
+			return t, tea.Batch(t.askReplyCmd(askID, answer), t.chat.Spinner.Tick)
+		}
+	}
+	if !t.chat.Loading {
+		return t, t.handleSend()
+	}
+	return t, nil
+}
+
+func (t *TUI) updateChatEsc() (tea.Model, tea.Cmd) {
+	if t.chat.ShowToolDetail {
+		t.chat.ShowToolDetail = false
+		return t, nil
+	}
+	if t.showHelp {
+		t.showHelp = false
+		return t, nil
+	}
+	if t.chat.Loading {
+		t.resetPhase()
+		t.appendNonToolMessage(chatMsg{Role: "system", Content: t.i18n.T("status.cancelled")})
+		t.syncContent()
+		return t, tea.Batch(t.cancelCmd(), t.syncInputFocus())
+	}
+	if !t.hasDraft() {
+		t.mode = uipage.Welcome
+		return t, t.refreshDaemonStatusCmd()
+	}
+	t.chat.ConfirmDiscardDraft = true
+	t.layoutChat()
+	return t, t.syncInputFocus()
+}
+
+func (t *TUI) toggleToolDetail() {
+	t.chat.ToggleToolDetail(t.visibleToolIDs())
+}
+
+func (t *TUI) scrollChatPage(direction int) {
+	if t.chat.ShowToolDetail {
+		delta := max(1, t.toolDetailPageStep())
+		if direction < 0 {
+			delta = -delta
+		}
+		t.scrollToolDetailOverlay(delta)
+		return
+	}
+	if direction < 0 {
+		t.chat.Viewport.HalfPageUp()
+		t.chat.FollowBottom = false
+		return
+	}
+	t.chat.Viewport.HalfPageDown()
+	t.chat.FollowBottom = t.chat.Viewport.AtBottom()
+}
+
+func (t *TUI) moveChatCursor(delta int) {
+	if t.chat.ShowToolDetail {
+		t.moveSelectedTool(delta)
+		return
+	}
+	if len(t.chat.CmdSuggestions) > 0 {
+		t.chat.CmdSuggestionIdx += delta
+		if t.chat.CmdSuggestionIdx < 0 {
+			t.chat.CmdSuggestionIdx = 0
+		}
+		if t.chat.CmdSuggestionIdx >= len(t.chat.CmdSuggestions) {
+			t.chat.CmdSuggestionIdx = len(t.chat.CmdSuggestions) - 1
+		}
+		return
+	}
+	if t.chat.PendingAskID != "" && len(t.chat.PendingAskOptions) > 0 {
+		t.chat.PendingAskCursor += delta
+		if t.chat.PendingAskCursor < 0 {
+			t.chat.PendingAskCursor = 0
+		}
+		if t.chat.PendingAskCursor >= len(t.chat.PendingAskOptions) {
+			t.chat.PendingAskCursor = len(t.chat.PendingAskOptions) - 1
+		}
+		t.syncContent()
+		return
+	}
+	if t.updateAttachmentMode(mapDirectionKey(delta)) {
+		t.syncContent()
+	}
+}
+
+func mapDirectionKey(delta int) string {
+	if delta < 0 {
+		return "up"
+	}
+	return "down"
+}
+
+func (t *TUI) handleCommand(input string) tea.Cmd {
+	if t.localCli == nil {
+		t.appendNonToolMessage(chatMsg{Role: "error", Content: t.i18n.T("error.not_connected")})
+		t.scrollToBottomOnNextSync()
+		return nil
+	}
+
+	parts := strings.Fields(input)
+	if len(parts) == 0 {
+		return nil
+	}
+	cmd := parts[0]
+	t.scrollToBottomOnNextSync()
+
+	switch cmd {
+	case "/new":
+		t.chat.Messages = []chatMsg{}
+		t.chat.Attachments = nil
+		t.resetConversationStats()
+		t.resetPhase()
+		t.chat.LastAssistantText = ""
+		return t.newSessionCmd()
+	case "/model":
+		if len(parts) > 1 {
+			return t.switchModelRef(parts[1])
+		}
+		t.openModelPicker()
+		t.syncContent()
+		return nil
+	case "/memory":
+		return t.handleMemory(parts)
+	case "/compact":
+		t.chat.Compacting = true
+		t.chat.Textarea.Blur()
+		t.appendNonToolMessage(chatMsg{Role: "system", Content: t.i18n.T("compact.running")})
+		return tea.Batch(t.compactCmd(), t.chat.Spinner.Tick)
+	case "/config":
+		t.mode = uipage.Config
+		t.config.FromMode = uipage.Chat
+		t.config.SetupMode = false
+		t.config.FormOpen = false
+		t.config.Page = "home"
+		return nil
+	case "/skills":
+		return t.handleSkills(parts)
+	case "/help":
+		t.prevMode = uipage.Chat
+		t.mode = uipage.Help
+		t.initHelpPage()
+		return nil
+	default:
+		t.appendNonToolMessage(chatMsg{Role: "error", Content: t.i18n.Tf("cmd.unknown", cmd)})
+	}
+	return nil
+}
+
+func (t *TUI) switchModelRef(ref string) tea.Cmd {
+	if !strings.Contains(ref, "/") && t.providerName != "" {
+		ref = t.providerName + "/" + ref
+	}
+	if _, ok := t.modelByRef(ref); !ok {
+		t.appendNonToolMessage(chatMsg{Role: "error", Content: t.i18n.Tf("cmd.model_not_found", ref)})
+		return nil
+	}
+	t.setActiveModelRef(ref)
+	t.chat.ModelPickerOpen = false
+	t.appendNonToolMessage(chatMsg{Role: "system", Content: t.i18n.Tf("cmd.model_switched", ref)})
+	return t.sendConfigSet(protocol.ConfigSetParams{Action: protocol.ConfigActionActivateModel, ActiveModel: ref})
+}
+
+func (t *TUI) openModelPicker() {
+	t.chat.OpenModelPicker(chatpage.ModelRefs(t.configModelsSnapshot()), t.configState.ActiveModel)
+}
+
+func (t *TUI) updateModelPicker(key string) (tea.Model, tea.Cmd) {
+	models := t.configModelsSnapshot()
+	refs := chatpage.ModelRefs(models)
+	if len(refs) == 0 {
+		t.chat.CloseModelPicker()
+		return t, nil
+	}
+	switch key {
+	case "esc":
+		t.chat.CloseModelPicker()
+	case "up":
+		t.chat.MoveModelPicker(-1, len(refs))
+	case "down":
+		t.chat.MoveModelPicker(1, len(refs))
+	case "enter":
+		if ref, ok := t.chat.SelectedModelRef(refs); ok {
+			return t, t.switchModelRef(ref)
+		}
+	}
+	t.syncContent()
+	return t, nil
+}
+
+func (t *TUI) handleMemory(parts []string) tea.Cmd {
+	if len(parts) == 1 {
+		return t.listMemoryCmd()
+	}
+	t.appendNonToolMessage(chatMsg{Role: "system", Content: t.i18n.T("memory.list_hint")})
+	return nil
+}
+
+func (t *TUI) handleSkills(parts []string) tea.Cmd {
+	if len(parts) != 1 {
+		t.appendNonToolMessage(chatMsg{Role: "system", Content: t.tr("tui.skills.usage")})
+		return nil
+	}
+	t.chat.OpenSkillsOverlay()
+	return t.listSkillsCmd()
+}
+
+func (t *TUI) updateSkillsOverlay(ks string) (tea.Model, tea.Cmd) {
+	switch ks {
+	case "esc":
+		t.chat.CloseSkillsOverlay()
+		return t, t.syncInputFocus()
+	case "up":
+		t.chat.MoveSkillsCursor(-1)
+		return t, nil
+	case "down":
+		t.chat.MoveSkillsCursor(1)
+		return t, nil
+	case "enter", " ":
+		if action, ok := t.chat.SelectSkill(t.tr("tui.skills.cannot_toggle")); ok {
+			return t, t.setSkillOverlayCmd(action.Name, action.Enabled)
+		}
+		return t, nil
+	}
+	return t, nil
+}
+
+func (t *TUI) setSkillOverlayCmd(name string, enabled bool) tea.Cmd {
+	return func() tea.Msg {
+		if t.localCli == nil {
+			return ipcErrorNotification(notifyConfigError, errNotConnected(t))
+		}
+		if err := t.localCli.SetSkill(protocol.SkillSetParams{Name: strings.TrimSpace(name), Enabled: enabled}); err != nil {
+			return ipcErrorNotification(notifyConfigError, err)
+		}
+		if err := t.localCli.ListSkills(); err != nil {
+			return ipcErrorNotification(notifyConfigError, err)
+		}
+		return nil
+	}
+}
+
+func (t *TUI) renderSkillsOverlay(width int) string {
+	view := t.chat.SkillsOverlayView(width, t.overlayMaxHeight())
+	var body []string
+	if view.Loading {
+		body = append(body, styleDim.Render(t.tr("tui.skills.loading")))
+	} else if view.Empty {
+		body = append(body, styleDim.Render(t.tr("tui.skills.empty")))
+	} else {
+		for _, row := range view.Rows {
+			body = append(body, t.renderSkillRowView(row, view.Inner))
+		}
+	}
+	body, start, total := scrollWindow(body, view.Height, &t.chat.SkillsScroll)
+	title := t.tr("tui.skills.title", view.Active, view.Total, view.Issues)
+	lines := []string{styleHL.Render(title), ""}
+	lines = append(lines, body...)
+	if view.Error != "" {
+		lines = append(lines, "", styleError.Render(view.Error))
+	}
+	lines = append(lines, "", styleDim.Render(t.skillsHelpText(start, view.Height, total)))
+	return boxStyle.Width(view.Width).Padding(1, 2).Render(strings.Join(lines, "\n"))
+}
+
+func (t *TUI) renderSkillRowView(row chatpage.SkillRowView, width int) string {
+	cursor := "  "
+	nameStyle := lipgloss.NewStyle()
+	if row.Selected {
+		cursor = styleCursor.Render("▶ ")
+		nameStyle = styleHL
+	}
+	mark := skillActiveMark(row.Active)
+	status := t.tr("tui.skills.inactive")
+	statusStyle := styleDim
+	if row.Active {
+		status = t.tr("tui.skills.active")
+		statusStyle = styleToolOk
+	}
+	name := truncateDisplay(row.Skill.Name, max(12, width-24))
+	line := fmt.Sprintf("%s%s %-24s %-10s", cursor, mark, nameStyle.Render(name), statusStyle.Render(status))
+	if row.Issue {
+		line += "  " + styleTool.Render(skillIssueText(t, row.Skill))
+	}
+	return line
+}
+
+func (t *TUI) renderSkillRow(i int, s protocol.SkillInfo, width int) string {
+	return t.renderSkillRowView(chatpage.SkillRowView{Skill: s, Selected: i == t.chat.SkillsCursor, Active: chatpage.SkillIsActive(s), Issue: chatpage.SkillHasIssue(s)}, width)
+}
+
+func (t *TUI) skillsHelpText(start, height, total int) string {
+	text := t.tr("tui.skills.help")
+	if total > height {
+		text += fmt.Sprintf(" · %d-%d/%d", start+1, min(total, start+height), total)
+	}
+	return text
+}
+
+func skillIssueText(t *TUI, s protocol.SkillInfo) string {
+	if strings.TrimSpace(s.Error) != "" {
+		return t.tr("tui.skills.issue_error")
+	}
+	if len(s.Reasons) > 0 {
+		return t.tr("tui.skills.issue_reasons", len(s.Reasons))
+	}
+	return t.tr("tui.skills.issue_review")
+}
+
+func skillActiveMark(active bool) string {
+	if active {
+		return styleToolOk.Render("●")
+	}
+	return styleDim.Render("○")
+}
+
+func truncateDisplay(s string, maxWidth int) string {
+	if lipgloss.Width(s) <= maxWidth {
+		return s
+	}
+	if maxWidth <= 1 {
+		return "…"
+	}
+	out := ""
+	for _, r := range s {
+		if lipgloss.Width(out+string(r)+"…") > maxWidth {
+			break
+		}
+		out += string(r)
+	}
+	return out + "…"
+}
+
+func clampSkillCursor(cursor, n int) int {
+	if n <= 0 {
+		return 0
+	}
+	if cursor < 0 {
+		return 0
+	}
+	if cursor >= n {
+		return n - 1
+	}
+	return cursor
+}
+
+func (t *TUI) renderMemoryList(memories []protocol.MemoryItem) string {
+	width := max(36, min(t.width-6, 92))
+	inner := max(24, width-8)
+	var lines []string
+	lines = append(lines, styleHL.Render(t.tr("tui.memory.active_title")))
+	for _, m := range memories {
+		lines = append(lines, renderMemoryItem(m, inner)...)
+	}
+	return boxStyle.Width(width).Padding(1, 2).Render(strings.Join(lines, "\n"))
+}
+
+func renderMemoryItem(m protocol.MemoryItem, width int) []string {
+	badge := fmt.Sprintf("%s:%d", m.Kind, m.Priority)
+	if m.IsCore {
+		badge = "core " + badge
+	}
+	head := styleTool.Render("[" + badge + "]")
+	content := strings.TrimSpace(m.Content)
+	if content == "" {
+		content = "-"
+	}
+	wrapped := textutil.WrapLine(content, max(12, width-4))
+	if len(wrapped) == 0 {
+		wrapped = []string{""}
+	}
+	lines := []string{"  " + styleDim.Render("• ") + head}
+	for _, line := range wrapped {
+		lines = append(lines, "    "+styleToolDim.Render(line))
+	}
+	return lines
+}
+
+func lipglossWidthPlain(s string) int {
+	return lipgloss.Width(s)
 }

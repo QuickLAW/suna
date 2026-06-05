@@ -1,0 +1,167 @@
+package config
+
+import (
+	"strconv"
+	"strings"
+
+	"charm.land/bubbles/v2/textinput"
+
+	uipage "github.com/alanchenchen/suna/internal/tui/pages/page"
+)
+
+type Model struct {
+	Cursor          int
+	SetupMode       bool
+	FormOpen        bool
+	WorkspaceOpen   bool
+	KindOpen        bool
+	KindCursor      int
+	DeleteCursor    int
+	ReasoningOpen   bool
+	ReasoningCursor int
+	ReasoningFamily string
+	ProviderKind    string
+	Page            string
+	DeleteConfirm   string
+	DetailRef       string
+	FormTitle       string
+	Inputs          []textinput.Model
+	InputFocus      int
+	Error           string
+	FromMode        uipage.Page
+	Models          []string
+	EditingName     string
+}
+
+func (m *Model) EnsureDefaults() {
+	if m.Page == "" {
+		m.Page = "home"
+	}
+}
+
+type Row struct {
+	Kind  string
+	Name  string
+	Label string
+	Value string
+}
+
+func (r Row) Selectable() bool {
+	switch r.Kind {
+	case "section", "general_language", "general_theme", "general_guard", "general_workspace", "clear_attachments", "open_config_dir", "add_model", "edit_model", "edit_reasoning", "activate_model", "delete_model", "model", "empty":
+		return true
+	default:
+		return false
+	}
+}
+
+type ProviderFormValues struct {
+	Provider      string
+	Model         string
+	APIKey        string
+	Endpoint      string
+	ContextWindow string
+	Strengths     string
+}
+
+type ModelConfig struct {
+	Provider      string
+	Model         string
+	BaseURL       string
+	ContextWindow int
+	Strengths     []string
+	Reasoning     map[string]any
+	HasAPIKey     bool
+}
+
+func (m ModelConfig) Ref() string { return m.Provider + "/" + m.Model }
+
+func DefaultContextWindow(mc ModelConfig) int {
+	if mc.ContextWindow > 0 {
+		return mc.ContextWindow
+	}
+	switch mc.Provider {
+	case "anthropic":
+		return 200000
+	default:
+		return 128000
+	}
+}
+
+func ModelNeedsAttention(mc ModelConfig) bool {
+	return !mc.HasAPIKey || mc.Model == "" || mc.BaseURL == ""
+}
+
+func ModelStatusMark(mc ModelConfig, active bool) string {
+	if ModelNeedsAttention(mc) {
+		return "!"
+	}
+	if active {
+		return "◉"
+	}
+	return "○"
+}
+
+func ModelSummary(mc ModelConfig, active bool, fmtTok func(int) string) string {
+	var parts []string
+	if active {
+		parts = append(parts, "active")
+	}
+	if !mc.HasAPIKey {
+		parts = append(parts, "missing_api_key")
+	} else if mc.Ref() == "" {
+		parts = append(parts, "invalid")
+	}
+	parts = append(parts, mc.Provider, mc.Model)
+	if mc.ContextWindow > 0 {
+		parts = append(parts, "ctx "+fmtTok(mc.ContextWindow))
+	}
+	if mc.BaseURL != "" {
+		parts = append(parts, "endpoint_configured")
+	}
+	if len(mc.Strengths) > 0 {
+		parts = append(parts, strings.Join(mc.Strengths, ", "))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func NormalizeGuardMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "readonly", "auto", "smart":
+		return strings.ToLower(strings.TrimSpace(mode))
+	default:
+		return "ask"
+	}
+}
+
+func NextGuardMode(mode string) string {
+	switch NormalizeGuardMode(mode) {
+	case "ask":
+		return "smart"
+	case "smart":
+		return "auto"
+	case "auto":
+		return "readonly"
+	default:
+		return "ask"
+	}
+}
+
+func SplitCSV(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func ParsePositiveInt(s string) int {
+	n, _ := strconv.Atoi(strings.TrimSpace(s))
+	if n < 0 {
+		return 0
+	}
+	return n
+}

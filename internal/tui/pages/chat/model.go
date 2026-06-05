@@ -1,0 +1,113 @@
+package chat
+
+import (
+	"time"
+
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/viewport"
+
+	"github.com/alanchenchen/suna/internal/protocol"
+	"github.com/alanchenchen/suna/internal/tui/components/attachment"
+	"github.com/alanchenchen/suna/internal/tui/components/toolview"
+)
+
+type Phase int
+
+const (
+	PhaseIdle Phase = iota
+	PhaseFirstLLM
+	PhaseLLM
+	PhaseThinking
+	PhaseTool
+	PhaseWaitingAfterTool
+)
+
+// Model 持有 Chat 页面运行态。迁移期间 daemon 命令和样式仍由 root TUI 注入。
+
+type Msg struct {
+	Role      string
+	Content   any
+	Streaming bool
+	StartedAt time.Time
+	EndedAt   time.Time
+	Render    MsgRenderCache
+}
+
+type MsgRenderCache struct {
+	Width   int
+	Theme   string
+	Content string
+	Output  string
+}
+
+type UserMessageContent struct {
+	Text        string
+	Attachments []attachment.Item
+}
+
+type GuardConfirmView struct {
+	ID         string
+	ToolCallID string
+	Tool       string
+	Params     map[string]any
+	Risk       string
+	Reason     string
+	Suggestion string
+}
+
+type Model struct {
+	Viewport viewport.Model
+	Textarea textarea.Model
+	Spinner  spinner.Model
+
+	Messages          []Msg
+	PendingInput      string
+	LastAssistantText string
+	Loading           bool
+	Compacting        bool
+	Phase             Phase
+	PhaseStart        time.Time
+	StreamStart       time.Time
+	FollowBottom      bool
+	ForceBottom       bool
+
+	PendingAskID      string
+	PendingAskOptions []string
+	PendingAskCustom  bool
+	PendingAskCursor  int
+	GuardCursor       int
+	GuardScroll       int
+
+	ConfirmDiscardDraft bool
+	CmdSuggestion       string
+	CmdSuggestions      []CommandSpec
+	CmdSuggestionIdx    int
+	ModelPickerOpen     bool
+	ModelPickerCursor   int
+
+	ShowToolDetail      bool
+	ShowReasoningDetail bool
+	ToolDetailScroll    int
+	SelectedToolID      string
+
+	PendingGuard *GuardConfirmView
+	GuardQueue   []*GuardConfirmView
+
+	ActiveTools      map[string]*toolview.Entry
+	ToolStartTimes   map[string]time.Time
+	CurrentToolBlock *toolview.Block
+
+	Attachments       []attachment.Item
+	AttachmentMode    bool
+	AttachmentCursor  int
+	AttachmentDelete  bool
+	PendingImagePaste *attachment.PendingImagePaste
+
+	Skills            []protocol.SkillInfo
+	SkillsOverlayOpen bool
+	SkillsLoading     bool
+	SkillsCursor      int
+	SkillsScroll      int
+	SkillsError       string
+}

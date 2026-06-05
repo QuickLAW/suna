@@ -11,6 +11,7 @@ import (
 	"github.com/alanchenchen/suna/internal/protocol"
 	"github.com/alanchenchen/suna/internal/transport/local"
 	"github.com/alanchenchen/suna/internal/tui"
+	tuitransport "github.com/alanchenchen/suna/internal/tui/transport"
 )
 
 func main() {
@@ -111,7 +112,7 @@ func runTUI() {
 
 	ensureDaemonRunning()
 
-	client := tui.NewLocalClient()
+	client := tuitransport.NewClient()
 	if err := client.Connect(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: cannot connect to daemon: %s\n", err)
 		os.Exit(1)

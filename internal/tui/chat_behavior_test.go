@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/alanchenchen/suna/internal/protocol"
+	uipage "github.com/alanchenchen/suna/internal/tui/pages/page"
 )
 
 func TestThinkingBoxCollapsedWhileStreamingAndStopsElapsed(t *testing.T) {
@@ -36,18 +37,18 @@ func TestSendingMessageForcesScrollToBottom(t *testing.T) {
 	tui := &TUI{i18n: newTranslator(LocaleZH), width: 80, height: 18}
 	tui.initChatComponents()
 	for i := 0; i < 40; i++ {
-		tui.appendNonToolMessage(chatMsg{role: "system", content: "历史消息"})
+		tui.appendNonToolMessage(chatMsg{Role: "system", Content: "历史消息"})
 	}
 	tui.syncContent()
-	tui.vp.SetYOffset(0)
-	tui.followBottom = false
-	tui.ta.SetValue("新的问题")
+	tui.chat.Viewport.SetYOffset(0)
+	tui.chat.FollowBottom = false
+	tui.chat.Textarea.SetValue("新的问题")
 
 	tui.handleSend()
-	if !tui.vp.AtBottom() {
-		t.Fatalf("vp.AtBottom() = false after message send; YOffset = %d", tui.vp.YOffset())
+	if !tui.chat.Viewport.AtBottom() {
+		t.Fatalf("vp.AtBottom() = false after message send; YOffset = %d", tui.chat.Viewport.YOffset())
 	}
-	if !tui.followBottom {
+	if !tui.chat.FollowBottom {
 		t.Fatalf("followBottom = false after message send, want true")
 	}
 }
@@ -56,18 +57,18 @@ func TestSlashCommandForcesScrollToBottom(t *testing.T) {
 	tui := &TUI{i18n: newTranslator(LocaleZH), width: 80, height: 18}
 	tui.initChatComponents()
 	for i := 0; i < 40; i++ {
-		tui.appendNonToolMessage(chatMsg{role: "system", content: "历史消息"})
+		tui.appendNonToolMessage(chatMsg{Role: "system", Content: "历史消息"})
 	}
 	tui.syncContent()
-	tui.vp.SetYOffset(0)
-	tui.followBottom = false
-	tui.ta.SetValue("/compact")
+	tui.chat.Viewport.SetYOffset(0)
+	tui.chat.FollowBottom = false
+	tui.chat.Textarea.SetValue("/compact")
 
 	tui.handleSend()
-	if !tui.vp.AtBottom() {
-		t.Fatalf("vp.AtBottom() = false after slash command; YOffset = %d", tui.vp.YOffset())
+	if !tui.chat.Viewport.AtBottom() {
+		t.Fatalf("vp.AtBottom() = false after slash command; YOffset = %d", tui.chat.Viewport.YOffset())
 	}
-	if !tui.followBottom {
+	if !tui.chat.FollowBottom {
 		t.Fatalf("followBottom = false after slash command, want true")
 	}
 }
@@ -75,8 +76,8 @@ func TestSlashCommandForcesScrollToBottom(t *testing.T) {
 func TestCompactLocksInputWithoutCancelHint(t *testing.T) {
 	tui := &TUI{i18n: newTranslator(LocaleZH), width: 80, height: 24}
 	tui.initChatComponents()
-	tui.compacting = true
-	tui.ta.Blur()
+	tui.chat.Compacting = true
+	tui.chat.Textarea.Blur()
 
 	if !tui.inputLocked() {
 		t.Fatalf("inputLocked() = false during compact, want true")
@@ -93,12 +94,12 @@ func TestCompactLocksInputWithoutCancelHint(t *testing.T) {
 func TestCompactResultUnlocksInput(t *testing.T) {
 	tui := &TUI{i18n: newTranslator(LocaleZH), width: 80, height: 24}
 	tui.initChatComponents()
-	tui.compacting = true
+	tui.chat.Compacting = true
 
 	data := []byte(`{"before_tokens":100,"after_tokens":50,"context_window":1000}`)
 	tui.handleLocalNotification(localNotification{method: protocol.NotifyCompactResult, params: data})
 
-	if tui.compacting {
+	if tui.chat.Compacting {
 		t.Fatalf("compacting = true after compact result, want false")
 	}
 	if tui.inputLocked() {
@@ -109,13 +110,13 @@ func TestCompactResultUnlocksInput(t *testing.T) {
 func TestActiveReasoningSuppressesDuplicateStatusLine(t *testing.T) {
 	tui := &TUI{i18n: newTranslator(LocaleZH), width: 80, height: 24}
 	tui.initChatComponents()
-	tui.loading = true
-	tui.phase = phaseThinking
-	tui.phaseStart = time.Now().Add(-time.Second)
-	tui.appendNonToolMessage(chatMsg{role: "reasoning", content: "正在分析", streaming: true, startedAt: time.Now().Add(-time.Second)})
+	tui.chat.Loading = true
+	tui.chat.Phase = phaseThinking
+	tui.chat.PhaseStart = time.Now().Add(-time.Second)
+	tui.appendNonToolMessage(chatMsg{Role: "reasoning", Content: "正在分析", Streaming: true, StartedAt: time.Now().Add(-time.Second)})
 
 	tui.syncContent()
-	view := stripANSIForTest(tui.vp.View())
+	view := stripANSIForTest(tui.chat.Viewport.View())
 	if count := strings.Count(view, "◎ 思考"); count != 1 {
 		t.Fatalf("strings.Count(view, %q) = %d, want %d; view = %q", "◎ 思考", count, 1, view)
 	}
@@ -127,12 +128,12 @@ func TestActiveReasoningSuppressesDuplicateStatusLine(t *testing.T) {
 func TestWaitingWithoutVisibleProgressShowsStatusLine(t *testing.T) {
 	tui := &TUI{i18n: newTranslator(LocaleZH), width: 80, height: 24}
 	tui.initChatComponents()
-	tui.loading = true
-	tui.phase = phaseFirstLLM
-	tui.phaseStart = time.Now().Add(-time.Second)
+	tui.chat.Loading = true
+	tui.chat.Phase = phaseFirstLLM
+	tui.chat.PhaseStart = time.Now().Add(-time.Second)
 
 	tui.syncContent()
-	view := stripANSIForTest(tui.vp.View())
+	view := stripANSIForTest(tui.chat.Viewport.View())
 	if !strings.Contains(view, "等待 LLM") {
 		t.Fatalf("view = %q, want wait status line", view)
 	}
@@ -148,15 +149,15 @@ func TestWaitingWithoutVisibleProgressShowsStatusLine(t *testing.T) {
 func TestRunningToolSuppressesDuplicateStatusLine(t *testing.T) {
 	tui := &TUI{i18n: newTranslator(LocaleZH), width: 80, height: 24}
 	tui.initChatComponents()
-	tui.loading = true
-	tui.phase = phaseTool
-	tui.phaseStart = time.Now().Add(-time.Second)
+	tui.chat.Loading = true
+	tui.chat.Phase = phaseTool
+	tui.chat.PhaseStart = time.Now().Add(-time.Second)
 	block := tui.ensureToolBlock()
-	block.add(&toolEntry{id: "1", name: "Read", intent: "读取文件", status: toolRunning, startedAt: time.Now().Add(-time.Second)})
-	tui.activeTools = map[string]*toolEntry{"1": block.entries["1"]}
+	block.Add(&toolEntry{ID: "1", Name: "Read", Intent: "读取文件", Status: toolRunning, StartedAt: time.Now().Add(-time.Second)})
+	tui.chat.ActiveTools = map[string]*toolEntry{"1": block.Entries["1"]}
 
 	tui.syncContent()
-	view := stripANSIForTest(tui.vp.View())
+	view := stripANSIForTest(tui.chat.Viewport.View())
 	if strings.Contains(view, "Esc 取消") {
 		t.Fatalf("view = %q, should not contain duplicate bottom status line", view)
 	}
@@ -165,16 +166,16 @@ func TestRunningToolSuppressesDuplicateStatusLine(t *testing.T) {
 func TestLockedInputShowsStatusPlaceholder(t *testing.T) {
 	tui := &TUI{i18n: newTranslator(LocaleZH), width: 80, height: 24}
 	tui.initChatComponents()
-	tui.loading = true
-	tui.phase = phaseLLM
-	tui.phaseStart = time.Now()
-	tui.ta.Blur()
+	tui.chat.Loading = true
+	tui.chat.Phase = phaseLLM
+	tui.chat.PhaseStart = time.Now()
+	tui.chat.Textarea.Blur()
 
 	view := stripANSIForTest(tui.renderInputArea())
 	if !strings.Contains(view, "正在回复") || !strings.Contains(view, "Esc") {
 		t.Fatalf("renderInputArea() = %q, want active status and cancel hint", view)
 	}
-	if tui.ta.Focused() {
+	if tui.chat.Textarea.Focused() {
 		t.Fatalf("textarea.Focused() = true while input is locked, want false")
 	}
 }
@@ -185,13 +186,43 @@ func TestWelcomeNewInitializesChatBeforeResetPhase(t *testing.T) {
 	tui.initWelcomeList()
 
 	_, cmd := tui.updateWelcome(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	if tui.mode != "chat" {
-		t.Fatalf("mode = %q, want %q", tui.mode, "chat")
+	if tui.mode != uipage.Chat {
+		t.Fatalf("mode = %q, want %q", tui.mode, uipage.Chat)
 	}
-	if tui.ta.Placeholder == "" {
+	if tui.chat.Textarea.Placeholder == "" {
 		t.Fatalf("textarea.Placeholder = empty, want initialized chat textarea")
 	}
 	if cmd == nil {
 		t.Fatalf("cmd = nil, want chat focus command")
+	}
+}
+
+func TestRenderAttachmentPanelUsesBox(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleEN), width: 100}
+	tui.chat.Attachments = []attachmentItem{{Type: "image", Name: "ScreenShot_2026-05-29_121010_728.png", Size: 161500}}
+
+	panel := stripANSIForTest(tui.renderAttachmentPanel())
+	for _, want := range []string{"╭", "╰", "Pending attachments", "ScreenShot_2026-05-29_121010_728.png"} {
+		if !strings.Contains(panel, want) {
+			t.Fatalf("renderAttachmentPanel() = %q, want substring %q", panel, want)
+		}
+	}
+}
+
+func TestRenderInputAreaSeparatesAttachmentBoxFromComposer(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleEN), width: 80, height: 24}
+	tui.initChatComponents()
+	tui.chat.Textarea.SetValue("describe this image")
+	tui.chat.Attachments = []attachmentItem{{Type: "image", Name: "image.png", Size: 1024}}
+
+	view := stripANSIForTest(tui.renderInputArea())
+	boxEnd := strings.LastIndex(view, "╰")
+	inputStart := strings.LastIndex(view, "describe this image")
+	if boxEnd < 0 || inputStart < 0 || boxEnd >= inputStart {
+		t.Fatalf("renderInputArea() = %q, want attachment box before composer", view)
+	}
+	between := view[boxEnd:inputStart]
+	if !strings.Contains(between, "──") {
+		t.Fatalf("renderInputArea() = %q, want separator between attachment box and composer", view)
 	}
 }
