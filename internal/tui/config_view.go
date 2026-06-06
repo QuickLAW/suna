@@ -70,7 +70,7 @@ func (t *TUI) viewConfigPage() string {
 			t.renderConfigInfoRow(&sb, row.Label, row.Value)
 			continue
 		}
-		t.renderConfigRow(&sb, i, row.Label, row.Value)
+		t.renderConfigRow(&sb, i, row)
 		if row.Kind == "model" {
 			sb.WriteString("\n")
 		}
@@ -144,16 +144,27 @@ func (t *TUI) viewWorkspaceForm() string {
 	return boxStyle.Width(view.Width).Padding(1, 2).Render(styleHL.Render(view.Title) + "\n\n" + body)
 }
 
-func (t *TUI) renderConfigRow(sb *strings.Builder, idx int, label, value string) {
+func (t *TUI) renderConfigRow(sb *strings.Builder, idx int, row tuiconfig.Row) {
+	label, value := row.Label, row.Value
 	cursor := "    "
 	st := lipgloss.NewStyle()
+	if row.Kind == "model" && t.isActiveModelRef(row.Name) {
+		st = styleBrand
+	}
 	if t.config.Cursor == idx {
 		cursor = styleCursor.Render("  ▶ ")
 		st = styleHL
+		if row.Kind == "model" && t.isActiveModelRef(row.Name) {
+			st = styleBrand
+		}
 	}
 	sb.WriteString(cursor + t.configRowLabelStyle(label, st))
 	if value != "" {
-		sb.WriteString(styleDim.Render("  ") + value)
+		valueStyle := styleDim
+		if row.Kind == "model" && t.isActiveModelRef(row.Name) {
+			valueStyle = styleBrand
+		}
+		sb.WriteString(styleDim.Render("  ") + valueStyle.Render(value))
 	}
 	sb.WriteString("\n")
 }
