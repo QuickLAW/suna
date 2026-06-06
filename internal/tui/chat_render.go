@@ -129,15 +129,31 @@ func (t *TUI) renderSkillLoadMessage(p protocol.SkillLoadParams) string {
 		name = "unknown"
 	}
 	labelKey := "tui.skill.loaded"
-	icon := styleToolOk.Render("✓")
-	borderColor := ColorAgent
+	icon := "✓"
+	accent := ColorAgent
 	if strings.TrimSpace(p.Status) == "loading" {
 		labelKey = "tui.skill.loading"
-		icon = styleToolRun.Render("◐")
-		borderColor = ColorBrand
+		icon = "◐"
+		accent = ColorBrand
 	}
-	content := icon + " " + styleDim.Render(t.tr(labelKey)) + " " + styleHL.Render(name)
-	return textutil.IndentLines(boxStyle.BorderForeground(borderColor).Padding(0).Render(content), "    ")
+	badge := lipgloss.NewStyle().
+		Foreground(currentTheme.ToolText).
+		Background(accent).
+		Bold(true).
+		Padding(0, 1).
+		Render(icon + " " + t.tr(labelKey))
+	nameBadge := lipgloss.NewStyle().
+		Foreground(currentTheme.Text).
+		Background(currentTheme.CodeBg).
+		Bold(true).
+		Padding(0, 1).
+		Render(name)
+	content := badge + " " + nameBadge
+	box := boxStyle.
+		BorderForeground(accent).
+		Padding(0, 1).
+		Render(content)
+	return textutil.IndentLines(box, "    ")
 }
 func (t *TUI) renderSkillReviewMessage(p protocol.SkillReviewParams) string {
 	name := strings.TrimSpace(p.Name)

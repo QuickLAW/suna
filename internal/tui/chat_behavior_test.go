@@ -197,17 +197,31 @@ func TestWelcomeNewInitializesChatBeforeResetPhase(t *testing.T) {
 	}
 }
 
-func TestRenderSkillLoadMessageUsesTightHighlightedBox(t *testing.T) {
+func TestRenderSkillLoadMessageUsesHighlightedBadges(t *testing.T) {
 	tui := &TUI{i18n: newTranslator(LocaleZH), width: 80}
+	applyTheme(ThemeDark)
 
 	view := stripANSIForTest(tui.renderSkillLoadMessage(protocol.SkillLoadParams{Name: "img", Status: "loaded"}))
-	for _, want := range []string{"╭", "╰", "✓", "已加载 SKILL", "img"} {
+	for _, want := range []string{"╭", "╰", "✓ 已加载 SKILL", "img"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("renderSkillLoadMessage() = %q, want substring %q", view, want)
 		}
 	}
-	if strings.Contains(view, "│  ✓") || strings.Contains(view, "✓ ") && strings.Contains(view, "  │") {
-		t.Fatalf("renderSkillLoadMessage() = %q, want tight box with zero horizontal padding", view)
+	if strings.Contains(view, "│✓") || strings.Contains(view, "img│") {
+		t.Fatalf("renderSkillLoadMessage() = %q, want horizontal breathing room inside box", view)
+	}
+}
+
+func TestRenderSkillLoadMessageSupportsLightTheme(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleEN), width: 80}
+	applyTheme(ThemeLight)
+	t.Cleanup(func() { applyTheme(ThemeDark) })
+
+	view := stripANSIForTest(tui.renderSkillLoadMessage(protocol.SkillLoadParams{Name: "img", Status: "loading"}))
+	for _, want := range []string{"╭", "╰", "◐ LOADING SKILL", "img"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("renderSkillLoadMessage() = %q, want substring %q", view, want)
+		}
 	}
 }
 
