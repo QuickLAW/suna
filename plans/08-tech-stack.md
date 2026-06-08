@@ -359,7 +359,7 @@ command = "npx"
 args = ["-y", "@modelcontextprotocol/server-github"]
 
 [mcp.servers.github.env]
-GITHUB_TOKEN = "${GITHUB_TOKEN}"
+GITHUB_TOKEN = "ghp_xxx" # 当前不会展开 ${GITHUB_TOKEN}，需要写入实际值或由 server 自行读取环境
 
 # Hooks 当前为预留配置，结构已支持持久化，但执行闭环尚未完成。
 [[hooks]]
@@ -401,7 +401,7 @@ command = "echo checking"
 | `mcp.servers.<name>.transport` | string | 否 | `stdio` | MCP transport，v1 先支持 `stdio`，HTTP/SSE 后续。 |
 | `mcp.servers.<name>.command` | string | stdio 必填 | 空 | stdio server 启动命令。 |
 | `mcp.servers.<name>.args` | string[] | 否 | 空 | stdio server 参数。 |
-| `mcp.servers.<name>.env` | table | 否 | 空 | server 环境变量，可引用 `${ENV_NAME}`。 |
+| `mcp.servers.<name>.env` | table | 否 | 空 | 额外传给 stdio server 的环境变量；当前按字面量传入，不展开 `${ENV_NAME}`。 |
 | `[[hooks]]` | array | 否 | 空 | Hook 配置结构已支持保存；执行链路仍是后续项。 |
 | `hooks.event` | string | 否 | 空 | 预留 hook 事件名。 |
 | `hooks.tool` | string | 否 | 空 | 预留 hook 作用 tool。 |
@@ -461,6 +461,6 @@ api_key = "..."
 | Memory | Usable MVP | SQLite active memory、memory_queue、conversation_state、异步 full compaction、上下文压缩 | 记忆质量评估、用户可编辑记忆 UI |
 | TUI | Usable MVP | Welcome/Chat/Config/Help、模型配置、Workspace 配置、工具记录、AskUser、Guard overlay、compact、active memory list、context-aware help | Provider test、Config 高级项（guard rules/hooks/限速）仍不完整 |
 | Logging | Usable MVP | 分类文本日志和 provider 调用日志已接入；具体文件分类以 `internal/logging` 当前实现为准 | UI 查看日志、导出诊断包 |
-| Skill / MCP | Skill Usable MVP / MCP Design | Skill runtime 已闭环：`~/.suna/skills`、enabled/reasons、`skill_load`、`skill_start import/check` 固定验收流程、`/skills` overlay；MCP 独立配置方案已定稿 | MCP stdio runtime 待实现 |
+| Skill / MCP | Usable MVP | Skill runtime 已闭环：`~/.suna/skills`、enabled/reasons、`skill_load`、`skill_start import/check` 固定验收流程、`/skills` overlay；MCP tools-only runtime 已接入：`config.toml [mcp.servers.*]`、stdio 启动、tools/list、tools/call、`/mcp` 状态/启停/reload | MCP 远程 transport、resources/prompts、OAuth、sandbox 待实现 |
 
 后续路线以 `plans/00-progress.md` 为准；本文件只记录当前技术选型、目录结构和配置字段。

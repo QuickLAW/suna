@@ -2,7 +2,7 @@
 
 对照 Claude Code、OpenClaw、Codex Desktop 检查 Suna 设计完整性。
 
-> **注**: 基于 Daemon + TUI 双进程架构编写。当前已实现重点是行动层、Guard、多模型路由和轻量 active memory；感知源、MCP runtime、hooks、渐进信任仍是目标设计。
+> **注**: 基于 Daemon + TUI 双进程架构编写。当前已实现重点是行动层、Guard、多模型路由、轻量 active memory 和基础 MCP tools-only runtime；感知源、hooks、渐进信任仍是目标设计。
 
 ## 架构对比
 
@@ -21,7 +21,7 @@
 |------|-------------|----------|------|------|
 | **语言** | TypeScript (Node) | TypeScript (Node) | Go | ✅ 差异化优势 |
 | **多模型** | 仅 Anthropic | 多模型 + failover | 多模型 + 智能路由 | ✅ Suna 路由更智能 |
-| **核心工具** | Read/Write/Edit/Bash/Glob/Grep + MCP | exec/read/write/edit/browser/canvas + MCP | 7 个 registry tools + 2 个 agent built-ins；MCP 未接入 | ⚠️ 缺 glob/grep 原生工具 |
+| **核心工具** | Read/Write/Edit/Bash/Glob/Grep + MCP | exec/read/write/edit/browser/canvas + MCP | 7 个 registry tools + 2 个 agent built-ins；基础 MCP tools-only runtime 已接入 | ⚠️ 缺 glob/grep 原生工具 |
 | **权限模型** | allow/deny + yolo 模式 | allow/deny + sandbox + exec approvals | LLM 审查 + 硬规则；渐进信任未实现 | ✅ Suna 创新点 |
 | **多渠道** | Terminal/VSCode/Desktop/Web/JetBrains | 25+ 消息平台 + macOS/iOS/Android | TUI + (远期 WebSocket) | ❌ I/O 渠道少 |
 | **Skills/MCP** | CLAUDE.md + Skills + auto memory | SKILL.md + Plugin (npm) | 通用 Agent Skill 兼容 + MCP 独立配置 | ✅ 学习能力是差异化 |

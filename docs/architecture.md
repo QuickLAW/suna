@@ -11,7 +11,7 @@ TUI / 命令入口
     ↓ protocol + local transport
 Daemon
     ↓
-Agent / Runner / Model / Tools / Guard / Memory / Skill
+Agent / Runner / Model / Tools / Guard / Memory / Skill / MCP
 ```
 
 核心原则：**TUI 只负责交互和渲染，业务状态、工具执行、模型调用、安全策略和持久化都由 daemon 侧模块承担**。
@@ -75,7 +75,8 @@ TUI 重构或 UI 交互调整不应改变 daemon 的业务语义。
 - Agent 负责任务决策、上下文管理、Guard 编排和工具执行入口。
 - Runner 执行模型流式调用和工具调用循环，只依赖 Agent 提供的 tool schema 与 executor。
 - `internal/tools` 是统一工具目录和执行路由，所有模型可见工具都应通过 Provider 注册到 `tools.Manager`。
-- `internal/tools/builtin` 提供本地内置工具，`internal/tools/skilltools` 适配 Skill Runtime，`internal/tools/agenttools` 适配 `askuser` / `spawn` 这类 Agent runtime 工具。
+- `internal/tools/builtin` 提供本地内置工具，`internal/tools/skilltools` 适配 Skill Runtime，`internal/tools/agenttools` 适配 `askuser` / `spawn` 这类 Agent runtime 工具，`internal/tools/mcptools` 将已连接的 MCP tools 适配为模型可见工具。
+- `internal/mcp` 管理 MCP server 生命周期、stdio transport、JSON-RPC、tools/list 和 tools/call；当前只承诺 tools-only 的基础 MCP，不支持 resources、prompts、sampling、OAuth 或 sandbox。
 - Guard 对写文件、执行命令、HTTP 写请求等行动类操作做风险控制；工具是否跳过 Guard 由工具 `Spec` 的 Guard policy 声明，默认应走 Guard。
 
 `tools.Manager` 只维护工具目录、稳定 schema 和执行路由，不应做安全决策；Guard 仍由 Agent 持有当前会话上下文后统一处理。工具 schema 应保持稳定顺序，避免影响模型前缀缓存命中。
@@ -92,6 +93,8 @@ TUI 重构或 UI 交互调整不应改变 daemon 的业务语义。
 - `skills/`：Skill 目录。
 - `attachments/`：附件缓存。
 - `logs/app.log`：日志。
+
+MCP server 配置位于 `config.toml` 的 `[mcp.servers.<name>]`。daemon 启动时会尝试启动 enabled 的 stdio server；单个 server 启动失败不会阻塞 Suna，错误通过 MCP 状态接口和 TUI `/mcp` 面板展示。MCP 工具公共名使用 `mcp__<server>__<tool>`，二进制结果会保存到附件目录并以文本引用返回。
 
 TUI 可以缓存配置快照用于展示，但真实持久化状态以 daemon 为准。
 

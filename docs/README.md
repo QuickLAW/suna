@@ -4,6 +4,7 @@
 
 ## 文档索引
 
+- [配置说明](configuration.md)：`config.toml`、`credentials.toml` 的完整字段、示例和当前边界。
 - [架构说明](architecture.md)：当前 CLI、TUI、daemon、protocol 和核心包边界。
 - [TUI 架构](tui.md)：`internal/tui` 重构后的目录结构、Bubble Tea 约定和维护边界。
 - [开发指南](development.md)：本地构建、测试、提交前检查和代码约定。
