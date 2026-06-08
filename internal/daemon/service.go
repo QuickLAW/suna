@@ -59,6 +59,16 @@ func (s *service) Handle(ctx context.Context, req protocol.Request, sink protoco
 		if err != nil {
 			return nil, err
 		}
+		if req.Method == protocol.MethodMCPToggle {
+			cfg := s.daemon.agent.Config()
+			if cfg == nil {
+				return nil, protocolError{code: -32603, message: "config not loaded"}
+			}
+			cfg.MCP = s.daemon.agent.MCP().Config()
+			if err := cfg.Save(cfg.ConfigPath()); err != nil {
+				return nil, protocolError{code: -32603, message: err.Error()}
+			}
+		}
 		// MCP toggle/reload 会改变运行态可用工具集合；协议处理成功后刷新 tools manager，
 		// 让下一轮模型请求看到最新 tool schema。mcp.list 只读，不触发刷新。
 		if req.Method == protocol.MethodMCPToggle || req.Method == protocol.MethodMCPReload {

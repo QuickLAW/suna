@@ -64,6 +64,33 @@ func (r *Runtime) SetConfig(cfg config.MCPConfig) {
 	}
 }
 
+func (r *Runtime) Config() config.MCPConfig {
+	if r == nil {
+		return config.MCPConfig{}
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	servers := make(map[string]config.MCPServerConfig, len(r.cfg.Servers))
+	for name, sc := range r.cfg.Servers {
+		sc.Args = append([]string(nil), sc.Args...)
+		sc.Env = cloneStringMap(sc.Env)
+		sc.Headers = cloneStringMap(sc.Headers)
+		servers[name] = sc
+	}
+	return config.MCPConfig{Servers: servers}
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
 func (r *Runtime) Tools(ctx context.Context) ([]Tool, error) {
 	if r == nil {
 		return nil, nil
@@ -158,17 +185,36 @@ func (r *Runtime) SetActive(ctx context.Context, name string, active bool) error
 			r.setError(name, err)
 			return err
 		}
+		r.setEnabled(name, true)
 		return nil
 	}
 	r.mu.Lock()
 	client := r.clients[name]
 	delete(r.clients, name)
 	delete(r.errors, name)
+	if r.cfg.Servers != nil {
+		sc.Enabled = false
+		r.cfg.Servers[name] = sc
+	}
 	r.mu.Unlock()
 	if client != nil {
 		client.Close()
 	}
 	return nil
+}
+
+func (r *Runtime) setEnabled(name string, enabled bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cfg.Servers == nil {
+		return
+	}
+	sc, ok := r.cfg.Servers[name]
+	if !ok {
+		return
+	}
+	sc.Enabled = enabled
+	r.cfg.Servers[name] = sc
 }
 
 func (r *Runtime) ReloadServer(ctx context.Context, name string) error {

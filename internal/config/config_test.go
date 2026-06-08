@@ -192,6 +192,91 @@ func TestConfigSaveWritesSkillsAsFlatObjectMap(t *testing.T) {
 	}
 }
 
+func TestConfigSaveWritesMCPLikeConfigurationDocs(t *testing.T) {
+	cfg, path, _ := newSaveTestConfig(t, 0)
+	cfg.MCP.Servers = map[string]MCPServerConfig{
+		"filesystem": {
+			Enabled:        false,
+			Transport:      "stdio",
+			Command:        "npx",
+			Args:           []string{"-y", "@modelcontextprotocol/server-filesystem", "/Users/alanchen/project"},
+			CWD:            "/Users/alanchen/project",
+			TimeoutSeconds: 30,
+		},
+		"github": {
+			Enabled:        true,
+			Transport:      "stdio",
+			Command:        "npx",
+			Args:           []string{"-y", "@modelcontextprotocol/server-github"},
+			Env:            map[string]string{"GITHUB_TOKEN": "ghp_xxx"},
+			TimeoutSeconds: 30,
+		},
+		"context7": {
+			Enabled:        false,
+			Transport:      "streamable_http",
+			URL:            "https://mcp.context7.com/mcp",
+			Headers:        map[string]string{"Authorization": "Bearer xxx"},
+			TimeoutSeconds: 30,
+		},
+	}
+
+	if err := cfg.Save(path); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	data := readFile(t, path)
+	for _, want := range []string{
+		"[mcp.servers.context7]",
+		`  transport = "streamable_http"`,
+		`  url = "https://mcp.context7.com/mcp"`,
+		"[mcp.servers.context7.headers]",
+		`  Authorization = "Bearer xxx"`,
+		"[mcp.servers.filesystem]",
+		`  args = ["-y", "@modelcontextprotocol/server-filesystem", "/Users/alanchen/project"]`,
+		`  cwd = "/Users/alanchen/project"`,
+		"[mcp.servers.github]",
+		"[mcp.servers.github.env]",
+		`  GITHUB_TOKEN = "ghp_xxx"`,
+	} {
+		if !strings.Contains(data, want) {
+			t.Fatalf("saved config = %q, want substring %q", data, want)
+		}
+	}
+	if strings.Contains(data, "[mcp]\n") || strings.Contains(data, "[mcp.servers]\n") {
+		t.Fatalf("saved config = %q, should not contain wrapper mcp tables", data)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := loaded.MCP.Servers["github"].Env["GITHUB_TOKEN"]; got != "ghp_xxx" {
+		t.Fatalf("loaded github token = %q, want ghp_xxx", got)
+	}
+}
+
+func TestConfigSaveWritesHooksLikeConfigurationDocs(t *testing.T) {
+	cfg, path, _ := newSaveTestConfig(t, 0)
+	cfg.Hooks = []HookConfig{{Event: "before_tool", Tool: "exec", Command: "echo checking"}}
+
+	if err := cfg.Save(path); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	data := readFile(t, path)
+	for _, want := range []string{"[[hooks]]", `  event = "before_tool"`, `  tool = "exec"`, `  command = "echo checking"`} {
+		if !strings.Contains(data, want) {
+			t.Fatalf("saved config = %q, want substring %q", data, want)
+		}
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(loaded.Hooks) != 1 || loaded.Hooks[0].Command != "echo checking" {
+		t.Fatalf("loaded hooks = %#v, want one hook", loaded.Hooks)
+	}
+}
+
 func TestDeleteCredentialRemovesOnlyRequestedProvider(t *testing.T) {
 	dir := t.TempDir()
 	mustSaveCredential(t, dir, "openai", "sk-openai")

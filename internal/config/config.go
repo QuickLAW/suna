@@ -135,8 +135,6 @@ type configTOML struct {
 	Models      []modelConfigTOML `toml:"models"`
 	Guard       GuardConfig       `toml:"guard"`
 	UI          UIConfig          `toml:"ui"`
-	MCP         MCPConfig         `toml:"mcp,omitempty"`
-	Hooks       []HookConfig      `toml:"hooks"`
 	MaxModelRPS int               `toml:"max_model_rps,omitzero"`
 }
 
@@ -297,6 +295,8 @@ func (c *Config) Save(path string) error {
 		return fmt.Errorf("encode config: %w", err)
 	}
 	writeSkillRecordsTOML(&buf, c.Skills)
+	writeMCPConfigTOML(&buf, c.MCP)
+	writeHooksTOML(&buf, c.Hooks)
 	return os.WriteFile(path, buf.Bytes(), 0644)
 }
 
@@ -317,8 +317,6 @@ func (c *Config) tomlView() configTOML {
 		Models:      models,
 		Guard:       c.Guard,
 		UI:          c.UI,
-		MCP:         c.MCP,
-		Hooks:       c.Hooks,
 		MaxModelRPS: c.MaxModelRPS,
 	}
 }
@@ -332,20 +330,115 @@ func writeSkillRecordsTOML(buf *bytes.Buffer, records map[string]skill.Record) {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	if buf.Len() > 0 && !strings.HasSuffix(buf.String(), "\n\n") {
-		buf.WriteString("\n")
-	}
+	ensureTOMLGap(buf)
 	for _, name := range names {
 		record := records[name]
 		buf.WriteString("[skills.")
 		buf.WriteString(formatTOMLKey(name))
 		buf.WriteString("]\n")
-		buf.WriteString(fmt.Sprintf("enabled = %t\n", record.Enabled))
+		writeBoolField(buf, "enabled", record.Enabled)
 		if len(record.Reasons) > 0 {
-			buf.WriteString("reasons = ")
+			writeIndentedKey(buf, "reasons")
 			buf.WriteString(formatInlineTOMLValue(record.Reasons))
 			buf.WriteString("\n")
 		}
+		buf.WriteString("\n")
+	}
+}
+
+func writeMCPConfigTOML(buf *bytes.Buffer, cfg MCPConfig) {
+	if len(cfg.Servers) == 0 {
+		return
+	}
+	names := make([]string, 0, len(cfg.Servers))
+	for name := range cfg.Servers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	ensureTOMLGap(buf)
+	for _, name := range names {
+		server := cfg.Servers[name]
+		buf.WriteString("[mcp.servers.")
+		buf.WriteString(formatTOMLKey(name))
+		buf.WriteString("]\n")
+		writeBoolField(buf, "enabled", server.Enabled)
+		writeStringField(buf, "transport", server.Transport)
+		writeStringField(buf, "command", server.Command)
+		if len(server.Args) > 0 {
+			writeIndentedKey(buf, "args")
+			buf.WriteString(formatInlineTOMLValue(server.Args))
+			buf.WriteString("\n")
+		}
+		writeStringField(buf, "cwd", server.CWD)
+		writeStringField(buf, "url", server.URL)
+		if server.TimeoutSeconds > 0 {
+			writeIndentedKey(buf, "timeout_seconds")
+			buf.WriteString(strconv.FormatInt(int64(server.TimeoutSeconds), 10))
+			buf.WriteString("\n")
+		}
+		if len(server.Env) > 0 {
+			writeStringMapSectionTOML(buf, "mcp.servers."+formatTOMLKey(name)+".env", server.Env)
+		}
+		if len(server.Headers) > 0 {
+			writeStringMapSectionTOML(buf, "mcp.servers."+formatTOMLKey(name)+".headers", server.Headers)
+		}
+		buf.WriteString("\n")
+	}
+}
+
+func writeHooksTOML(buf *bytes.Buffer, hooks []HookConfig) {
+	if len(hooks) == 0 {
+		return
+	}
+	ensureTOMLGap(buf)
+	for _, hook := range hooks {
+		buf.WriteString("[[hooks]]\n")
+		writeStringField(buf, "event", hook.Event)
+		writeStringField(buf, "tool", hook.Tool)
+		writeStringField(buf, "command", hook.Command)
+		buf.WriteString("\n")
+	}
+}
+
+func writeStringMapSectionTOML(buf *bytes.Buffer, section string, values map[string]string) {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	buf.WriteString("\n[")
+	buf.WriteString(section)
+	buf.WriteString("]\n")
+	for _, key := range keys {
+		writeIndentedKey(buf, formatTOMLKey(key))
+		buf.WriteString(strconv.Quote(values[key]))
+		buf.WriteString("\n")
+	}
+}
+
+func writeBoolField(buf *bytes.Buffer, key string, value bool) {
+	writeIndentedKey(buf, key)
+	buf.WriteString(strconv.FormatBool(value))
+	buf.WriteString("\n")
+}
+
+func writeStringField(buf *bytes.Buffer, key, value string) {
+	if strings.TrimSpace(value) == "" {
+		return
+	}
+	writeIndentedKey(buf, key)
+	buf.WriteString(strconv.Quote(value))
+	buf.WriteString("\n")
+}
+
+func writeIndentedKey(buf *bytes.Buffer, key string) {
+	buf.WriteString("  ")
+	buf.WriteString(key)
+	buf.WriteString(" = ")
+}
+
+func ensureTOMLGap(buf *bytes.Buffer) {
+	if buf.Len() > 0 && !strings.HasSuffix(buf.String(), "\n\n") {
 		buf.WriteString("\n")
 	}
 }
