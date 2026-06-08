@@ -125,6 +125,24 @@ func TestAutoCompactRunningFalseClearsLoading(t *testing.T) {
 	}
 }
 
+func TestAutoCompactErrorClearsLoadingAndShowsError(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleZH), width: 80, height: 24}
+	tui.initChatComponents()
+	tui.handleLocalNotification(localNotification{method: protocol.NotifyCompactResult, params: []byte(`{"running":true}`)})
+
+	tui.handleLocalNotification(localNotification{method: protocol.NotifyCompactResult, params: []byte(`{"running":false,"error":"自动上下文压缩失败，请尝试 /compact"}`)})
+	if tui.chat.Compacting {
+		t.Fatalf("compacting = true after compact error, want false")
+	}
+	if len(tui.chat.Messages) != 2 {
+		t.Fatalf("messages = %d after compact error, want loading and error", len(tui.chat.Messages))
+	}
+	view := stripANSIForTest(tui.chat.Messages[1].Content.(string))
+	if !strings.Contains(view, "自动上下文压缩失败") {
+		t.Fatalf("error message = %q, want compact error", view)
+	}
+}
+
 func TestAutoCompactRunningClearsWhenStreamStarts(t *testing.T) {
 	tui := &TUI{i18n: newTranslator(LocaleZH), width: 80, height: 24}
 	tui.initChatComponents()

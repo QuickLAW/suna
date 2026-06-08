@@ -79,6 +79,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			}
 			completionReq.Messages = messages
 			if shouldCompactRequest(completionReq, contextWindow) {
+				if needCompact && r.Sink != nil {
+					r.Sink.Status("compact_error: automatic context compression could not reduce the request enough; try /compact manually, reduce the current input, or start a new session")
+				}
 				return result, fmt.Errorf("context remains too large after compaction (%d tokens estimated, %d token safe limit); start a new session or reduce the current input", estimateRequestTokens(completionReq), int(float64(contextWindow)*contextSafetyThreshold))
 			}
 		}

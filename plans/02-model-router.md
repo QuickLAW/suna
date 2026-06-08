@@ -324,7 +324,7 @@ Suna 不绑定具体厂商的缓存协议。当前策略是保持自然前缀稳
 构建 CompletionRequest 时的固定顺序:
   1. System prompt (几乎不变)
   2. 工具定义 (很少变)
-  3. 对话历史 / compact summary (逐步追加)
+  3. 对话历史 / continuation state (逐步追加)
   4. Active memory (query-based，靠近当前用户消息)
   5. 最新消息 (每轮变)
 

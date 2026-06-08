@@ -153,12 +153,13 @@ estimated_request_tokens =
    - 最多保留最近 10 条原始消息。
    - 预算不足时保留更少。
    - 至少保留最新 1 条，避免当前请求被压掉。
-3. 将 suffix 之前的 prefix 一次性压成一条 system summary。
-4. 重建完整请求并重新估算。
-5. 如果仍超过安全阈值，返回明确错误，提示新建会话或减少当前输入。
+3. 将 suffix 之前的 prefix 一次性压成一条 system continuation state。
+4. continuation state 优先由压缩模型生成；压缩模型失败或空返回时，使用 deterministic fallback：降噪后的 user/assistant/tool_call/tool_result 结构化历史。
+5. 重建完整请求并重新估算。
+6. 如果仍超过安全阈值，通过 compact lifecycle 错误通知 TUI，并返回明确错误，提示手动 `/compact`、减少当前输入或新建会话。
 ```
 
-自动 compact 最多只额外发起一次 summary 请求，不做多轮重试压缩，避免延迟、成本和摘要漂移。
+自动 compact 最多只额外发起一次模型压缩请求；fallback 不调用模型，避免延迟、成本和摘要漂移。
 
 ### 手动 compact
 
@@ -180,11 +181,12 @@ working memory <= 10 条消息:
 Compact 成功后，agent 的 working memory 会立即变为：
 
 ```
-system: Conversation summary: <压缩摘要>
+system: Continuation state for the ongoing task:
+  <continuation state 或 deterministic fallback>
 recent working messages...
 ```
 
-TUI 的聊天 transcript 不会被替换或删除。旧聊天仍保留在界面中供用户回看，但模型后续只基于 compact 后的 summary + recent messages 继续。
+TUI 的聊天 transcript 不会被替换或删除。旧聊天仍保留在界面中供用户回看，但模型后续只基于 continuation state + recent messages 继续。continuation state 不是普通聊天摘要，而是继续当前任务所需的工作状态：用户目标、约束/偏好、决策、被否定方向、当前进展、tool/action facts 和下一步。工具结果只保留事实、状态变化、错误、产物和验证结果，不保留长日志。
 
 `conversation_state.last_messages` 只保存 compact 后 working memory 中仍保留的可见 user/assistant 纯文本消息。compact 生成的 system summary、tool call/result 和 raw 结构不会写入恢复快照。因此恢复会话不是完整历史回放，而是最近可见对话的轻量恢复。
 

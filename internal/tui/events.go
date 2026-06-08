@@ -196,6 +196,15 @@ func (t *TUI) handleCompactResultNotification(p protocol.CompactResult) {
 			return
 		}
 		t.chat.Compacting = false
+		if strings.TrimSpace(p.Error) != "" {
+			t.appendNonToolMessage(chatMsg{Role: "error", Content: p.Error})
+		}
+		_ = t.syncInputFocus()
+		return
+	}
+	if strings.TrimSpace(p.Error) != "" {
+		t.chat.Compacting = false
+		t.appendNonToolMessage(chatMsg{Role: "error", Content: p.Error})
 		_ = t.syncInputFocus()
 		return
 	}

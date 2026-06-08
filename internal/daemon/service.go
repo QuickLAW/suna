@@ -216,6 +216,9 @@ func (s *service) runAgent(ctx context.Context, connID, inputText string, input 
 				} else if evt.Content == "compact_done" {
 					running := false
 					emit(ctx, sink, protocol.NotifyCompactResult, protocol.CompactResult{Running: &running})
+				} else if strings.HasPrefix(evt.Content, "compact_error:") {
+					running := false
+					emit(ctx, sink, protocol.NotifyCompactResult, protocol.CompactResult{Running: &running, Error: strings.TrimSpace(strings.TrimPrefix(evt.Content, "compact_error:"))})
 				} else if strings.HasPrefix(evt.Content, "error:") || evt.Content == "cancelled" {
 					logging.Error("agent", "run_failed", fmt.Errorf("%s", evt.Content), logging.Event{"conn_id": connID, "duration_ms": time.Since(started).Milliseconds()})
 					emit(ctx, sink, protocol.NotifyStream, protocol.StreamParams{Chunk: evt.Content, Done: true})

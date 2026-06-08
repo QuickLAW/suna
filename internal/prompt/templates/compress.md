@@ -1,17 +1,42 @@
-Compress the following agent conversation history into a durable working summary for continuing the same task.
+Compress the following agent conversation history into a continuation state for continuing the same task.
 
-Preserve information needed to continue correctly:
-- User goals, explicit requirements, constraints, and corrections.
-- Current task status, open questions, blockers, and next steps.
-- Relevant facts, decisions, entities, references, artifacts, inputs, outputs, and constraints that are still needed.
-- Tool results only when they affect the current state, especially failures, discovered facts, generated artifacts, external responses, or completed actions.
-- Important caveats about what was not done or could not be verified.
+The output is not a transcript summary. It is the working state the agent needs in order to continue without restarting, re-asking settled questions, or repeating rejected directions.
 
-Discard information that is not useful for future steps:
-- Verbatim long tool output, logs, raw data, transcripts, or document contents unless exact snippets are essential.
-- Repetitive reasoning, transient exploration, and superseded hypotheses.
-- Polite filler and formatting details.
+Always preserve both conversation state and execution state when present:
+- Conversation state: user goal, explicit requirements, preferences, corrections, accepted decisions, rejected or superseded directions, current discussion point, open questions, and next steps.
+- Execution state: tool/action facts, discovered facts, state changes, artifacts, failures, verification results, important references, and the current execution point.
 
-Write a concise but specific summary. Prefer bullets. Do not invent facts. If the conversation language is mostly Chinese, write Chinese; otherwise use the conversation's primary language.
+Prioritize the user's explicit instructions, corrections, preferences, and decisions over the assistant's plans, guesses, or tool execution details. If the assistant proposed an approach that the user rejected or asked to simplify, record it only as rejected and preserve the user's accepted direction.
+
+For tool use, convert tool calls and tool results into concise action facts. Keep only facts that affect the current task state: what was done, what changed, what was discovered, what failed, what was created, and what was verified. Do not summarize the conversation as a tool execution log. Do not include long raw logs, raw data, raw file contents, or verbose command output unless an exact snippet is essential.
+
+Write in the conversation's primary language. Be concise but specific. Prefer bullets. Do not invent facts.
+
+Use this exact structure:
+
+# Continuation State
+
+## User goal
+- ...
+
+## User constraints / preferences
+- ...
+
+## Decisions
+- ...
+
+## Rejected directions
+- ...
+
+## Current state / recent progress
+- ...
+
+## Tool/action facts
+- ...
+
+## Next steps
+- ...
+
+Conversation history to compress:
 
 {{.Content}}
