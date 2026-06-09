@@ -177,7 +177,7 @@ TUI/local transport 只传 `path`、`url` 或 `attachment` 引用。粘贴的 `d
 │  2. 构建请求                                                  │
 │     ├── System Prompt (固定模板 + AGENTS.md + active skill index)   │
 │     ├── 工具定义 (main 暴露内置工具；subtask 只暴露授权工具)    │
-│     ├── 对话历史 / continuation state                         │
+│     ├── Session State / recent conversation                   │
 │     ├── Active Memory brief (最多 5 条，见 06-memory.md)      │
 │     └── 当前用户消息                                           │
 │                                                               │
@@ -270,8 +270,8 @@ Subtask 不能创建嵌套 subtask（工具列表不含 Spawn）。
 │ 工具 schemas           稳定排序               │
 ├──────────────────────────────────────────────┤
 │ Working Memory         当前会话短期上下文      │
-│   ├── continuation state (如已压缩)            │
-│   ├── prior conversation                      │
+│   ├── Session State (如已 compact)             │
+│   ├── recent conversation window               │
 │   ├── Active Memory brief (当前轮背景)         │
 │   └── current user message                    │
 ├──────────────────────────────────────────────┤
@@ -285,7 +285,7 @@ Subtask 不能创建嵌套 subtask（工具列表不含 Spawn）。
 
 ### 何时压缩
 
-```
+```text
 自动触发条件:
   完整 LLM 请求估算 token 数 > 上下文窗口 × 80%
 
@@ -298,57 +298,64 @@ Subtask 不能创建嵌套 subtask（工具列表不含 Spawn）。
 
 不触发:
   - 完整请求未超过 80% 安全阈值
-  - 手动 compact 且 working memory 不超过最近保留上限
+```
 
 自动压缩发生在每次发起 LLM 请求前，由 runner 统一处理；main 和 subtask 都可以启用。手动 compact 通过 runner 的 `Compact` 入口触发。
-```
 
 ### 如何压缩
 
-```
+```text
 压缩对象:
-  只压缩 working memory。
+  只压缩 working memory / Session State。
   不压缩 system prompt、active memory、tool schemas 或 max output reserve。
 
 自动 compact:
   1. 先构造完整候选 LLM 请求并估算 token。
   2. 超过 80% 安全阈值时，通过 `session.compact_result {running:true}` 通知 TUI 展示 compact loading。
   3. 计算 fixed cost:
-       system prompt + tool schemas + max output reserve + 非 working 注入消息。
-  4. 用剩余预算一次性决定保留多少 recent working messages。
-       最多保留最近 10 条；预算不足时保留更少；至少保留最新 1 条。
-  5. 将 recent 之前的 working memory prefix 压缩成一条 system continuation state，并保留 recent tail 原始消息。
-  6. continuation state 优先由压缩模型生成；若压缩模型失败或返回空，使用 deterministic fallback：降噪后的 user/assistant/tool_call/tool_result 结构化历史。
+       system prompt + tool schemas + max output reserve + Session State budget。
+  4. 用剩余预算选择 dynamic recent messages。
+       普通对话保留更多 user turn；tool-heavy 保留更小窗口；至少保留最新 1 条。
+  5. 将 recent 之前的 working memory 和旧 Session State 交给压缩 LLM，生成新的 Session State。
+  6. WorkingMemory 变为：Session State + dynamic recent messages。
   7. 压缩完成后通过 `session.compact_result {running:false}` 结束 TUI loading。
   8. 重建完整请求后再次估算。
        如果仍超过安全阈值，通过 `session.compact_result {running:false,error}` 告知 TUI，并返回明确错误，不继续撞 provider context limit。
 
 手动 compact:
-  - 默认 prefix compact + 保留最近最多 10 条原始 working messages。
-  - 如果 working memory 不超过 10 条，视为 no-op，不报错。
+  - 不看 80% 自动阈值，用户执行 `/compact` 即尝试整理当前上下文。
+  - 使用相同 Session State + dynamic recent window 策略。
+  - 若没有可折叠内容且没有旧 Session State，视为 no-op。
   - 手动 compact 成功后返回完整 compact result，TUI 显示结果面板。
 
-continuation state 内容:
-  压缩结果只服务当前会话瘦身，不进入长期 user_memory。
-  它不是普通聊天摘要，而是继续当前任务所需的工作状态。
-  必须保留 user goal、用户约束/偏好、已确认决策、被否定方向、当前状态/最近进展、tool/action facts 和 next steps。
+Session State 内容:
+  压缩结果只服务当前会话瘦身和恢复，不进入长期 user_memory。
+  它不是普通聊天摘要，而是当前会话的内部状态账本。
+  必须保留 active context、completed work/topic ledger、user requirements and decisions、tool facts、open threads 和 recovery note。
   工具结果只保留事实、状态变化、错误、产物和验证结果；丢弃长日志、原始输出、重复推理、过期假设和礼貌性填充。
 ```
 
-关键区别：Suna 不追求完整历史回溯。压缩后的细节可能被丢弃，只有对未来交互有长期价值的偏好、习惯、纠错和约束会进入 active memory。
+compact 失败时不使用 deterministic fallback，不硬裁剪继续，不修改 working memory 或 Session State。TUI 显示 compact error 并解锁输入。
+
+关键区别：Suna 不追求完整历史回溯，但会通过当前会话的 Session State 保留较早任务/话题的可回忆索引；跨会话长期偏好、习惯、纠错和约束才进入 active memory。
 
 ### 缓存友好
 
-```
-不变的内容放前面，变化的内容放后面:
+```text
+稳定前缀:
+  System Prompt + tool schemas + project/skill context
 
-System Prompt + tool schemas + prior conversation → 尽量稳定
-Active Memory brief → query-based，放在最新 user message 之前
-Current user message / new tool results → 放在尾部
+低频稳定:
+  Session State (仅 compact/restore 后变化)
 
-Suna 不默认注入 provider-specific cache_control / prompt_cache_key。
-缓存命中依赖服务端策略，但 Suna 保证自然前缀稳定。
+增量稳定:
+  Recent messages (普通轮次 append-only，compact 时裁剪)
+
+每轮动态尾部:
+  Active Memory brief + latest user
 ```
+
+Suna 不默认注入 provider-specific cache_control / prompt_cache_key。缓存命中依赖服务端策略，但 Suna 保证自然前缀稳定：Session State 不拼进 system prompt，active memory 插在最新 user message 之前。
 
 ## 任务拆解策略
 

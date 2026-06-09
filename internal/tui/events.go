@@ -26,7 +26,6 @@ type daemonStateMsg = tuievents.DaemonStateMsg
 type compactResultMsg = tuievents.CompactResultMsg
 type memoryListMsg = tuievents.MemoryListMsg
 type sessionRestoreMessageMsg = tuievents.SessionRestoreMessageMsg
-type sessionRestoreInputMsg = tuievents.SessionRestoreInputMsg
 type daemonFullStatusMsg = tuievents.DaemonFullStatusMsg
 type configStateMsg = tuievents.ConfigStateMsg
 type skillListMsg = tuievents.SkillListMsg
@@ -78,8 +77,6 @@ func (t *TUI) handleNotificationMsg(msg notificationMsg) {
 		t.handleMemoryListNotification(m.Params)
 	case sessionRestoreMessageMsg:
 		t.handleSessionRestoreMessageNotification(m)
-	case sessionRestoreInputMsg:
-		t.handleSessionRestoreInputNotification(m)
 	case daemonFullStatusMsg:
 		t.handleDaemonFullStatusNotification(m.Params)
 	case configStateMsg:
@@ -238,12 +235,6 @@ func (t *TUI) handleSessionRestoreMessageNotification(p sessionRestoreMessageMsg
 	}
 }
 
-func (t *TUI) handleSessionRestoreInputNotification(p sessionRestoreInputMsg) {
-	if p.Content != "" {
-		t.setInputValue(p.Content)
-	}
-}
-
 func (t *TUI) handleDaemonFullStatusNotification(p protocol.DaemonStatusParams) {
 	t.daemonStatus = p
 	if t.daemonStatus.Provider != "" {
@@ -394,6 +385,7 @@ func (t *TUI) handleRequestErrorNotification(p requestErrorMsg) {
 	if p.Scope == notifyCompactError {
 		t.chat.Compacting = false
 		t.compactAuto = false
+		t.resetPhase()
 		t.appendNonToolMessage(chatMsg{Role: "error", Content: p.Message})
 		_ = t.syncInputFocus()
 		return

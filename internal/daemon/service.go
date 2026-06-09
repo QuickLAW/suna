@@ -219,6 +219,8 @@ func (s *service) runAgent(ctx context.Context, connID, inputText string, input 
 				} else if strings.HasPrefix(evt.Content, "compact_error:") {
 					running := false
 					emit(ctx, sink, protocol.NotifyCompactResult, protocol.CompactResult{Running: &running, Error: strings.TrimSpace(strings.TrimPrefix(evt.Content, "compact_error:"))})
+					// compact 失败已经通过专用通知展示；不要再发送通用 stream error，避免 TUI 重复报错。
+					return
 				} else if strings.HasPrefix(evt.Content, "error:") || evt.Content == "cancelled" {
 					logging.Error("agent", "run_failed", fmt.Errorf("%s", evt.Content), logging.Event{"conn_id": connID, "duration_ms": time.Since(started).Milliseconds()})
 					emit(ctx, sink, protocol.NotifyStream, protocol.StreamParams{Chunk: evt.Content, Done: true})
@@ -296,9 +298,6 @@ func (s *service) handleSessionRestore(ctx context.Context, sink protocol.EventS
 		if summary := s.daemon.agent.RestoreToolSummary(ctx); summary != "" {
 			emit(ctx, sink, protocol.NotifySessionRestoreMsg, map[string]string{"role": "restore_summary", "content": summary})
 		}
-	}
-	if input := s.daemon.agent.ConsumeResumeInput(); input != "" {
-		emit(ctx, sink, protocol.NotifySessionRestoreInput, map[string]string{"content": input})
 	}
 	return map[string]int{"messages": count}, nil
 }

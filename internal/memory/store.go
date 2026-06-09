@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -64,7 +65,7 @@ func (s *Store) migrate() error {
 
 		`CREATE TABLE IF NOT EXISTS conversation_state (
 			user_id TEXT PRIMARY KEY,
-			resume_summary TEXT NOT NULL DEFAULT '',
+			session_state TEXT NOT NULL DEFAULT '',
 			last_messages TEXT NOT NULL DEFAULT '[]',
 			tool_summary TEXT NOT NULL DEFAULT '[]',
 			memory_processed_at DATETIME,
@@ -147,6 +148,38 @@ func (s *Store) migrate() error {
 	for _, m := range migrations {
 		if _, err := s.db.Exec(m); err != nil {
 			return fmt.Errorf("exec migration: %w\nquery: %s", err, m)
+		}
+	}
+	if err := s.ensureConversationStateColumns(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) ensureConversationStateColumns() error {
+	rows, err := s.db.Query(`PRAGMA table_info(conversation_state)`)
+	if err != nil {
+		return fmt.Errorf("inspect conversation_state: %w", err)
+	}
+	defer rows.Close()
+	cols := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		cols[strings.ToLower(name)] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !cols["session_state"] {
+		if _, err := s.db.Exec(`ALTER TABLE conversation_state ADD COLUMN session_state TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("add session_state column: %w", err)
 		}
 	}
 	return nil

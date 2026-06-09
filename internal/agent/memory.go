@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/alanchenchen/suna/internal/logging"
 	"github.com/alanchenchen/suna/internal/memory"
 	"github.com/alanchenchen/suna/internal/model"
 	"github.com/alanchenchen/suna/internal/tools"
@@ -36,7 +37,13 @@ func (a *Agent) saveConversationState(ctx context.Context) {
 		return
 	}
 	msgs := a.working.Messages()
-	_ = a.conversation.Save(ctx, memory.DefaultUserID, memory.BuildResumeSummary(msgs), msgs, a.toolSummary)
+	sessionState, _ := memory.SplitSessionStateMessages(msgs)
+	if strings.TrimSpace(sessionState) == "" {
+		sessionState = a.sessionState
+	}
+	if err := a.conversation.Save(ctx, memory.DefaultUserID, sessionState, msgs, a.toolSummary); err != nil {
+		logging.Error("agent", "save_conversation_state_failed", err, nil)
+	}
 }
 
 func (a *Agent) addToolSummary(name string, result tools.Result) {

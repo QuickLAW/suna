@@ -23,6 +23,7 @@ type Request struct {
 	EmitStream    bool
 	EmitReasoning bool
 	AutoCompress  bool
+	SessionState  string
 
 	MaxTurns     int
 	MaxToolCalls int
@@ -35,6 +36,7 @@ type Result struct {
 	HadToolCall   bool
 	HadToolError  bool
 	ContextWindow int
+	SessionState  string
 	Usage         *model.Usage
 }
 

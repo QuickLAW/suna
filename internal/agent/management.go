@@ -3,10 +3,12 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/alanchenchen/suna/internal/logging"
 	"github.com/alanchenchen/suna/internal/memory"
 	"github.com/alanchenchen/suna/internal/model"
 	"github.com/alanchenchen/suna/internal/runner"
@@ -98,14 +100,28 @@ func (a *Agent) ListMemory(ctx context.Context) ([]memory.UserMemory, error) {
 
 func (a *Agent) Compact(ctx context.Context) (int, int, int, int, int, error) {
 	r := &runner.Runner{Router: a.router, Compressor: a.compressor}
-	before, after, turnsCompressed, truncated, err := r.Compact(ctx, a.working)
-	if err != nil {
-		return 0, 0, 0, 0, 0, err
-	}
 	contextWindow := model.DefaultContextWindow
 	if a.router != nil {
 		contextWindow = a.router.ActiveContextWindow()
 	}
+	started := time.Now()
+	beforeEstimate := 0
+	messageCount := 0
+	if a.working != nil {
+		beforeEstimate = a.working.EstimatedTokens()
+		messageCount = a.working.Len()
+	}
+	logging.Info("memory", "session_compact_start", logging.Event{"mode": "manual", "context_window": contextWindow, "before_tokens": beforeEstimate, "messages": messageCount})
+	before, after, turnsCompressed, truncated, state, err := r.Compact(ctx, a.working, a.sessionState, contextWindow)
+	if err != nil {
+		logging.Error("memory", "session_compact_failed", err, logging.Event{"mode": "manual", "context_window": contextWindow, "before_tokens": beforeEstimate, "messages": messageCount, "duration_ms": time.Since(started).Milliseconds()})
+		return 0, 0, 0, 0, 0, err
+	}
+	if state != "" {
+		a.sessionState = state
+	}
+	a.saveConversationState(ctx)
+	logging.Info("memory", "session_compact_success", logging.Event{"mode": "manual", "context_window": contextWindow, "before_tokens": before, "after_tokens": after, "folded_messages": turnsCompressed, "truncated_tool_outputs": truncated, "duration_ms": time.Since(started).Milliseconds()})
 	return before, after, contextWindow, turnsCompressed, truncated, nil
 }
 
@@ -122,6 +138,7 @@ func (a *Agent) NewSession() {
 	a.turnCount = 0
 	a.guard = a.newGuardForSession(a.sessionID)
 	a.working.Clear()
+	a.sessionState = ""
 	a.toolSummary = nil
 }
 
@@ -160,8 +177,8 @@ func (a *Agent) RestoreSession(ctx context.Context) int {
 	a.turnCount = 0
 	a.guard = a.newGuardForSession(a.sessionID)
 	a.working.Clear()
+	a.sessionState = strings.TrimSpace(st.SessionState)
 	a.toolSummary = nil
-	a.resumeInput = ""
 	for _, m := range st.LastMessages {
 		a.working.AddMessage(m)
 	}
@@ -177,12 +194,6 @@ func (a *Agent) RestoreToolSummary(ctx context.Context) string {
 		return ""
 	}
 	return memory.FormatToolSummary(st.ToolSummary)
-}
-
-func (a *Agent) ConsumeResumeInput() string {
-	input := a.resumeInput
-	a.resumeInput = ""
-	return input
 }
 
 func (a *Agent) WorkingMessages() []model.Message {

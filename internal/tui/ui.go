@@ -94,7 +94,7 @@ func (t *TUI) renderCompactPanel(r protocol.CompactResult) string {
 		fmt.Sprintf("  %s: %s%s", t.i18n.T("compact.before"), fmtTok(r.BeforeTokens), pct(r.BeforeTokens, r.ContextWindow)),
 		fmt.Sprintf("  %s: %s%s", t.i18n.T("compact.after"), fmtTok(r.AfterTokens), pct(r.AfterTokens, r.ContextWindow)),
 		"",
-		fmt.Sprintf("  %s: %s", t.i18n.T("compact.retained"), t.i18n.Tf("compact.keep_recent", 10)),
+		fmt.Sprintf("  %s: %s", t.i18n.T("compact.retained"), t.i18n.T("compact.dynamic_recent")),
 	}
 	if r.Noop {
 		lines = append(lines, fmt.Sprintf("  %s", t.i18n.T("compact.noop")))

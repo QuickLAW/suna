@@ -4,55 +4,65 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
 
+	"github.com/alanchenchen/suna/internal/logging"
 	"github.com/alanchenchen/suna/internal/memory"
 	"github.com/alanchenchen/suna/internal/model"
 )
 
 const contextSafetyThreshold = 0.8
 
-func (r *Runner) Compact(ctx context.Context, working *memory.WorkingMemory) (before, after, turnsCompressed, truncated int, err error) {
+func (r *Runner) Compact(ctx context.Context, working *memory.WorkingMemory, sessionState string, contextWindow int) (before, after, turnsCompressed, truncated int, newSessionState string, err error) {
 	if r.Compressor == nil || working == nil {
-		return 0, 0, 0, 0, fmt.Errorf("compressor not initialized")
+		return 0, 0, 0, 0, "", fmt.Errorf("compressor not initialized")
 	}
 	msgs := working.Messages()
 	before = working.EstimatedTokens()
-	if len(msgs) <= memory.KeepRecentTurns {
-		return before, before, 0, 0, nil
+	if len(msgs) <= 1 {
+		return before, before, 0, 0, sessionState, nil
 	}
-	compressed, summary, compErr := r.Compressor.CompressHistory(ctx, msgs)
+	compressed, state, folded, compErr := r.Compressor.CompressHistoryWithState(ctx, msgs, sessionState, contextWindow)
 	if compErr != nil {
-		return 0, 0, 0, 0, compErr
+		return 0, 0, 0, 0, "", compErr
 	}
-	if summary == "" && len(compressed) == len(msgs) {
-		return before, before, 0, 0, nil
+	if state == "" && folded == 0 {
+		return before, before, 0, 0, sessionState, nil
 	}
-	turnsCompressed = len(msgs) - len(compressed)
-	if turnsCompressed < 0 {
-		turnsCompressed = 0
-	}
+	turnsCompressed = folded
 	working.SetMessages(compressed)
 	after = working.EstimatedTokens()
-	for _, m := range msgs {
-		if m.Role == model.RoleTool && len(m.Text()) > 50*1024 {
-			truncated++
-		}
-	}
-	return before, after, turnsCompressed, truncated, nil
+	truncated = countLargeToolOutputs(msgs)
+	return before, after, turnsCompressed, truncated, state, nil
 }
 
-func (r *Runner) compactForRequest(ctx context.Context, working *memory.WorkingMemory, req *model.CompletionRequest, contextWindow int) {
+func (r *Runner) compactForRequest(ctx context.Context, working *memory.WorkingMemory, req *model.CompletionRequest, contextWindow int, sessionState string) (string, error) {
 	if r.Compressor == nil || working == nil {
-		return
+		return sessionState, nil
 	}
 	if !shouldCompactRequest(req, contextWindow) {
-		return
+		return sessionState, nil
 	}
-	keep := chooseRecentKeepForRequest(req, working.Messages(), contextWindow)
-	compressed, _, err := r.Compressor.CompressHistoryKeeping(ctx, working.Messages(), keep)
-	if err == nil {
-		working.SetMessages(compressed)
+	started := time.Now()
+	msgs := working.Messages()
+	before := working.EstimatedTokens()
+	requestTokens := estimateRequestTokens(req)
+	logging.Info("memory", "session_compact_start", logging.Event{"mode": "auto", "purpose": req.Purpose, "model": req.Model, "context_window": contextWindow, "before_tokens": before, "request_tokens": requestTokens, "messages": len(msgs)})
+	recentBudget := compactRecentBudget(req, contextWindow)
+	compressed, state, folded, err := r.Compressor.CompressHistoryWithStateBudget(ctx, msgs, sessionState, contextWindow, recentBudget)
+	if err != nil {
+		logging.Error("memory", "session_compact_failed", err, logging.Event{"mode": "auto", "purpose": req.Purpose, "model": req.Model, "context_window": contextWindow, "before_tokens": before, "request_tokens": requestTokens, "duration_ms": time.Since(started).Milliseconds()})
+		return sessionState, err
 	}
+	if state == "" && folded == 0 {
+		logging.Info("memory", "session_compact_noop", logging.Event{"mode": "auto", "purpose": req.Purpose, "model": req.Model, "context_window": contextWindow, "before_tokens": before, "request_tokens": requestTokens, "messages": len(msgs), "duration_ms": time.Since(started).Milliseconds()})
+		return sessionState, nil
+	}
+	working.SetMessages(compressed)
+	after := working.EstimatedTokens()
+	logging.Info("memory", "session_compact_success", logging.Event{"mode": "auto", "purpose": req.Purpose, "model": req.Model, "context_window": contextWindow, "before_tokens": before, "after_tokens": after, "request_tokens": requestTokens, "folded_messages": folded, "recent_messages": len(compressed) - 1, "truncated_tool_outputs": countLargeToolOutputs(msgs), "duration_ms": time.Since(started).Milliseconds()})
+	return state, nil
 }
 
 func shouldCompactRequest(req *model.CompletionRequest, contextWindow int) bool {
@@ -77,52 +87,50 @@ func estimateRequestTokens(req *model.CompletionRequest) int {
 	return total
 }
 
-func fixedRequestTokens(req *model.CompletionRequest) int {
-	if req == nil {
+func compactRecentBudget(req *model.CompletionRequest, contextWindow int) int {
+	if req == nil || contextWindow <= 0 {
 		return 0
 	}
-	fixed := model.EstimateTokens(req.System) + req.MaxTokens
+	fixed := model.EstimateTokens(req.System) + req.MaxTokens + memory.SessionStateTokenBudget(contextWindow)
 	if len(req.Tools) > 0 {
 		if data, err := json.Marshal(req.Tools); err == nil {
 			fixed += model.EstimateTokens(string(data))
 		}
 	}
-	return fixed
-}
-
-func chooseRecentKeepForRequest(req *model.CompletionRequest, working []model.Message, contextWindow int) int {
-	if len(working) <= 1 {
-		return len(working)
-	}
-	budget := int(float64(contextWindow)*contextSafetyThreshold) - fixedRequestTokens(req) - nonWorkingMessageTokens(req, working)
-	if budget <= 0 {
+	budget := int(float64(contextWindow)*contextSafetyThreshold) - fixed
+	if budget < 1 {
 		return 1
 	}
-	keep := 0
-	tokens := 0
-	for i := len(working) - 1; i >= 0 && keep < memory.KeepRecentTurns; i-- {
-		msgTokens := model.EstimateMessagesTokens([]model.Message{working[i]})
-		if keep > 0 && tokens+msgTokens > budget {
-			break
-		}
-		tokens += msgTokens
-		keep++
-		if tokens > budget {
-			break
-		}
-	}
-	if keep < 1 {
-		keep = 1
-	}
-	if keep >= len(working) {
-		keep = len(working) - 1
-	}
-	return keep
+	return budget
 }
 
-func nonWorkingMessageTokens(req *model.CompletionRequest, working []model.Message) int {
-	if req == nil || len(req.Messages) <= len(working) {
-		return 0
+func countLargeToolOutputs(messages []model.Message) int {
+	count := 0
+	for _, m := range messages {
+		if m.Role == model.RoleTool && len(m.Text()) > 50*1024 {
+			count++
+		}
 	}
-	return model.EstimateMessagesTokens(req.Messages[:len(req.Messages)-len(working)])
+	return count
+}
+
+func trimToolResultsForContext(messages []model.Message) []model.Message {
+	out := make([]model.Message, len(messages))
+	copy(out, messages)
+	for i, m := range out {
+		if m.Role != model.RoleTool {
+			continue
+		}
+		text := memory.TruncateToolOutputForContext(m.Text())
+		if strings.TrimSpace(text) == strings.TrimSpace(m.Text()) {
+			continue
+		}
+		out[i] = model.Message{
+			Role:        model.RoleTool,
+			ToolCallID:  m.ToolCallID,
+			TextContent: text,
+			Content:     []model.ContentBlock{{Type: model.ContentText, Text: text}},
+		}
+	}
+	return out
 }

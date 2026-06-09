@@ -73,9 +73,8 @@ const (
 )
 
 const (
-	NotifyCompactResult       = "session.compact_result"
-	NotifySessionRestoreMsg   = "session.restore_message"
-	NotifySessionRestoreInput = "session.restore_input"
+	NotifyCompactResult     = "session.compact_result"
+	NotifySessionRestoreMsg = "session.restore_message"
 )
 
 const (

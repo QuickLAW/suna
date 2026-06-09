@@ -98,6 +98,20 @@ MCP server 配置位于 `config.toml` 的 `[mcp.servers.<name>]`。daemon 启动
 
 TUI 可以缓存配置快照用于展示，但真实持久化状态以 daemon 为准。
 
+## 记忆与会话状态
+
+Suna 当前是单用户单当前会话形态，不提供多会话管理或完整历史搜索。记忆系统分工如下：
+
+- `user_memory`：长期 active memory，只保存少量跨会话稳定的用户偏好、习惯、约束和纠错。
+- `conversation_state.session_state`：当前会话的 Session State，由 compact 生成/更新，保存 active context、完成任务/话题账本、用户要求、关键决策、tool facts 和 open threads。
+- `conversation_state.last_messages`：TUI 恢复展示用的真实可见 user/assistant 对话；不保存 system state、原始 tool call/result 或 raw 结构。
+- `conversation_state.tool_summary`：TUI-only 的工具摘要，恢复时展示给用户，不作为原始 tool 上下文注入模型。
+- `memory_queue`：active memory 的临时提取队列，daemon worker 批量处理后删除。
+
+模型请求的缓存友好结构为：稳定 system/project/skill/tool schema 前缀 + 低频变化的 Session State + append-only recent messages + 靠近 latest user 的 active memory。Session State 不拼进 system prompt；active memory 也不放在 prior conversation 前面。
+
+自动 compact 在完整请求超过上下文窗口 80% 安全阈值时触发。compact 成功后，working memory 变为 `Session State + budget-aware recent window`。compact 失败时不使用 fallback、不硬裁剪继续，并通过 TUI 显示错误。
+
 ## 文档分工
 
 - `README.md`：用户入口、功能说明、安装和常用操作。

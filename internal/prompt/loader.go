@@ -60,9 +60,10 @@ func (l *Loader) RenderSystem(data SystemPromptData) (string, error) {
 	})
 }
 
-func (l *Loader) RenderCompress(content string) (string, error) {
+func (l *Loader) RenderCompressWithState(previousState, content string) (string, error) {
 	return l.Render("compress", map[string]any{
-		"Content": content,
+		"PreviousState": previousState,
+		"Content":       content,
 	})
 }
 

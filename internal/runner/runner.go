@@ -9,6 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/alanchenchen/suna/internal/logging"
+	"github.com/alanchenchen/suna/internal/memory"
 	"github.com/alanchenchen/suna/internal/model"
 	"github.com/alanchenchen/suna/internal/tools"
 )
@@ -65,25 +67,42 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			MaxTokens: req.MaxTokens,
 		}
 		if req.AutoCompress {
+			completionReq.Messages = trimToolResultsForContext(completionReq.Messages)
 			needCompact := shouldCompactRequest(completionReq, contextWindow)
 			if needCompact && r.Sink != nil {
 				r.Sink.Status("compact_running")
 			}
-			r.compactForRequest(ctx, req.Working, completionReq, contextWindow)
-			if needCompact && r.Sink != nil {
-				r.Sink.Status("compact_done")
+			var compactErr error
+			if needCompact {
+				req.SessionState, compactErr = r.compactForRequest(ctx, req.Working, completionReq, contextWindow, req.SessionState)
+				if compactErr != nil {
+					if r.Sink != nil {
+						r.Sink.Status("compact_error: automatic context compression failed: " + compactErr.Error())
+					}
+					return result, fmt.Errorf("automatic context compression failed: %w", compactErr)
+				}
+				if r.Sink != nil {
+					r.Sink.Status("compact_done")
+				}
 			}
 			messages = req.Working.Messages()
 			if req.Messages != nil {
 				messages = req.Messages(ctx)
 			}
-			completionReq.Messages = messages
+			completionReq.Messages = trimToolResultsForContext(messages)
 			if shouldCompactRequest(completionReq, contextWindow) {
+				estimated := estimateRequestTokens(completionReq)
+				safeLimit := int(float64(contextWindow) * contextSafetyThreshold)
+				logging.Error("memory", "session_compact_still_oversized", nil, logging.Event{"mode": "auto", "purpose": req.Purpose, "model": req.ModelID, "context_window": contextWindow, "request_tokens": estimated, "safe_limit": safeLimit, "compacted": needCompact})
 				if needCompact && r.Sink != nil {
 					r.Sink.Status("compact_error: automatic context compression could not reduce the request enough; try /compact manually, reduce the current input, or start a new session")
 				}
-				return result, fmt.Errorf("context remains too large after compaction (%d tokens estimated, %d token safe limit); start a new session or reduce the current input", estimateRequestTokens(completionReq), int(float64(contextWindow)*contextSafetyThreshold))
+				return result, fmt.Errorf("context remains too large after compaction (%d tokens estimated, %d token safe limit); start a new session or reduce the current input", estimated, safeLimit)
 			}
+		}
+
+		if req.AutoCompress {
+			result.SessionState = req.SessionState
 		}
 
 		if r.Sink != nil {
@@ -166,11 +185,13 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		})
 
 		for _, execResult := range results {
+			// TUI 事件仍拿原始工具结果展示；WorkingMemory 只保存面向模型的截断版本，避免单个工具输出直接撑爆上下文。
+			toolText := memory.TruncateToolOutputForContext(execResult.result.Content)
 			req.Working.AddMessage(model.Message{
 				Role:        model.RoleTool,
 				ToolCallID:  execResult.tc.ID,
-				TextContent: execResult.result.Content,
-				Content:     []model.ContentBlock{{Type: model.ContentText, Text: execResult.result.Content}},
+				TextContent: toolText,
+				Content:     []model.ContentBlock{{Type: model.ContentText, Text: toolText}},
 			})
 			if r.Hooks.OnToolResult != nil {
 				r.Hooks.OnToolResult(execResult.tc.Name, execResult.result)

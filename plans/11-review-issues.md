@@ -16,7 +16,7 @@
 ### ✅ 压缩保留口径不一致
 - 01-architecture.md: "超过 20 轮的部分压缩"
 - 06-memory.md: "保留区: 最近 10 轮"
-- **已修复**: 当前口径为 working memory 消息数；手动 compact 保留最近最多 10 条消息，自动 compact 按完整请求预算决定 recent suffix。
+- **已修复**: 当前口径为 Session State + budget-aware recent window；手动 compact 不再固定最近 10 条，自动 compact 按完整请求预算决定 dynamic recent messages。
 
 ### ✅ Guard TOML 格式不一致
 - 04-guard.md: `[[guard.blocked]]` (数组表)
@@ -87,7 +87,7 @@
 - 补充 H1 提取 name 逻辑
 
 ### ✅ 06-memory.md 压缩阈值
-- 当前口径已更新为：自动 compact 检测完整 LLM 请求的 80% 安全阈值；手动 compact 保留最近最多 10 条 working messages。
+- 当前口径已更新为：自动 compact 检测完整 LLM 请求的 80% 安全阈值；手动 compact 使用 Session State + budget-aware recent window，不固定保留 10 条 working messages。
 
 ### ✅ 06-memory.md embedding 大小
 - 统一为 ~4-8KB (取决于维度)

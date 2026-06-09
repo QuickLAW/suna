@@ -344,13 +344,13 @@ data:image/png;base64,...
 
 ## 记忆、会话与上下文
 
-### 记忆
+### Active Memory
 
-Suna 会维护轻量记忆，用于保存：
+Suna 会维护轻量 active memory，用于保存：
 
 - 你的长期偏好；
 - 常用工作方式；
-- 重要事实；
+- 长期约束；
 - 对模型行为的纠错。
 
 可通过：
@@ -361,13 +361,15 @@ Suna 会维护轻量记忆，用于保存：
 
 查看当前 active memory。
 
-记忆不是完整知识库，也不是全文历史搜索。它更适合少量高价值事实。
+Active memory 不是完整知识库，也不是全文历史搜索。它只保存少量跨会话稳定信息；一次性任务细节、工具记录和本次会话里的话题账本不会写入 active memory。
 
-### 会话
+### 会话恢复
 
-- `/new` 会开启新会话。
+- Suna 当前是单用户单当前会话形态：`/new` 会清空当前会话并开始新会话。
 - Welcome 页可以恢复最近会话。
-- TUI 退出后，daemon 和本地数据仍保留必要状态。
+- TUI 恢复时展示真实的 user/assistant 对话，让你能回看之前聊天。
+- 模型不一定加载全部历史 transcript；如果当前会话曾 compact，模型会用持久化的 Session State 加动态最近对话窗口继续。
+- 原始 tool call / tool result 不会作为恢复上下文重新注入模型；重要工具事实由 Session State 承载，工具摘要只用于 TUI 展示。
 
 ### 上下文压缩
 
@@ -377,11 +379,19 @@ Suna 会维护轻量记忆，用于保存：
 /compact
 ```
 
+compact 的目标不是简单“生成摘要”，而是更新当前会话的内部 `Session State`：
+
+- 保留当前任务/对话的执行状态，避免自动 compact 后任务中断；
+- 把较早完成的任务、讨论过的话题、用户要求和关键决策写入会话账本；
+- 把工具调用结果压成事实，避免大段日志继续占用模型上下文；
+- 用动态 recent window 保留最近真实对话细节。
+
 长对话小技巧：
 
-- 如果你只是想稍后继续，直接退出 TUI，之后从 Welcome 恢复最近会话通常更不容易丢细节。
-- 如果上下文接近模型窗口上限，使用 `/compact` 更合适。
-- 压缩会生成摘要，较早细节可能被概括化。
+- 没有触发过 compact 的短会话，恢复时基本就是最近真实对话恢复。
+- 触发过 compact 的长会话，TUI 仍展示真实对话，但模型会基于 `Session State + 最近真实对话` 继续。
+- 自动 compact 只在完整请求接近模型上下文窗口安全阈值时触发；手动 `/compact` 可主动整理当前上下文。
+- 如果 compact 的 LLM 请求失败，Suna 不会使用伪摘要兜底，会直接提示错误并停止本轮请求，避免继续时记忆不准。
 
 ## Subtask 委派
 
@@ -514,7 +524,11 @@ C:\Users\<你>\.suna\logs\app.log
 
 ### `memory.db`
 
-SQLite 数据库，用于保存记忆、会话、用量等本地数据。
+SQLite 数据库，用于保存记忆、当前会话恢复状态、用量等本地数据。其中 `conversation_state` 保存：
+
+- `session_state`：compact 后的当前会话内部状态，给模型恢复和后续 compact 使用；
+- `last_messages`：TUI 展示真实历史对话用的 user/assistant 可见文本；
+- `tool_summary`：TUI 恢复展示工具摘要用，不恢复原始 tool 输出。
 
 ### 日志
 

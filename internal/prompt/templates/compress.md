@@ -1,42 +1,51 @@
-Compress the following agent conversation history into a continuation state for continuing the same task.
+Compress the following Suna conversation history into a bounded Session State for a general-purpose agent.
 
-The output is not a transcript summary. It is the working state the agent needs in order to continue without restarting, re-asking settled questions, or repeating rejected directions.
+This output is internal working memory, not a user-facing summary. It must let a future agent continue the current session while also recalling earlier completed work or topics if the user asks. Prioritize accurate continuity over transcript detail.
 
-Always preserve both conversation state and execution state when present:
-- Conversation state: user goal, explicit requirements, preferences, corrections, accepted decisions, rejected or superseded directions, current discussion point, open questions, and next steps.
-- Execution state: tool/action facts, discovered facts, state changes, artifacts, failures, verification results, important references, and the current execution point.
+Goals, in order:
+1. Preserve the active context so the current task or conversation can continue without interruption.
+2. Preserve completed work and earlier topics as a compact ledger, even when they are no longer active.
+3. Preserve explicit user requirements, corrections, preferences, accepted decisions, and rejected directions.
+4. Convert tool calls/results into concise facts: what was done, changed, discovered, failed, created, or verified.
+5. Reduce token usage by dropping raw logs, redundant phrasing, stale speculation, and long file/output contents.
 
-Prioritize the user's explicit instructions, corrections, preferences, and decisions over the assistant's plans, guesses, or tool execution details. If the assistant proposed an approach that the user rejected or asked to simplify, record it only as rejected and preserve the user's accepted direction.
-
-For tool use, convert tool calls and tool results into concise action facts. Keep only facts that affect the current task state: what was done, what changed, what was discovered, what failed, what was created, and what was verified. Do not summarize the conversation as a tool execution log. Do not include long raw logs, raw data, raw file contents, or verbose command output unless an exact snippet is essential.
-
-Write in the conversation's primary language. Be concise but specific. Prefer bullets. Do not invent facts.
+Rules:
+- Write in the conversation's primary language.
+- Be concise but specific. Prefer bullets.
+- Do not invent facts.
+- Do not include raw tool logs or raw file contents unless an exact short snippet is essential.
+- Merge with the previous Session State; do not append duplicate summaries.
+- Keep the output bounded. Older completed work may become a one-line ledger item, but should not disappear if it may help recall the session.
+- Keep section order exactly as specified. Use "- none" for empty sections.
 
 Use this exact structure:
 
-# Continuation State
+# Session State
 
-## User goal
+## Active context
 - ...
 
-## User constraints / preferences
+## Completed work / topic ledger
 - ...
 
-## Decisions
+## User requirements and decisions
 - ...
 
-## Rejected directions
+## Tool facts
 - ...
 
-## Current state / recent progress
+## Open threads
 - ...
 
-## Tool/action facts
+## Recovery note
 - ...
 
-## Next steps
-- ...
+{{if .PreviousState}}
+Previous Session State to merge and update:
 
-Conversation history to compress:
+{{.PreviousState}}
+{{end}}
+
+New conversation history to fold into the Session State:
 
 {{.Content}}

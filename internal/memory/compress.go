@@ -10,13 +10,16 @@ import (
 )
 
 const (
-	compressThreshold            = 0.8
-	KeepRecentTurns              = 10
 	maxToolOutputLines           = 500
 	maxToolOutputBytes           = 50 * 1024
 	maxCompressAssistantBytes    = 6 * 1024
 	maxCompressToolResultBytes   = 4 * 1024
 	maxCompressToolArgumentBytes = 2 * 1024
+	maxSessionStateTokens        = 3000
+	minSessionStateTokens        = 1200
+	recentChatUserTurns          = 6
+	recentToolUserTurns          = 2
+	maxRecentMessages            = 48
 )
 
 type Compressor struct {
@@ -32,30 +35,25 @@ func (c *Compressor) SetPrompts(p *prompt.Loader) {
 	c.prompts = p
 }
 
-func (c *Compressor) ShouldCompress(messages []model.Message, contextWindow int) bool {
-	tokens := model.EstimateMessagesTokens(messages)
-	return float64(tokens) > float64(contextWindow)*compressThreshold
-}
-
-// EstimateTokens 返回消息列表的估算 token 数
+// EstimateTokens 返回消息列表的估算 token 数。
 func (c *Compressor) EstimateTokens(messages []model.Message) int {
 	return model.EstimateMessagesTokens(messages)
 }
 
-func (c *Compressor) TruncateToolOutput(content string) string {
+func TruncateToolOutputForContext(content string) string {
 	if len(content) <= maxToolOutputBytes {
 		return content
 	}
 	lines := strings.Split(content, "\n")
 	if len(lines) <= maxToolOutputLines {
-		return truncateUTF8(content, maxToolOutputBytes) + "\n... (truncated)"
+		return truncateUTF8(content, maxToolOutputBytes) + "\n... (truncated; full tool output omitted from model context)"
 	}
 	kept := lines[:maxToolOutputLines]
 	result := strings.Join(kept, "\n")
 	if len(result) > maxToolOutputBytes {
 		result = truncateUTF8(result, maxToolOutputBytes)
 	}
-	return fmt.Sprintf("%s\n... (truncated, %d lines total)", result, len(lines))
+	return fmt.Sprintf("%s\n... (truncated, %d lines total; full tool output omitted from model context)", result, len(lines))
 }
 
 func truncateUTF8(s string, maxBytes int) string {
@@ -73,7 +71,10 @@ func truncateUTF8(s string, maxBytes int) string {
 func formatCompressInput(messages []model.Message) string {
 	var sb strings.Builder
 	for i, m := range messages {
-		if i > 0 {
+		if IsSessionStateMessage(m) {
+			continue
+		}
+		if sb.Len() > 0 {
 			sb.WriteString("\n")
 		}
 		sb.WriteString(formatCompressMessage(i+1, m))
@@ -136,79 +137,199 @@ func isUTF8Boundary(b byte) bool {
 	return b&0xC0 != 0x80
 }
 
-func (c *Compressor) CompressHistory(ctx context.Context, messages []model.Message) ([]model.Message, string, error) {
-	return c.CompressHistoryKeeping(ctx, messages, KeepRecentTurns)
+func (c *Compressor) CompressHistoryWithState(ctx context.Context, messages []model.Message, previousState string, contextWindow int) ([]model.Message, string, int, error) {
+	return c.CompressHistoryWithStateBudget(ctx, messages, previousState, contextWindow, 0)
 }
 
-func (c *Compressor) CompressHistoryKeeping(ctx context.Context, messages []model.Message, keepRecent int) ([]model.Message, string, error) {
+func (c *Compressor) CompressHistoryWithStateBudget(ctx context.Context, messages []model.Message, previousState string, contextWindow, recentTokenBudget int) ([]model.Message, string, int, error) {
+	return c.compressHistoryKeepingState(ctx, messages, previousState, chooseRecentKeepWithBudget(messages, contextWindow, recentTokenBudget), contextWindow)
+}
+
+func (c *Compressor) compressHistoryKeepingState(ctx context.Context, messages []model.Message, previousState string, keepRecent int, contextWindow int) ([]model.Message, string, int, error) {
 	if len(messages) == 0 {
-		return messages, "", nil
+		return messages, "", 0, nil
+	}
+	stateFromMessages, cleanMessages := SplitSessionStateMessages(messages)
+	previousState = joinNonEmpty(previousState, stateFromMessages)
+	if len(cleanMessages) == 0 {
+		return cleanMessages, "", 0, nil
 	}
 
 	keep := keepRecent
 	if keep <= 0 {
-		keep = KeepRecentTurns
+		keep = chooseRecentKeep(cleanMessages, contextWindow)
 	}
-	if len(messages) <= keep {
-		keep = len(messages) - 1
+	if len(cleanMessages) <= keep {
+		keep = len(cleanMessages) - 1
 	}
 	if keep < 1 {
 		keep = 1
 	}
 
-	keepStart := len(messages) - keep
+	keepStart := len(cleanMessages) - keep
 	if keepStart <= 0 {
-		return messages, "", nil
-	}
-	compressRegion := messages[:keepStart]
-	keepRegion := messages[keepStart:]
-
-	summary := formatCompressInput(compressRegion)
-	if c.fastProvider != nil && len(summary) > 500 {
-		compressInput := summary
-		promptText := compressInput
-		systemPrompt := "Compress the following conversation history into a continuation state for the ongoing task. Preserve user goals, constraints, decisions, rejected directions, current state, tool/action facts, and next steps. Convert tool output into state facts instead of logs."
-		if c.prompts != nil {
-			if rendered, err := c.prompts.RenderCompress(compressInput); err == nil && rendered != "" {
-				systemPrompt = ""
-				promptText = rendered
-			}
+		if strings.TrimSpace(previousState) == "" {
+			return cleanMessages, "", 0, nil
 		}
-		req := &model.CompletionRequest{
-			Purpose: "compress",
-			Messages: []model.Message{
-				model.NewTextMessage(model.RoleUser, promptText),
-			},
-			MaxTokens: 1000,
-		}
-		if systemPrompt != "" {
-			req.System = systemPrompt
-		}
-		ch, err := c.fastProvider.Complete(ctx, req)
-		if err == nil {
-			var full string
-			for chunk := range ch {
-				if chunk.Content != "" {
-					full += chunk.Content
-				}
-				if chunk.Done {
-					break
-				}
-			}
-			if full != "" {
-				summary = full
-			}
+		// 已有 Session State 时，即使当前消息很少，也继续让压缩器合并最新上下文，避免状态长期停留在旧 compact 结果。
+		keepStart = len(cleanMessages) - 1
+		if keepStart < 1 {
+			keepStart = 1
 		}
 	}
+	compressRegion := cleanMessages[:keepStart]
+	keepRegion := cleanMessages[keepStart:]
 
-	stateText := "Continuation state for the ongoing task:\n" + summary
-	result := []model.Message{
-		{
-			Role:        model.RoleSystem,
-			TextContent: stateText,
-			Content:     []model.ContentBlock{{Type: model.ContentText, Text: stateText}},
+	compressInput := formatCompressInput(compressRegion)
+	if strings.TrimSpace(compressInput) == "" && strings.TrimSpace(previousState) == "" {
+		return messages, "", 0, nil
+	}
+	if c.fastProvider == nil {
+		return nil, "", 0, fmt.Errorf("compressor model provider is not configured")
+	}
+
+	if c.prompts == nil {
+		return nil, "", 0, fmt.Errorf("compress prompt loader is not configured")
+	}
+	// compress prompt 是 Session State 正确性的边界；模板渲染失败时不能静默退化，否则 previous state 可能丢失。
+	promptText, err := c.prompts.RenderCompressWithState(previousState, compressInput)
+	if err != nil {
+		return nil, "", 0, fmt.Errorf("render compress prompt: %w", err)
+	}
+	if strings.TrimSpace(promptText) == "" {
+		return nil, "", 0, fmt.Errorf("render compress prompt: empty prompt")
+	}
+	req := &model.CompletionRequest{
+		Purpose: "compress",
+		Messages: []model.Message{
+			model.NewTextMessage(model.RoleUser, promptText),
 		},
+		MaxTokens: sessionStateMaxTokens(contextWindow),
 	}
+	ch, err := c.fastProvider.Complete(ctx, req)
+	if err != nil {
+		return nil, "", 0, err
+	}
+	var state string
+	for chunk := range ch {
+		if chunk.Error != "" {
+			return nil, "", 0, fmt.Errorf("%s", chunk.Error)
+		}
+		if chunk.Content != "" {
+			state += chunk.Content
+		}
+		if chunk.Done {
+			break
+		}
+	}
+	state = strings.TrimSpace(state)
+	if state == "" {
+		return nil, "", 0, fmt.Errorf("compressor returned empty session state")
+	}
+
+	result := []model.Message{NewSessionStateMessage(state)}
 	result = append(result, keepRegion...)
-	return result, summary, nil
+	return result, state, len(compressRegion), nil
+}
+
+func sessionStateMaxTokens(contextWindow int) int {
+	return SessionStateTokenBudget(contextWindow)
+}
+
+func SessionStateTokenBudget(contextWindow int) int {
+	if contextWindow <= 0 {
+		return 2000
+	}
+	n := contextWindow / 100
+	if n < minSessionStateTokens {
+		n = minSessionStateTokens
+	}
+	if n > maxSessionStateTokens {
+		n = maxSessionStateTokens
+	}
+	return n
+}
+
+func chooseRecentKeep(messages []model.Message, contextWindow int) int {
+	return chooseRecentKeepWithBudget(messages, contextWindow, 0)
+}
+
+func chooseRecentKeepWithBudget(messages []model.Message, contextWindow, budget int) int {
+	if len(messages) <= 1 {
+		return len(messages)
+	}
+	// recent window 由代码按用户 turn 选择，不能交给 LLM 决定；这样 compact 后上下文稳定、可测试，且不破坏缓存命中。
+	targetTurns := recentChatUserTurns
+	if isToolHeavy(messages) {
+		// tool-heavy 场景中 tool call/result 会快速挤占消息数，因此按更少用户 turn 保留当前工具链附近上下文。
+		targetTurns = recentToolUserTurns
+	}
+	if budget <= 0 {
+		budget = recentWindowTokenBudget(contextWindow)
+	}
+	turns := 0
+	keep := 0
+	tokens := 0
+	for i := len(messages) - 1; i >= 0 && keep < maxRecentMessages; i-- {
+		msgTokens := model.EstimateMessagesTokens([]model.Message{messages[i]})
+		// 至少保留最新一条消息；之后严格服从预算，避免 compact 后仍因 recent window 过大而超限。
+		if keep > 0 && budget > 0 && tokens+msgTokens > budget {
+			break
+		}
+		tokens += msgTokens
+		keep++
+		if messages[i].Role == model.RoleUser {
+			turns++
+			if turns >= targetTurns {
+				break
+			}
+		}
+	}
+	if keep >= len(messages) {
+		keep = len(messages) - 1
+	}
+	if keep < 1 {
+		keep = 1
+	}
+	return keep
+}
+
+func recentWindowTokenBudget(contextWindow int) int {
+	if contextWindow <= 0 {
+		return 0
+	}
+	budget := int(float64(contextWindow)*0.8) - sessionStateMaxTokens(contextWindow) - model.DefaultMaxTokens
+	if budget < 1 {
+		return 1
+	}
+	return budget
+}
+
+func isToolHeavy(messages []model.Message) bool {
+	if len(messages) == 0 {
+		return false
+	}
+	start := len(messages) - 24
+	if start < 0 {
+		start = 0
+	}
+	toolLike := 0
+	for _, m := range messages[start:] {
+		if m.Role == model.RoleTool || len(m.ToolCalls) > 0 {
+			toolLike++
+		}
+	}
+	return toolLike >= 3
+}
+
+func joinNonEmpty(a, b string) string {
+	a = strings.TrimSpace(a)
+	b = strings.TrimSpace(b)
+	if a == "" {
+		return b
+	}
+	if b == "" {
+		return a
+	}
+	return a + "\n\n" + b
 }

@@ -44,7 +44,7 @@ type Agent struct {
 	mcp          *mcp.Runtime
 	sessionID    string
 	turnCount    int
-	resumeInput  string
+	sessionState string
 	toolSummary  []memory.ToolSummaryItem
 
 	extractQueue  *memory.ExtractQueue
@@ -210,6 +210,7 @@ func (a *Agent) Run(ctx context.Context, input Input) <-chan Event {
 			EmitStream:    true,
 			EmitReasoning: true,
 			AutoCompress:  true,
+			SessionState:  a.sessionState,
 		})
 		if err != nil {
 			content := "error: " + err.Error()
@@ -220,6 +221,7 @@ func (a *Agent) Run(ctx context.Context, input Input) <-chan Event {
 			return
 		}
 
+		a.sessionState = res.SessionState
 		a.enqueueMemoryEvent(runCtx, model.RoleAssistant, res.FinalText, res.HadToolCall, res.HadToolError, false, false)
 		events <- Event{Type: EventStatus, Content: "done", ContextWindow: res.ContextWindow}
 	}()
