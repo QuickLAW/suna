@@ -7,10 +7,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 )
 
 type stdioTransport struct {
@@ -100,21 +98,4 @@ func (t *stdioTransport) drainStderr() {
 	for t.stderr != nil && t.stderr.Scan() {
 		// 保持 stderr 被消费，避免 MCP server 因日志阻塞；后续可接入日志系统展示。
 	}
-}
-
-func setProcessGroup(cmd *exec.Cmd) {
-	if runtime.GOOS != "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	}
-}
-
-func killProcessTree(p *os.Process) {
-	if p == nil {
-		return
-	}
-	if runtime.GOOS != "windows" {
-		_ = syscall.Kill(-p.Pid, syscall.SIGKILL)
-		return
-	}
-	_ = p.Kill()
 }
