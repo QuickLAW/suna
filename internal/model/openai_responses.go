@@ -165,7 +165,10 @@ func (p *OpenAIResponsesProvider) resolveTemperature(t float64) float64 {
 }
 
 func (p *OpenAIResponsesProvider) buildInput(ctx context.Context, req *CompletionRequest) (responses.ResponseInputParam, error) {
-	input := make(responses.ResponseInputParam, 0, len(req.Messages)*2)
+	input := make(responses.ResponseInputParam, 0, len(req.Messages)*2+1)
+	if state := FormatSessionStateForModel(req.SessionState); state != "" {
+		input = append(input, responses.ResponseInputItemParamOfMessage(state, responses.EasyInputMessageRoleUser))
+	}
 	for _, m := range req.Messages {
 		switch m.Role {
 		case RoleUser:

@@ -269,8 +269,9 @@ Subtask 不能创建嵌套 subtask（工具列表不含 Spawn）。
 ├──────────────────────────────────────────────┤
 │ 工具 schemas           稳定排序               │
 ├──────────────────────────────────────────────┤
+│ Session State          当前会话压缩状态      │
+├──────────────────────────────────────────────┤
 │ Working Memory         当前会话短期上下文      │
-│   ├── Session State (如已 compact)             │
 │   ├── recent conversation window               │
 │   ├── Active Memory brief (当前轮背景)         │
 │   └── current user message                    │
@@ -317,7 +318,7 @@ Subtask 不能创建嵌套 subtask（工具列表不含 Spawn）。
   4. 用剩余预算选择 dynamic recent messages。
        普通对话保留更多 user turn；tool-heavy 保留更小窗口；至少保留最新 1 条。
   5. 将 recent 之前的 working memory 和旧 Session State 交给压缩 LLM，生成新的 Session State。
-  6. WorkingMemory 变为：Session State + dynamic recent messages。
+  6. WorkingMemory 变为 dynamic recent messages；新的 Session State 保存在独立会话状态字段，并在 provider 请求层注入模型上下文。
   7. 压缩完成后通过 `session.compact_result {running:false}` 结束 TUI loading。
   8. 重建完整请求后再次估算。
        如果仍超过安全阈值，通过 `session.compact_result {running:false,error}` 告知 TUI，并返回明确错误，不继续撞 provider context limit。

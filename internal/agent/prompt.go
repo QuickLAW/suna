@@ -31,15 +31,6 @@ func (a *Agent) buildSystemPrompt(ctx context.Context) (string, error) {
 
 func (a *Agent) buildRequestMessages(ctx context.Context) []model.Message {
 	msgs := a.working.Messages()
-	if strings.TrimSpace(a.sessionState) != "" {
-		// Session State 属于低频变化的工作上下文，不能拼进 system prompt；否则每次 compact 都会破坏稳定前缀缓存。
-		cleanState, cleanMsgs := memory.SplitSessionStateMessages(msgs)
-		state := a.sessionState
-		if strings.TrimSpace(cleanState) != "" {
-			state = cleanState
-		}
-		msgs = append([]model.Message{memory.NewSessionStateMessage(state)}, cleanMsgs...)
-	}
 	if a.memories == nil {
 		return msgs
 	}

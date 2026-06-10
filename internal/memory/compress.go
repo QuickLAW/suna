@@ -71,9 +71,6 @@ func truncateUTF8(s string, maxBytes int) string {
 func formatCompressInput(messages []model.Message) string {
 	var sb strings.Builder
 	for i, m := range messages {
-		if IsSessionStateMessage(m) {
-			continue
-		}
 		if sb.Len() > 0 {
 			sb.WriteString("\n")
 		}
@@ -149,8 +146,7 @@ func (c *Compressor) compressHistoryKeepingState(ctx context.Context, messages [
 	if len(messages) == 0 {
 		return messages, "", 0, nil
 	}
-	stateFromMessages, cleanMessages := SplitSessionStateMessages(messages)
-	previousState = joinNonEmpty(previousState, stateFromMessages)
+	cleanMessages := messages
 	if len(cleanMessages) == 0 {
 		return cleanMessages, "", 0, nil
 	}
@@ -227,9 +223,7 @@ func (c *Compressor) compressHistoryKeepingState(ctx context.Context, messages [
 		return nil, "", 0, fmt.Errorf("compressor returned empty session state")
 	}
 
-	result := []model.Message{NewSessionStateMessage(state)}
-	result = append(result, keepRegion...)
-	return result, state, len(compressRegion), nil
+	return keepRegion, state, len(compressRegion), nil
 }
 
 func sessionStateMaxTokens(contextWindow int) int {
@@ -320,16 +314,4 @@ func isToolHeavy(messages []model.Message) bool {
 		}
 	}
 	return toolLike >= 3
-}
-
-func joinNonEmpty(a, b string) string {
-	a = strings.TrimSpace(a)
-	b = strings.TrimSpace(b)
-	if a == "" {
-		return b
-	}
-	if b == "" {
-		return a
-	}
-	return a + "\n\n" + b
 }

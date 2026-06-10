@@ -58,13 +58,14 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		tools := buildToolDefs(req)
 		contextWindow := r.contextWindow(req.ModelRef)
 		completionReq := &model.CompletionRequest{
-			Model:     req.ModelID,
-			Purpose:   req.Purpose,
-			RequestID: uuid.New().String(),
-			System:    req.System,
-			Messages:  messages,
-			Tools:     tools,
-			MaxTokens: req.MaxTokens,
+			Model:        req.ModelID,
+			Purpose:      req.Purpose,
+			RequestID:    uuid.New().String(),
+			System:       req.System,
+			SessionState: req.SessionState,
+			Messages:     messages,
+			Tools:        tools,
+			MaxTokens:    req.MaxTokens,
 		}
 		if req.AutoCompress {
 			completionReq.Messages = trimToolResultsForContext(completionReq.Messages)
@@ -75,6 +76,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			var compactErr error
 			if needCompact {
 				req.SessionState, compactErr = r.compactForRequest(ctx, req.Working, completionReq, contextWindow, req.SessionState)
+				completionReq.SessionState = req.SessionState
 				if compactErr != nil {
 					if r.Sink != nil {
 						r.Sink.Status(StatusEvent{Kind: StatusCompactError, Message: "automatic context compression failed: " + compactErr.Error()})

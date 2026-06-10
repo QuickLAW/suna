@@ -166,6 +166,9 @@ func (p *OpenAIChatProvider) buildMessages(ctx context.Context, req *CompletionR
 	if req.System != "" {
 		msgs = append(msgs, openai.SystemMessage(req.System))
 	}
+	if state := FormatSessionStateForModel(req.SessionState); state != "" {
+		msgs = append(msgs, openai.UserMessage(state))
+	}
 	for _, m := range req.Messages {
 		switch m.Role {
 		case RoleUser:

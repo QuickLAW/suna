@@ -175,7 +175,10 @@ func (p *AnthropicProvider) ContextWindow() int {
 }
 
 func (p *AnthropicProvider) buildMessages(ctx context.Context, req *CompletionRequest) ([]anthropic.MessageParam, error) {
-	msgs := make([]anthropic.MessageParam, 0, len(req.Messages))
+	msgs := make([]anthropic.MessageParam, 0, len(req.Messages)+1)
+	if state := FormatSessionStateForModel(req.SessionState); state != "" {
+		msgs = append(msgs, anthropic.NewUserMessage(anthropic.NewTextBlock(state)))
+	}
 	for i := 0; i < len(req.Messages); i++ {
 		m := req.Messages[i]
 		switch m.Role {

@@ -61,7 +61,7 @@ func (r *Runner) compactForRequest(ctx context.Context, working *memory.WorkingM
 	}
 	working.SetMessages(compressed)
 	after := working.EstimatedTokens()
-	logging.Info("memory", "session_compact_success", logging.Event{"mode": "auto", "purpose": req.Purpose, "model": req.Model, "context_window": contextWindow, "before_tokens": before, "after_tokens": after, "request_tokens": requestTokens, "folded_messages": folded, "recent_messages": len(compressed) - 1, "truncated_tool_outputs": countLargeToolOutputs(msgs), "duration_ms": time.Since(started).Milliseconds()})
+	logging.Info("memory", "session_compact_success", logging.Event{"mode": "auto", "purpose": req.Purpose, "model": req.Model, "context_window": contextWindow, "before_tokens": before, "after_tokens": after, "request_tokens": requestTokens, "folded_messages": folded, "recent_messages": len(compressed), "truncated_tool_outputs": countLargeToolOutputs(msgs), "duration_ms": time.Since(started).Milliseconds()})
 	return state, nil
 }
 
@@ -77,6 +77,7 @@ func estimateRequestTokens(req *model.CompletionRequest) int {
 		return 0
 	}
 	total := model.EstimateTokens(req.System)
+	total += model.EstimateTokens(model.FormatSessionStateForModel(req.SessionState))
 	total += model.EstimateMessagesTokens(req.Messages)
 	total += req.MaxTokens
 	if len(req.Tools) > 0 {

@@ -37,7 +37,7 @@ Suna 的记忆目标不是保存所有历史，也不是构建长期知识库，
 │ 当前会话的内部状态账本，由 compact 生成/更新并持久化。           │
 ├─────────────────────────────────────────────────────────────┤
 │ working_memory                                               │
-│ 当前进程内模型工作上下文。compact 后变为 Session State + recent。 │
+│ 当前进程内模型工作上下文。compact 后只保留 recent window。        │
 ├─────────────────────────────────────────────────────────────┤
 │ memory_queue                                                 │
 │ active memory 的临时提取队列。主链路写入，daemon 批量处理后删除。 │
@@ -186,6 +186,7 @@ Compact 的目标：
 ```text
 estimated_request_tokens =
   system prompt
+  + Session State
   + working messages
   + active memory / internal context 注入
   + tool schemas
@@ -206,7 +207,7 @@ estimated_request_tokens =
    - 至少保留最新 1 条。
    - 最多保留固定消息上限，且不能超过 token budget。
 4. 调用压缩 LLM：旧 Session State + 待折叠历史 -> 新 Session State。
-5. WorkingMemory = 新 Session State + dynamic recent messages。
+5. 更新独立 Session State，WorkingMemory = dynamic recent messages。
 6. 重新构造完整请求并再次估算。
 7. 成功则通知 TUI compact_done，模型自动继续。
 8. 如果 compact 失败或 compact 后仍超限，通知 TUI compact_error 并停止本轮模型请求。
@@ -220,8 +221,8 @@ estimated_request_tokens =
 
 ```text
 旧 Session State + 当前 working messages
-  -> 新 Session State
-  -> WorkingMemory = 新 Session State + dynamic recent messages
+  -> 更新独立 Session State
+  -> WorkingMemory = dynamic recent messages
 ```
 
 手动 compact 不看 80% 自动阈值；只要用户执行就会尝试整理。若没有可折叠内容且没有已有 Session State，返回 noop，并在 TUI 说明暂无可压缩内容。若已有 Session State，即使新增消息较少，也会尝试把新上下文合并进 Session State。

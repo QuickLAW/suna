@@ -49,12 +49,11 @@ func TestCompressHistoryBuildsSessionState(t *testing.T) {
 	if folded != 3 {
 		t.Fatalf("folded = %d, want 3", folded)
 	}
-	if len(compressed) != 2 {
-		t.Fatalf("len(compressed) = %d, want 2", len(compressed))
+	if len(compressed) != 1 {
+		t.Fatalf("len(compressed) = %d, want 1 recent message", len(compressed))
 	}
-	first := compressed[0].Text()
-	if !strings.HasPrefix(first, "<session_state>") {
-		t.Fatalf("first message = %q, want session state wrapper", first)
+	if compressed[0].Text() != "好的，改为 continuation state。" {
+		t.Fatalf("recent message = %q, want latest assistant message", compressed[0].Text())
 	}
 	input := provider.request.Messages[0].Text()
 	for _, want := range []string{"# Session State", "## Completed work / topic ledger", "## User requirements and decisions", "<user_message", "不要新增复杂语义"} {
