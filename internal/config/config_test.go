@@ -112,7 +112,7 @@ func TestConfigReasoningSavesInlineThinkingTable(t *testing.T) {
 		Models: []ModelConfig{{
 			Provider:  "DF",
 			Model:     "GLM-5.1",
-			BaseURL:   "https://www.dreamfield.top/v1",
+			BaseURL:   "https://api.example.com/v1",
 			Strengths: []string{"文本模型", "coding"},
 			Reasoning: map[string]any{
 				"thinking": map[string]any{"type": "disabled"},
@@ -199,8 +199,8 @@ func TestConfigSaveWritesMCPLikeConfigurationDocs(t *testing.T) {
 			Enabled:        false,
 			Transport:      "stdio",
 			Command:        "npx",
-			Args:           []string{"-y", "@modelcontextprotocol/server-filesystem", "/Users/alanchen/project"},
-			CWD:            "/Users/alanchen/project",
+			Args:           []string{"-y", "@modelcontextprotocol/server-filesystem", "/Users/me/project"},
+			CWD:            "/Users/me/project",
 			TimeoutSeconds: 30,
 		},
 		"github": {
@@ -231,8 +231,8 @@ func TestConfigSaveWritesMCPLikeConfigurationDocs(t *testing.T) {
 		"[mcp.servers.context7.headers]",
 		`  Authorization = "Bearer xxx"`,
 		"[mcp.servers.filesystem]",
-		`  args = ["-y", "@modelcontextprotocol/server-filesystem", "/Users/alanchen/project"]`,
-		`  cwd = "/Users/alanchen/project"`,
+		`  args = ["-y", "@modelcontextprotocol/server-filesystem", "/Users/me/project"]`,
+		`  cwd = "/Users/me/project"`,
 		"[mcp.servers.github]",
 		"[mcp.servers.github.env]",
 		`  GITHUB_TOKEN = "ghp_xxx"`,

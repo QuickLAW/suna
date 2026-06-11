@@ -6,7 +6,7 @@ import (
 )
 
 func TestCompactPathKeepsFullPathWhenItFits(t *testing.T) {
-	path := "Users/alanchen/Documents/suna/internal/runner/types.go"
+	path := "Users/me/Documents/suna/internal/runner/types.go"
 	if got := CompactPath(path, 80); got != path {
 		t.Fatalf("CompactPath() = %q, want full path", got)
 	}
@@ -25,7 +25,7 @@ func TestSemanticSummarySearchKeepsQueryAndPathSuffix(t *testing.T) {
 		ParamsRaw: map[string]any{
 			"mode":  "content",
 			"query": "SemanticSummary|tool|truncate",
-			"path":  "/Users/alanchen/Documents/suna/internal/tui",
+			"path":  "/Users/me/Documents/suna/internal/tui",
 		},
 	}
 
@@ -42,7 +42,7 @@ func TestSemanticSummaryReadFileStillCompactsPath(t *testing.T) {
 	entry := &Entry{
 		RawName: "readfile",
 		ParamsRaw: map[string]any{
-			"path": "/Users/alanchen/Documents/suna/internal/tui/components/toolview/summary.go",
+			"path": "/Users/me/Documents/suna/internal/tui/components/toolview/summary.go",
 		},
 	}
 

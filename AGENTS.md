@@ -8,7 +8,7 @@ Suna 是本地终端 AI Agent：CLI 启动 TUI，TUI 通过 protocol/local trans
 
 - Go CLI / daemon / 核心业务。
 - Bubble Tea 体系 TUI，负责终端页面、按键和浮层。
-- TOML 配置，本地 SQLite/文件目录保存记忆、会话、Skill、附件和日志；默认数据/配置目录为用户主目录下的 `.suna`（如 `/Users/alanchen/.suna`），日志位于其 `logs/` 子目录。
+- TOML 配置，本地 SQLite/文件目录保存记忆、会话、Skill、附件和日志；默认数据/配置目录为当前用户主目录下的 `.suna`，日志位于其 `logs/` 子目录。
 - OpenAI / Anthropic / OpenAI-compatible 模型适配。
 - JSON-RPC 风格 protocol 与本地 transport 通信。
 
