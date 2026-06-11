@@ -54,20 +54,20 @@ var defaultSearchExclude = []string{
 type Search struct{}
 
 func (Search) Spec() tools.Spec {
-	return builtinSpec("search", "Search file names or file contents under a path.", tools.Perceive, map[string]any{
+	return builtinSpec("search", "Search file names or text contents in a directory; prefer this over shell grep/find.", tools.Perceive, map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"path":                map[string]any{"type": "string", "description": "Directory path to search"},
-			"query":               map[string]any{"type": "string", "description": "Search query"},
-			"mode":                map[string]any{"type": "string", "enum": []string{"content", "name"}, "description": "Search mode, default content"},
-			"regex":               map[string]any{"type": "boolean", "description": "Treat query as regular expression"},
-			"case_sensitive":      map[string]any{"type": "boolean", "description": "Whether matching is case-sensitive"},
-			"recursive":           map[string]any{"type": "boolean", "description": "Whether to search recursively, default true"},
-			"max_depth":           map[string]any{"type": "integer", "description": "Maximum recursion depth"},
-			"include":             map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Glob patterns to include"},
-			"exclude":             map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Glob patterns to exclude"},
-			"use_default_exclude": map[string]any{"type": "boolean", "description": "Use default performance excludes, default true"},
-			"max_matches":         map[string]any{"type": "integer", "description": "Maximum matches to return"},
+			"path":                map[string]any{"type": "string", "description": "Directory path to search."},
+			"query":               map[string]any{"type": "string", "description": "Text or regex pattern to search for."},
+			"mode":                map[string]any{"type": "string", "enum": []string{"content", "name"}, "description": "Search mode: content searches file text, name searches file names. Default content."},
+			"regex":               map[string]any{"type": "boolean", "description": "Treat query as a regular expression."},
+			"case_sensitive":      map[string]any{"type": "boolean", "description": "Match case-sensitively."},
+			"recursive":           map[string]any{"type": "boolean", "description": "Search subdirectories recursively. Default true."},
+			"max_depth":           map[string]any{"type": "integer", "description": "Maximum recursion depth. Default 8, max 20."},
+			"include":             map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Glob patterns to include, such as [\"*.go\", \"internal/**\"]."},
+			"exclude":             map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Glob patterns to exclude."},
+			"use_default_exclude": map[string]any{"type": "boolean", "description": "Use default excludes for performance and common secret files. Default true."},
+			"max_matches":         map[string]any{"type": "integer", "description": "Maximum matches to return. Default 200, max 1000."},
 		},
 		"required": []string{"path", "query"},
 	})
