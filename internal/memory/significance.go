@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"regexp"
 	"strings"
 	"unicode"
 )
@@ -13,47 +14,143 @@ const (
 	SignificanceLow    Significance = "low"
 )
 
+const (
+	MemoryKindCommunication = "communication"
+	MemoryKindWorkflow      = "workflow"
+	MemoryKindPreference    = "preference"
+	MemoryKindConstraint    = "constraint"
+	MemoryKindCorrection    = "correction"
+	MemoryKindUserFact      = "user_fact"
+
+	MemorySourceExplicit   = "explicit"
+	MemorySourceInferred   = "inferred"
+	MemorySourceCorrection = "correction"
+)
+
+type Candidate struct {
+	UserID       string
+	Kind         string
+	Content      string
+	Tags         []string
+	Source       string
+	Confidence   float64
+	Evidence     string
+	Significance Significance
+}
+
 /*
-JudgeSignificance 判断交互的显著性等级（零 LLM 成本）。
+ExtractCandidate 从用户消息中提取“长期用户画像候选”。
 
-		高显著性（立即触发提取）：
-
-		  - 用户说"记住"/"以后都这样"/"以后不要再这样"等明确长期指令
-
-	  - 工具执行失败
-
-	  - Guard 拦截了操作
-
-	  - 用户纠正了 agent 的输出
-
-	    中显著性（正常排队）：
-
-	  - 用户表达了可能长期有效的偏好、习惯或边界
-
-低显著性（跳过提取）：
-  - 纯闲聊 / 简单问候
-  - 用户只回复"好"/"继续"/"OK"
-  - 单轮信息查询
+这里故意只处理用户输入，不处理 assistant 总结或 tool 结果：长期画像必须来自用户信号，
+否则当前任务的实现细节、项目状态和 agent 自我总结很容易污染跨会话记忆。
 */
-func JudgeSignificance(userInput, agentOutput string, hadToolCall, toolFailed, guardBlocked, userCorrection bool) Significance {
-	if guardBlocked || userCorrection || toolFailed {
-		return SignificanceHigh
+func ExtractCandidate(input string, userCorrection bool) (Candidate, bool) {
+	trimmed := strings.TrimSpace(input)
+	lower := strings.ToLower(trimmed)
+	if trimmed == "" || isTrivialInput(lower) {
+		return Candidate{}, false
 	}
 
-	userLower := strings.ToLower(strings.TrimSpace(userInput))
-	if isExplicitRemember(userLower) {
-		return SignificanceHigh
+	if userCorrection {
+		return normalizeCandidate(Candidate{Kind: MemoryKindCorrection, Content: profileContent(trimmed), Tags: []string{"correction"}, Source: MemorySourceCorrection, Confidence: 0.9, Evidence: trimmed, Significance: SignificanceHigh})
 	}
-
-	if isTrivialInput(userLower) {
-		return SignificanceLow
+	if isExplicitRemember(lower) {
+		if looksTaskSpecific(lower) {
+			return Candidate{}, false
+		}
+		return normalizeCandidate(Candidate{Kind: inferCandidateKind(lower), Content: profileContent(trimmed), Tags: inferCandidateTags(lower), Source: MemorySourceExplicit, Confidence: 0.95, Evidence: trimmed, Significance: SignificanceHigh})
 	}
-
-	if containsDurablePreference(userLower) {
-		return SignificanceMedium
+	if looksTaskSpecific(lower) {
+		return Candidate{}, false
 	}
+	if containsDurablePreference(lower) {
+		return normalizeCandidate(Candidate{Kind: inferCandidateKind(lower), Content: profileContent(trimmed), Tags: inferCandidateTags(lower), Source: MemorySourceInferred, Confidence: 0.75, Evidence: trimmed, Significance: SignificanceMedium})
+	}
+	return Candidate{}, false
+}
 
-	return SignificanceLow
+func normalizeCandidate(c Candidate) (Candidate, bool) {
+	c.Kind = normalizeKind(c.Kind)
+	c.Source = normalizeSource(c.Source)
+	c.Content = strings.TrimSpace(c.Content)
+	c.Evidence = truncateRunes(strings.TrimSpace(c.Evidence), 180)
+	c.Tags = normalizeTags(c.Tags)
+	if c.Confidence <= 0 {
+		c.Confidence = 0.7
+	}
+	if c.Confidence > 1 {
+		c.Confidence = 1
+	}
+	if c.Significance == "" {
+		c.Significance = SignificanceMedium
+	}
+	if c.Content == "" {
+		return Candidate{}, false
+	}
+	return c, true
+}
+
+func inferCandidateKind(input string) string {
+	switch {
+	case containsAny(input, "回复", "简短", "详细", "中文", "english", "tone", "reply"):
+		return MemoryKindCommunication
+	case containsAny(input, "不要", "别", "不希望", "不能", "禁止", "avoid", "never"):
+		return MemoryKindConstraint
+	case containsAny(input, "流程", "先", "下次", "以后", "步骤", "workflow"):
+		return MemoryKindWorkflow
+	case containsAny(input, "我是", "我在用", "我的电脑", "my "):
+		return MemoryKindUserFact
+	case containsAny(input, "错", "纠正", "不是", "不对", "correct"):
+		return MemoryKindCorrection
+	default:
+		return MemoryKindPreference
+	}
+}
+
+func inferCandidateTags(input string) []string {
+	var tags []string
+	pairs := []struct{ needle, tag string }{
+		{"代码", "coding"}, {"测试", "testing"}, {"架构", "architecture"}, {"设计", "design"},
+		{"调试", "debugging"}, {"日志", "debugging"}, {"报错", "debugging"},
+		{"工具", "tools"}, {"tool", "tools"}, {"tui", "tui"}, {"ui", "tui"},
+		{"安全", "security"}, {"敏感", "security"}, {"隐私", "privacy"},
+		{"中文", "communication"}, {"简短", "communication"}, {"回复", "communication"},
+	}
+	for _, p := range pairs {
+		if strings.Contains(input, p.needle) {
+			tags = append(tags, p.tag)
+		}
+	}
+	return tags
+}
+
+func profileContent(input string) string {
+	input = strings.TrimSpace(input)
+	for _, p := range rememberPatterns {
+		input = strings.TrimSpace(strings.TrimPrefix(input, p))
+	}
+	return truncateRunes(input, 120)
+}
+
+func looksTaskSpecific(input string) bool {
+	if containsAny(input, "改吧", "可行", "继续", "帮我", "修复", "实现", "新增", "删除", "检查", "看看", "跑测试", "看这个文件", "截图", "这次", "当前", "现在这个") {
+		return true
+	}
+	if pathLikePattern.MatchString(input) || strings.Contains(input, "http://") || strings.Contains(input, "https://") {
+		return true
+	}
+	return false
+}
+
+var pathLikePattern = regexp.MustCompile(`(?i)(/[^\s]+|[a-z0-9_-]+\.(go|md|toml|json|yaml|yml|ts|tsx|js|jsx|py))`)
+
+func containsAny(s string, parts ...string) bool {
+	for _, p := range parts {
+		if strings.Contains(s, strings.ToLower(p)) {
+			return true
+		}
+	}
+	return false
 }
 
 var rememberPatterns = []string{

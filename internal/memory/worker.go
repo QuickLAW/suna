@@ -68,9 +68,8 @@ func (w *Worker) Run() {
 				resetTimer(timer)
 			}
 		case <-timer.C:
-			// timer 只是兜底 wake-up。为了避免“每条中等显著性消息都额外触发一次 LLM”，
-			// 只有 high 事件或队列攒够 batchSize 时才处理；少量 medium 继续等待合批。
-			if w.pendingCount() >= batchSize || w.hasHighPending() {
+			// timeout 是 medium 候选的最长等待时间；攒不够 batchSize 也要落库合并，避免少量稳定偏好永远停在队列里。
+			if w.pendingCount() > 0 {
 				w.processPending()
 			}
 			timer.Reset(batchTimeout)
@@ -144,12 +143,15 @@ func (w *Worker) processPending() {
 }
 
 type compactionMemory struct {
-	ID       string   `json:"id,omitempty"`
-	Kind     string   `json:"kind"`
-	Content  string   `json:"content"`
-	Tags     []string `json:"tags,omitempty"`
-	Priority int      `json:"priority"`
-	IsCore   bool     `json:"is_core"`
+	ID         string   `json:"id,omitempty"`
+	Kind       string   `json:"kind"`
+	Content    string   `json:"content"`
+	Tags       []string `json:"tags,omitempty"`
+	Source     string   `json:"source"`
+	Confidence float64  `json:"confidence"`
+	Priority   int      `json:"priority"`
+	IsCore     bool     `json:"is_core"`
+	Evidence   string   `json:"evidence,omitempty"`
 }
 
 type compactionResult struct {
@@ -160,7 +162,7 @@ func (w *Worker) compact(ctx context.Context, provider model.Provider, current [
 	systemPrompt := w.renderCompactionPrompt(current, items)
 	// 记忆整理是异步 LLM 调用，一次处理多条 queue event，并要求模型返回完整的新列表。
 	// 主请求链路不会等待这个调用，因此不会影响用户看到回复的延迟。
-	ch, err := provider.Complete(ctx, &model.CompletionRequest{Purpose: "memory_compact", RequestID: requestID, System: systemPrompt, Messages: []model.Message{model.NewTextMessage(model.RoleUser, "Return the new active memory JSON now.")}, MaxTokens: memoryCompactMaxTokens})
+	ch, err := provider.Complete(ctx, &model.CompletionRequest{Purpose: "memory_compact", RequestID: requestID, System: systemPrompt, Messages: []model.Message{model.NewTextMessage(model.RoleUser, "Return the new user profile memory JSON now.")}, MaxTokens: memoryCompactMaxTokens})
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +184,7 @@ func (w *Worker) compact(ctx context.Context, provider model.Provider, current [
 	}
 	out := make([]UserMemory, 0, len(result.Memories))
 	for _, m := range result.Memories {
-		out = append(out, UserMemory{ID: m.ID, Kind: m.Kind, Content: m.Content, Tags: m.Tags, Priority: m.Priority, IsCore: m.IsCore})
+		out = append(out, UserMemory{ID: m.ID, Kind: m.Kind, Content: m.Content, Tags: m.Tags, Source: m.Source, Confidence: m.Confidence, Priority: m.Priority, IsCore: m.IsCore, Evidence: m.Evidence})
 	}
 	return out, nil
 }
@@ -196,19 +198,30 @@ func (w *Worker) renderCompactionPrompt(current []UserMemory, items []QueueItem)
 			return rendered
 		}
 	}
-	return "You maintain Suna active user memory. Return JSON {\"memories\":[...]} with at most 30 concise active memories. Prefer updating/merging over adding. Keep only user preferences, habits, constraints, corrections, personality, and durable facts. Delete stale or temporary details. Current user instruction overrides old memory.\n\nInput:\n" + string(b)
+	return "You maintain Suna long-term user profile memory. Return JSON {\"memories\":[...]} with at most 30 concise profile memories. Prefer updating/merging over adding. Keep only durable user communication preferences, workflow habits, constraints, corrections, and explicitly provided user facts. Do not store project facts, implementation details, task history, tool schemas, UI shortcuts, paths, logs, test results, or session decisions. Current user instruction overrides old memory.\n\nInput:\n" + string(b)
 }
 
 func memoryPromptData(current []UserMemory, items []QueueItem) map[string]any {
 	cur := make([]compactionMemory, 0, len(current))
 	for _, m := range current {
-		cur = append(cur, compactionMemory{ID: m.ID, Kind: m.Kind, Content: m.Content, Tags: m.Tags, Priority: m.Priority, IsCore: m.IsCore})
+		cur = append(cur, compactionMemory{ID: m.ID, Kind: m.Kind, Content: m.Content, Tags: m.Tags, Source: m.Source, Confidence: m.Confidence, Priority: m.Priority, IsCore: m.IsCore, Evidence: m.Evidence})
 	}
-	events := make([]map[string]any, 0, len(items))
+	candidates := make([]compactionMemory, 0, len(items))
 	for _, it := range items {
-		events = append(events, map[string]any{"role": it.Role, "content": truncateRunes(it.Content, 800), "significance": string(it.Significance), "created_at": it.CreatedAt.Format(time.RFC3339)})
+		candidates = append(candidates, compactionMemory{Kind: it.Kind, Content: it.Content, Tags: it.Tags, Source: it.Source, Confidence: it.Confidence, Priority: priorityForSignificance(it.Significance), Evidence: truncateRunes(it.Evidence, 180)})
 	}
-	return map[string]any{"current_memories": cur, "events": events, "max_memories": MaxActiveMemories, "max_core": MaxCoreMemories}
+	return map[string]any{"current_memories": cur, "candidates": candidates, "max_memories": MaxActiveMemories, "max_core": MaxCoreMemories}
+}
+
+func priorityForSignificance(sig Significance) int {
+	switch sig {
+	case SignificanceHigh:
+		return 80
+	case SignificanceMedium:
+		return 60
+	default:
+		return 50
+	}
 }
 
 func parseCompactionResult(raw string) *compactionResult {

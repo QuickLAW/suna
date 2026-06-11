@@ -20,19 +20,21 @@ const (
 )
 
 type UserMemory struct {
-	ID          string
-	UserID      string
-	Kind        string
-	Content     string
-	Tags        []string
-	Priority    int
-	IsCore      bool
-	UseCount    int
-	LastUsedAt  time.Time
-	RefreshedAt time.Time
-	ExpiresAt   time.Time
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID         string
+	UserID     string
+	Kind       string
+	Content    string
+	Tags       []string
+	Source     string
+	Confidence float64
+	Priority   int
+	IsCore     bool
+	UseCount   int
+	LastUsedAt time.Time
+	Evidence   string
+	ExpiresAt  time.Time
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 type MemoryStore struct {
@@ -51,11 +53,11 @@ func (s *MemoryStore) List(ctx context.Context, userID string, limit int) ([]Use
 		limit = MaxActiveMemories
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, user_id, kind, content, tags, priority, is_core, use_count,
-		       last_used_at, refreshed_at, expires_at, created_at, updated_at
-		FROM user_memory
+		SELECT id, user_id, kind, content, tags, source, confidence, priority, is_core, use_count,
+		       last_used_at, evidence, expires_at, created_at, updated_at
+		FROM user_profile_memory
 		WHERE user_id = ? AND (expires_at IS NULL OR expires_at > ?)
-		ORDER BY is_core DESC, priority DESC, COALESCE(last_used_at, updated_at) DESC, updated_at DESC, id ASC
+		ORDER BY is_core DESC, priority DESC, confidence DESC, COALESCE(last_used_at, updated_at) DESC, updated_at DESC, id ASC
 		LIMIT ?`, userID, time.Now(), limit)
 	if err != nil {
 		return nil, err
@@ -77,8 +79,8 @@ func (s *MemoryStore) Count(ctx context.Context, userID string) (active, core in
 		userID = DefaultUserID
 	}
 	now := time.Now()
-	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM user_memory WHERE user_id = ? AND (expires_at IS NULL OR expires_at > ?)`, userID, now).Scan(&active)
-	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM user_memory WHERE user_id = ? AND is_core = 1 AND (expires_at IS NULL OR expires_at > ?)`, userID, now).Scan(&core)
+	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM user_profile_memory WHERE user_id = ? AND (expires_at IS NULL OR expires_at > ?)`, userID, now).Scan(&active)
+	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM user_profile_memory WHERE user_id = ? AND is_core = 1 AND (expires_at IS NULL OR expires_at > ?)`, userID, now).Scan(&core)
 	return active, core
 }
 
@@ -87,9 +89,8 @@ func (s *MemoryStore) BuildBrief(ctx context.Context, userID, query string) (str
 	if err != nil || len(mems) == 0 {
 		return "", nil, err
 	}
-	// 召回不依赖 embedding/LLM。active memory 总量被限制在 30 条以内，注入也最多 5 条，
-	// 所以选择 core + priority + 简单关键词匹配排序后的前几条。不要用硬阈值过滤普通记忆，
-	// 否则中文短问句很容易因为关键词不完全匹配而漏掉已提取的稳定偏好。
+	// 召回不使用 embedding/LLM：长期画像总量很小，规则召回更稳定、成本更低。
+	// 这里限制 core 数量，再用 query/tag/content 命中补足，避免每轮都注入同一批高优先级 coding 记忆。
 	selected := selectMemories(mems, query)
 	if len(selected) == 0 {
 		return "", nil, nil
@@ -110,7 +111,7 @@ func (s *MemoryStore) MarkUsed(ctx context.Context, ids []string) error {
 	}
 	now := time.Now()
 	for _, id := range ids {
-		_, _ = s.db.ExecContext(ctx, `UPDATE user_memory SET use_count = use_count + 1, last_used_at = ?, updated_at = ? WHERE id = ?`, now, now, id)
+		_, _ = s.db.ExecContext(ctx, `UPDATE user_profile_memory SET use_count = use_count + 1, last_used_at = ?, updated_at = ? WHERE id = ?`, now, now, id)
 	}
 	return nil
 }
@@ -128,7 +129,7 @@ func (s *MemoryStore) ReplaceAll(ctx context.Context, userID string, newList []U
 	}
 	defer tx.Rollback()
 
-	existingRows, err := tx.QueryContext(ctx, `SELECT id, content, kind FROM user_memory WHERE user_id = ?`, userID)
+	existingRows, err := tx.QueryContext(ctx, `SELECT id, content, kind FROM user_profile_memory WHERE user_id = ?`, userID)
 	if err != nil {
 		return err
 	}
@@ -144,8 +145,7 @@ func (s *MemoryStore) ReplaceAll(ctx context.Context, userID string, newList []U
 	keep := map[string]bool{}
 	now := time.Now()
 	for _, m := range normalizeMemoryList(userID, newList) {
-		// daemon 输出的是完整的新 active memory 列表，不是 append-only patch。
-		// 这里尽量复用旧 id，避免同一条记忆因为措辞不变而产生新记录。
+		// compactor 输出完整的新用户画像列表，不是增量 patch；这里复用旧 id，避免同一画像重复生成。
 		if m.ID == "" || existing[m.ID].ID == "" {
 			m.ID = matchExistingMemory(existing, keep, m)
 		}
@@ -153,23 +153,25 @@ func (s *MemoryStore) ReplaceAll(ctx context.Context, userID string, newList []U
 			m.ID = uuid.New().String()
 		}
 		keep[m.ID] = true
-		tagsJSON := marshalStringSlice(m.Tags)
 		isCore := 0
 		if m.IsCore {
 			isCore = 1
 		}
 		_, err = tx.ExecContext(ctx, `
-			INSERT INTO user_memory (id, user_id, kind, content, tags, priority, is_core, refreshed_at, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO user_profile_memory (id, user_id, kind, content, tags, source, confidence, priority, is_core, evidence, created_at, updated_at, expires_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
 				kind = excluded.kind,
 				content = excluded.content,
 				tags = excluded.tags,
+				source = excluded.source,
+				confidence = excluded.confidence,
 				priority = excluded.priority,
 				is_core = excluded.is_core,
-				refreshed_at = excluded.refreshed_at,
-				updated_at = excluded.updated_at`,
-			m.ID, userID, m.Kind, m.Content, tagsJSON, clampPriority(m.Priority), isCore, now, now, now)
+				evidence = excluded.evidence,
+				updated_at = excluded.updated_at,
+				expires_at = excluded.expires_at`,
+			m.ID, userID, m.Kind, m.Content, marshalStringSlice(m.Tags), m.Source, m.Confidence, m.Priority, isCore, m.Evidence, now, now, nullableTime(m.ExpiresAt))
 		if err != nil {
 			return err
 		}
@@ -177,8 +179,8 @@ func (s *MemoryStore) ReplaceAll(ctx context.Context, userID string, newList []U
 
 	for id := range existing {
 		if !keep[id] {
-			// 未被 compaction 返回的旧记忆视为不再有效，直接删除，保持 active memory 小而新。
-			if _, err := tx.ExecContext(ctx, `DELETE FROM user_memory WHERE id = ?`, id); err != nil {
+			// 未被 compaction 返回的旧画像视为不再有效，直接删除，保持用户画像小而准。
+			if _, err := tx.ExecContext(ctx, `DELETE FROM user_profile_memory WHERE id = ?`, id); err != nil {
 				return err
 			}
 		}
@@ -191,42 +193,65 @@ func selectMemories(mems []UserMemory, query string) []UserMemory {
 	tokens := queryTokens(query)
 	scored := make([]memoryScore, 0, len(mems))
 	for _, m := range mems {
-		score := m.Priority
+		score := m.Priority + int(m.Confidence*20)
 		if m.IsCore {
-			// core memory 代表长期稳定偏好/纠错，优先级远高于普通关键词命中。
-			score += 1000
+			// core 代表跨场景稳定偏好，但最多只注入少量，避免挤掉当前 query 相关画像。
+			score += 400
+		}
+		if m.Kind == MemoryKindCorrection {
+			score += 40
 		}
 		if len(tokens) > 0 {
 			text := strings.ToLower(m.Content + " " + strings.Join(m.Tags, " ") + " " + m.Kind)
 			for _, tok := range tokens {
 				if strings.Contains(text, tok) {
-					score += 80
+					score += 120
 				}
 			}
 		}
 		scored = append(scored, memoryScore{Memory: m, Score: score})
 	}
+	sortMemoryScores(scored)
+
+	out := make([]UserMemory, 0, MaxInjectedMemories)
+	used := map[string]bool{}
+	coreCount := 0
+	for _, s := range scored {
+		if len(out) >= MaxInjectedMemories || coreCount >= 2 {
+			break
+		}
+		if s.Memory.IsCore {
+			out = append(out, s.Memory)
+			used[s.Memory.ID] = true
+			coreCount++
+		}
+	}
+	for _, s := range scored {
+		if len(out) >= MaxInjectedMemories {
+			break
+		}
+		if used[s.Memory.ID] {
+			continue
+		}
+		out = append(out, s.Memory)
+		used[s.Memory.ID] = true
+	}
+	return out
+}
+
+func sortMemoryScores(scored []memoryScore) {
 	sort.SliceStable(scored, func(i, j int) bool {
 		if scored[i].Score != scored[j].Score {
 			return scored[i].Score > scored[j].Score
 		}
-		if scored[i].Memory.IsCore != scored[j].Memory.IsCore {
-			return scored[i].Memory.IsCore
-		}
 		if scored[i].Memory.Priority != scored[j].Memory.Priority {
 			return scored[i].Memory.Priority > scored[j].Memory.Priority
 		}
+		if scored[i].Memory.Confidence != scored[j].Memory.Confidence {
+			return scored[i].Memory.Confidence > scored[j].Memory.Confidence
+		}
 		return scored[i].Memory.ID < scored[j].Memory.ID
 	})
-	limit := MaxInjectedMemories
-	if len(scored) < limit {
-		limit = len(scored)
-	}
-	out := make([]UserMemory, 0, limit)
-	for i := 0; i < limit; i++ {
-		out = append(out, scored[i].Memory)
-	}
-	return out
 }
 
 type memoryScore struct {
@@ -255,17 +280,19 @@ func normalizeMemoryList(userID string, in []UserMemory) []UserMemory {
 	for _, m := range in {
 		m.UserID = userID
 		m.Kind = normalizeKind(m.Kind)
-		m.Content = strings.TrimSpace(m.Content)
+		m.Source = normalizeSource(m.Source)
+		m.Confidence = clampConfidence(m.Confidence)
+		m.Priority = clampPriority(m.Priority)
+		m.Content = truncateRunes(strings.TrimSpace(m.Content), 180)
+		m.Evidence = truncateRunes(strings.TrimSpace(m.Evidence), 180)
+		m.Tags = normalizeTags(m.Tags)
 		if m.Content == "" || seen[strings.ToLower(m.Content)] {
 			continue
 		}
 		seen[strings.ToLower(m.Content)] = true
-		if len([]rune(m.Content)) > 180 {
-			m.Content = truncateRunes(m.Content, 180)
-		}
 		if m.IsCore {
 			core++
-			if core > MaxCoreMemories {
+			if core > MaxCoreMemories || m.Confidence < 0.8 {
 				m.IsCore = false
 			}
 		}
@@ -279,11 +306,42 @@ func normalizeMemoryList(userID string, in []UserMemory) []UserMemory {
 
 func normalizeKind(kind string) string {
 	switch strings.TrimSpace(strings.ToLower(kind)) {
-	case "preference", "habit", "constraint", "correction", "personality", "fact":
+	case MemoryKindCommunication, MemoryKindWorkflow, MemoryKindPreference, MemoryKindConstraint, MemoryKindCorrection, MemoryKindUserFact:
 		return strings.TrimSpace(strings.ToLower(kind))
+	case "habit", "personality":
+		return MemoryKindWorkflow
+	case "fact":
+		return MemoryKindUserFact
 	default:
-		return "preference"
+		return MemoryKindPreference
 	}
+}
+
+func normalizeSource(source string) string {
+	switch strings.TrimSpace(strings.ToLower(source)) {
+	case MemorySourceExplicit, MemorySourceInferred, MemorySourceCorrection:
+		return strings.TrimSpace(strings.ToLower(source))
+	default:
+		return MemorySourceInferred
+	}
+}
+
+func normalizeTags(tags []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, min(len(tags), 5))
+	for _, tag := range tags {
+		tag = strings.ToLower(strings.TrimSpace(tag))
+		tag = strings.ReplaceAll(tag, " ", "-")
+		if tag == "" || len([]rune(tag)) > 24 || strings.Contains(tag, "/") || strings.Contains(tag, "\\") || strings.Contains(tag, "://") || strings.Contains(tag, ".") || seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		out = append(out, tag)
+		if len(out) >= 5 {
+			break
+		}
+	}
+	return out
 }
 
 func matchExistingMemory(existing map[string]UserMemory, keep map[string]bool, m UserMemory) string {
@@ -302,15 +360,18 @@ func scanUserMemory(rows interface{ Scan(dest ...any) error }) (UserMemory, erro
 	var m UserMemory
 	var tags string
 	var isCore int
-	var lastUsed, refreshed, expires, created, updated sql.NullString
-	err := rows.Scan(&m.ID, &m.UserID, &m.Kind, &m.Content, &tags, &m.Priority, &isCore, &m.UseCount, &lastUsed, &refreshed, &expires, &created, &updated)
+	var lastUsed, evidence, expires, created, updated sql.NullString
+	err := rows.Scan(&m.ID, &m.UserID, &m.Kind, &m.Content, &tags, &m.Source, &m.Confidence, &m.Priority, &isCore, &m.UseCount, &lastUsed, &evidence, &expires, &created, &updated)
 	if err != nil {
 		return m, err
 	}
-	m.Tags = unmarshalStringSlice(tags)
+	m.Kind = normalizeKind(m.Kind)
+	m.Tags = normalizeTags(unmarshalStringSlice(tags))
+	m.Source = normalizeSource(m.Source)
+	m.Confidence = clampConfidence(m.Confidence)
 	m.IsCore = isCore == 1
 	m.LastUsedAt = parseDBTime(lastUsed.String)
-	m.RefreshedAt = parseDBTime(refreshed.String)
+	m.Evidence = evidence.String
 	m.ExpiresAt = parseDBTime(expires.String)
 	m.CreatedAt = parseDBTime(created.String)
 	m.UpdatedAt = parseDBTime(updated.String)
@@ -356,6 +417,23 @@ func clampPriority(v int) int {
 		return 100
 	}
 	return v
+}
+
+func clampConfidence(v float64) float64 {
+	if v <= 0 {
+		return 0.7
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
+}
+
+func nullableTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t
 }
 
 func truncateRunes(s string, max int) string {

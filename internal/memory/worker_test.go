@@ -18,7 +18,7 @@ func TestWorkerStopPreservesPendingQueue(t *testing.T) {
 	queue := NewExtractQueue(store.DB())
 	worker := NewWorker(queue, NewMemoryStore(store.DB()), store.DB(), workerTestProvider{})
 
-	if ok := queue.Push(context.Background(), DefaultUserID, "user", "I prefer concise Chinese replies.", SignificanceMedium); !ok {
+	if ok := queue.Push(context.Background(), DefaultUserID, Candidate{Kind: MemoryKindCommunication, Content: "用户偏好简洁中文回复", Tags: []string{"communication"}, Source: MemorySourceExplicit, Confidence: 0.9, Evidence: "I prefer concise Chinese replies.", Significance: SignificanceMedium}); !ok {
 		t.Fatal("Push() failed")
 	}
 	queue.Close()

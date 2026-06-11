@@ -42,26 +42,28 @@ func (s *Store) Close() error {
 
 func (s *Store) migrate() error {
 	migrations := []string{
-		// ── Active memory tables ──
+		// ── User profile memory tables ──
 
-		`CREATE TABLE IF NOT EXISTS user_memory (
+		`CREATE TABLE IF NOT EXISTS user_profile_memory (
 			id TEXT PRIMARY KEY,
 			user_id TEXT NOT NULL,
 			kind TEXT NOT NULL,
 			content TEXT NOT NULL,
 			tags TEXT NOT NULL DEFAULT '[]',
+			source TEXT NOT NULL DEFAULT 'inferred',
+			confidence REAL NOT NULL DEFAULT 0.7,
 			priority INTEGER NOT NULL DEFAULT 50,
 			is_core INTEGER NOT NULL DEFAULT 0,
 			use_count INTEGER NOT NULL DEFAULT 0,
 			last_used_at DATETIME,
-			refreshed_at DATETIME NOT NULL DEFAULT (datetime('now')),
+			evidence TEXT NOT NULL DEFAULT '',
 			expires_at DATETIME,
 			created_at DATETIME NOT NULL DEFAULT (datetime('now')),
 			updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_user_memory_core ON user_memory(user_id, is_core, priority)`,
-		`CREATE INDEX IF NOT EXISTS idx_user_memory_kind ON user_memory(user_id, kind)`,
-		`CREATE INDEX IF NOT EXISTS idx_user_memory_updated ON user_memory(user_id, updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_profile_memory_core ON user_profile_memory(user_id, is_core, priority)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_profile_memory_kind ON user_profile_memory(user_id, kind)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_profile_memory_updated ON user_profile_memory(user_id, updated_at)`,
 
 		`CREATE TABLE IF NOT EXISTS conversation_state (
 			user_id TEXT PRIMARY KEY,
@@ -75,8 +77,12 @@ func (s *Store) migrate() error {
 		`CREATE TABLE IF NOT EXISTS memory_queue (
 			id TEXT PRIMARY KEY,
 			user_id TEXT NOT NULL,
-			role TEXT NOT NULL,
+			kind TEXT NOT NULL,
 			content TEXT NOT NULL,
+			tags TEXT NOT NULL DEFAULT '[]',
+			source TEXT NOT NULL DEFAULT 'inferred',
+			confidence REAL NOT NULL DEFAULT 0.7,
+			evidence TEXT NOT NULL DEFAULT '',
 			significance TEXT NOT NULL DEFAULT '',
 			created_at DATETIME NOT NULL DEFAULT (datetime('now')),
 			next_attempt_at DATETIME NOT NULL DEFAULT (datetime('now')),

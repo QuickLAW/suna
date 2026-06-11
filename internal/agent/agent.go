@@ -265,7 +265,7 @@ func (a *Agent) runCurrentWorking(runCtx context.Context, inputText string, even
 	}
 
 	a.sessionState = res.SessionState
-	a.enqueueMemoryEvent(runCtx, model.RoleAssistant, res.FinalText, res.HadToolCall, res.HadToolError, false, false)
+	// 长期用户画像只从用户信号提取；assistant 输出属于当前会话结果，应进入 Session State/recent，而不是跨会话画像。
 	events <- Event{Type: EventStatus, Status: StatusDone, ContextWindow: res.ContextWindow}
 }
 

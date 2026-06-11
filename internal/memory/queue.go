@@ -15,8 +15,12 @@ const maxQueueAttempts = 3
 type QueueItem struct {
 	ID            string
 	UserID        string
-	Role          string
+	Kind          string
 	Content       string
+	Tags          []string
+	Source        string
+	Confidence    float64
+	Evidence      string
 	Significance  Significance
 	CreatedAt     time.Time
 	NextAttemptAt time.Time
@@ -34,18 +38,24 @@ func NewExtractQueue(db *sql.DB) *ExtractQueue {
 	return &ExtractQueue{ch: make(chan struct{}, extractQueueSize), db: db}
 }
 
-func (q *ExtractQueue) Push(ctx context.Context, userID, role, content string, sig Significance) bool {
-	if q == nil || q.db == nil || content == "" {
+func (q *ExtractQueue) Push(ctx context.Context, userID string, candidate Candidate) bool {
+	if q == nil || q.db == nil {
 		return false
 	}
 	if userID == "" {
 		userID = DefaultUserID
 	}
+	candidate.UserID = userID
+	candidate, ok := normalizeCandidate(candidate)
+	if !ok {
+		return false
+	}
+	// memory_queue 只保存结构化用户画像候选，不保存原始对话，避免 assistant 总结或任务日志进入长期记忆。
 	_, err := q.db.ExecContext(ctx, `
-		INSERT INTO memory_queue (id, user_id, role, content, significance, created_at, next_attempt_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`, uuid.New().String(), userID, role, content, string(sig), time.Now(), time.Now())
+		INSERT INTO memory_queue (id, user_id, kind, content, tags, source, confidence, evidence, significance, created_at, next_attempt_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, uuid.New().String(), userID, candidate.Kind, candidate.Content, marshalStringSlice(candidate.Tags), candidate.Source, candidate.Confidence, candidate.Evidence, string(candidate.Significance), time.Now(), time.Now())
 	if err != nil {
-		logging.Error("memory", "queue_insert_failed", err, logging.Event{"queue_role": role, "significance": string(sig)})
+		logging.Error("memory", "queue_insert_failed", err, logging.Event{"queue_kind": candidate.Kind, "significance": string(candidate.Significance)})
 		return false
 	}
 	q.Signal()
@@ -86,7 +96,7 @@ func LoadPendingQueue(ctx context.Context, db *sql.DB, userID string, limit int)
 		limit = 50
 	}
 	rows, err := db.QueryContext(ctx, `
-		SELECT id, user_id, role, content, significance, created_at, next_attempt_at, attempts
+		SELECT id, user_id, kind, content, tags, source, confidence, evidence, significance, created_at, next_attempt_at, attempts
 		FROM memory_queue
 		WHERE user_id = ?
 		  AND processed_at IS NULL
@@ -101,10 +111,14 @@ func LoadPendingQueue(ctx context.Context, db *sql.DB, userID string, limit int)
 	var out []QueueItem
 	for rows.Next() {
 		var item QueueItem
-		var sig, created, nextAttempt sql.NullString
-		if err := rows.Scan(&item.ID, &item.UserID, &item.Role, &item.Content, &sig, &created, &nextAttempt, &item.Attempts); err != nil {
+		var tags, sig, created, nextAttempt sql.NullString
+		if err := rows.Scan(&item.ID, &item.UserID, &item.Kind, &item.Content, &tags, &item.Source, &item.Confidence, &item.Evidence, &sig, &created, &nextAttempt, &item.Attempts); err != nil {
 			continue
 		}
+		item.Kind = normalizeKind(item.Kind)
+		item.Tags = normalizeTags(unmarshalStringSlice(tags.String))
+		item.Source = normalizeSource(item.Source)
+		item.Confidence = clampConfidence(item.Confidence)
 		item.Significance = Significance(sig.String)
 		item.CreatedAt = parseDBTime(created.String)
 		item.NextAttemptAt = parseDBTime(nextAttempt.String)

@@ -12,14 +12,14 @@ import (
 )
 
 func (a *Agent) enqueueMemoryEvent(ctx context.Context, role model.Role, content string, hadToolCall, toolFailed, guardBlocked, userCorrection bool) {
-	if a.extractQueue == nil || content == "" {
+	if a.extractQueue == nil || content == "" || role != model.RoleUser || hadToolCall || toolFailed || guardBlocked {
 		return
 	}
-	sig := memory.JudgeSignificance(content, "", hadToolCall, toolFailed, guardBlocked, userCorrection)
-	if sig == memory.SignificanceLow {
+	candidate, ok := memory.ExtractCandidate(content, userCorrection)
+	if !ok {
 		return
 	}
-	a.extractQueue.Push(ctx, memory.DefaultUserID, string(role), content, sig)
+	a.extractQueue.Push(ctx, memory.DefaultUserID, candidate)
 }
 
 func (a *Agent) replaceLastUserMessage(text string, replacement model.Message) {
