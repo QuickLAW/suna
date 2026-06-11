@@ -12,12 +12,12 @@ import (
 type WriteFile struct{}
 
 func (WriteFile) Spec() tools.Spec {
-	return builtinSpec("writefile", "Create, overwrite, or append file contents.", tools.Act, map[string]any{
+	return builtinSpec("writefile", "Create, append, or intentionally replace an entire file; use editfile for targeted edits.", tools.Act, map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"path":            map[string]any{"type": "string", "description": "File path"},
 			"content":         map[string]any{"type": "string", "description": "File content"},
-			"mode":            map[string]any{"type": "string", "enum": []string{"overwrite", "create_new", "append"}, "description": "Write mode, default overwrite"},
+			"mode":            map[string]any{"type": "string", "enum": []string{"overwrite", "create_new", "append"}, "description": "Write mode: create_new, append, or overwrite the entire file"},
 			"create_dirs":     map[string]any{"type": "boolean", "description": "Whether to create parent directories automatically"},
 			"expected_sha256": map[string]any{"type": "string", "description": "Expected existing file SHA-256 before writing"},
 		},

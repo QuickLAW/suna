@@ -12,7 +12,7 @@ import (
 type EditFile struct{}
 
 func (EditFile) Spec() tools.Spec {
-	return builtinSpec("editfile", "Edit one file by applying one or more exact text replacements atomically.", tools.Act, map[string]any{
+	return builtinSpec("editfile", "Modify an existing text file with one or more exact replacements, applied atomically.", tools.Act, map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"path": map[string]any{"type": "string", "description": "File path"},
