@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/alanchenchen/suna/internal/logging"
 	"github.com/alanchenchen/suna/internal/memory"
@@ -36,10 +37,30 @@ func (a *Agent) saveConversationState(ctx context.Context) {
 	if a.conversation == nil || a.working == nil {
 		return
 	}
+	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
 	msgs := a.working.Messages()
-	if err := a.conversation.Save(ctx, memory.DefaultUserID, strings.TrimSpace(a.sessionState), msgs, a.toolSummary); err != nil {
+	if err := a.conversation.Save(saveCtx, memory.DefaultUserID, strings.TrimSpace(a.sessionState), msgs, a.toolSummary); err != nil {
 		logging.Error("agent", "save_conversation_state_failed", err, nil)
 	}
+}
+
+func (a *Agent) commitCompactState(ctx context.Context, sessionState string) error {
+	sessionState = strings.TrimSpace(sessionState)
+	if sessionState == "" {
+		return nil
+	}
+	a.sessionState = sessionState
+	if a.conversation == nil || a.working == nil {
+		return nil
+	}
+	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	if err := a.conversation.Save(saveCtx, memory.DefaultUserID, a.sessionState, a.working.Messages(), a.toolSummary); err != nil {
+		logging.Error("agent", "save_compact_state_failed", err, nil)
+		return err
+	}
+	return nil
 }
 
 func (a *Agent) addToolSummary(name string, result tools.Result) {

@@ -309,6 +309,7 @@ func (a *Agent) newRunner(events chan<- Event) *runner.Runner {
 		Hooks: runner.Hooks{
 			CleanToolParams: a.cleanToolParams,
 			OnToolResult:    a.addToolSummary,
+			OnCompactCommit: a.commitCompactState,
 		},
 	}
 }

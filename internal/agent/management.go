@@ -118,9 +118,12 @@ func (a *Agent) Compact(ctx context.Context) (int, int, int, int, int, error) {
 		return 0, 0, 0, 0, 0, err
 	}
 	if state != "" {
-		a.sessionState = state
+		if err := a.commitCompactState(ctx, state); err != nil {
+			return 0, 0, 0, 0, 0, err
+		}
+	} else {
+		a.saveConversationState(ctx)
 	}
-	a.saveConversationState(ctx)
 	logging.Info("memory", "session_compact_success", logging.Event{"mode": "manual", "context_window": contextWindow, "before_tokens": before, "after_tokens": after, "folded_messages": turnsCompressed, "truncated_tool_outputs": truncated, "duration_ms": time.Since(started).Milliseconds()})
 	return before, after, contextWindow, turnsCompressed, truncated, nil
 }

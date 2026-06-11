@@ -77,6 +77,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 			if needCompact {
 				req.SessionState, compactErr = r.compactForRequest(ctx, req.Working, completionReq, contextWindow, req.SessionState)
 				completionReq.SessionState = req.SessionState
+				if compactErr == nil && r.Hooks.OnCompactCommit != nil {
+					compactErr = r.Hooks.OnCompactCommit(ctx, req.SessionState)
+				}
 				if compactErr != nil {
 					if r.Sink != nil {
 						r.Sink.Status(StatusEvent{Kind: StatusCompactError, Message: "automatic context compression failed: " + compactErr.Error()})

@@ -119,6 +119,9 @@ type Hooks struct {
 	CleanToolParams func(name string, params map[string]any) (map[string]any, string)
 	OnAssistantText func(ctx context.Context, content string)
 	OnToolResult    func(name string, result tools.Result)
+	// OnCompactCommit 在自动 compact 成功并改写 WorkingMemory 后同步提交独立 Session State。
+	// 返回错误时 runner 不继续请求模型，避免 recent window 已裁剪但会话状态未持久化。
+	OnCompactCommit func(ctx context.Context, sessionState string) error
 }
 
 type Runner struct {
