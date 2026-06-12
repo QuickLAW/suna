@@ -50,12 +50,13 @@ Windows 下通常是：
 ### 打包脚本
 
 ```bash
-./build/build-macos-arm64.sh
-./build/build-windows-amd64.sh
-./build/build-release.sh
+./build/build-darwin.sh    # 构建 macOS arm64 / amd64
+./build/build-linux.sh     # 构建 Linux arm64 / amd64
+./build/build-windows.sh   # 构建 Windows arm64 / amd64
+./build/build-release.sh   # 一次性构建以上 6 个平台包
 ```
 
-构建产物默认放在 `dist/`。
+构建产物默认放在 `dist/`，每个平台/架构只保留一个压缩包，便于 GitHub Release 分发。Darwin、Linux、Windows 产物不能混用，需要按目标系统选择对应包。
 
 ### CLI 命令
 

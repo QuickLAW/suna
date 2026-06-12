@@ -4,22 +4,23 @@
 
 ## 本地构建
 
+Suna 需要先安装或构建成二进制后运行；不要使用 `go run .` 启动，daemon / TUI 的本地进程管理依赖稳定的可执行文件路径。
+
 ```bash
 go build -o suna .
-```
-
-也可以直接运行：
-
-```bash
-go run .
+./suna
 ```
 
 项目内置 release 脚本：
 
 ```bash
-./build/build-macos-arm64.sh
-./build/build-release.sh
+./build/build-darwin.sh    # 构建 macOS arm64 / amd64
+./build/build-linux.sh     # 构建 Linux arm64 / amd64
+./build/build-windows.sh   # 构建 Windows arm64 / amd64
+./build/build-release.sh   # 一次性构建以上 6 个平台包
 ```
+
+Release 构建产物默认放在 `dist/`，每个平台/架构只保留一个压缩包。
 
 ## 常用运行命令
 
