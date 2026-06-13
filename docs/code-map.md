@@ -21,7 +21,7 @@
 | 附件存储 | `internal/media`, `internal/daemon/attachments.go` | 本地附件缓存和消息附件提交。 |
 | 模型路由 | `internal/model/router.go` | 根据 provider / model 配置选择 provider。 |
 | OpenAI Responses | `internal/model/openai_responses.go` | `provider = "openai"` 的请求和流式响应适配。 |
-| Anthropic Messages | `internal/model/anthropic.go` | `provider = "anthropic"` 的请求和流式响应适配。 |
+| Anthropic Messages | `internal/model/anthropic.go` | `provider = "anthropic"` 的 Messages 请求适配；当前为非 streaming 调用，尚未归一输出 thinking chunk。 |
 | OpenAI-compatible | `internal/model/openai_chat.go` | 其它 provider 默认走 Chat Completions 兼容协议。 |
 | Agent 编排 | `internal/agent` | 构造上下文、处理工具、Guard、记忆、Skill、MCP、Subtask。 |
 | Runner | `internal/runner` | 模型流式调用、tool call 循环、上下文压缩。 |

@@ -48,13 +48,10 @@ func (agentSkillReviewer) ReviewSkill(ctx context.Context, req skill.LLMReviewRe
 		emitSkillReviewEvent(ctx, req.Name, "error", "", err.Error())
 		return "", err
 	}
-	var out string
-	for chunk := range ch {
-		if chunk.Error != "" {
-			emitSkillReviewEvent(ctx, req.Name, "error", "", chunk.Error)
-			return "", fmt.Errorf("%s", chunk.Error)
-		}
-		out += chunk.Content
+	out, err := model.ReadStreamTextWithIdle(ctx, ch, model.LLMSkillReviewTimeout, "skill review LLM stream timeout")
+	if err != nil {
+		emitSkillReviewEvent(ctx, req.Name, "error", "", err.Error())
+		return "", err
 	}
 	out = strings.TrimSpace(out)
 	emitSkillReviewEvent(ctx, req.Name, "done", out, "")

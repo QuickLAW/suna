@@ -15,8 +15,6 @@ import (
 	"github.com/alanchenchen/suna/internal/tools"
 )
 
-const defaultStreamTimeout = 10 * time.Minute
-
 func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	var result Result
 	if r.Router == nil {
@@ -35,10 +33,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		req.Purpose = "chat"
 	}
 	req.MaxTokens = model.ResolveMaxTokens(req.MaxTokens)
-	if req.StreamTimeout <= 0 {
-		req.StreamTimeout = defaultStreamTimeout
-	}
-
 	turns := 0
 	toolCallsExecuted := 0
 
@@ -118,8 +112,14 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 		if err != nil {
 			return result, err
 		}
+		streamTimeout := req.StreamTimeout
+		dynamicReasoningTimeout := false
+		if streamTimeout <= 0 {
+			streamTimeout = defaultChatIdleTimeout
+			dynamicReasoningTimeout = true
+		}
 
-		fullContent, toolCalls, usage, err := r.readStream(ctx, ch, req)
+		fullContent, toolCalls, usage, err := r.readStream(ctx, ch, streamTimeout, dynamicReasoningTimeout, req)
 		if err != nil {
 			return result, err
 		}
@@ -206,11 +206,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	}
 }
 
-func (r *Runner) readStream(ctx context.Context, ch <-chan model.Chunk, req Request) (string, []model.ToolCall, *model.Usage, error) {
+func (r *Runner) readStream(ctx context.Context, ch <-chan model.Chunk, streamTimeout time.Duration, dynamicReasoningTimeout bool, req Request) (string, []model.ToolCall, *model.Usage, error) {
 	var fullContent string
 	var toolCalls []model.ToolCall
 	var lastUsage *model.Usage
-	timer := time.NewTimer(req.StreamTimeout)
+	timer := time.NewTimer(streamTimeout)
 	defer timer.Stop()
 
 	for {
@@ -219,13 +219,16 @@ func (r *Runner) readStream(ctx context.Context, ch <-chan model.Chunk, req Requ
 			if !ok {
 				return fullContent, toolCalls, lastUsage, nil
 			}
+			if dynamicReasoningTimeout && chunk.ReasoningContent != "" {
+				streamTimeout = defaultReasoningIdleTimeout
+			}
 			if !timer.Stop() {
 				select {
 				case <-timer.C:
 				default:
 				}
 			}
-			timer.Reset(req.StreamTimeout)
+			timer.Reset(streamTimeout)
 			if ctx.Err() != nil {
 				return fullContent, toolCalls, lastUsage, ctx.Err()
 			}
@@ -251,7 +254,7 @@ func (r *Runner) readStream(ctx context.Context, ch <-chan model.Chunk, req Requ
 				return fullContent, toolCalls, lastUsage, nil
 			}
 		case <-timer.C:
-			return fullContent, toolCalls, lastUsage, fmt.Errorf("LLM stream idle timeout (%s). The model may still be thinking; continue or retry if needed", req.StreamTimeout)
+			return fullContent, toolCalls, lastUsage, fmt.Errorf("LLM stream idle timeout (%s). The model may still be thinking; continue or retry if needed", streamTimeout)
 		case <-ctx.Done():
 			return fullContent, toolCalls, lastUsage, ctx.Err()
 		}

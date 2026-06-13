@@ -20,10 +20,6 @@ import (
 	"github.com/alanchenchen/suna/internal/tools/skilltools"
 )
 
-const defaultGuardReviewStreamTimeout = 60 * time.Second
-
-var guardReviewStreamTimeout = defaultGuardReviewStreamTimeout
-
 func (a *Agent) ExecuteTool(ctx context.Context, id string, name string, params map[string]any) tools.Result {
 	return a.executeTool(ctx, runner.ToolExecution{ID: id, Name: name, Params: params}, nil)
 }
@@ -620,7 +616,7 @@ func (a *Agent) guardLLMReview(ctx context.Context, req guard.ReviewRequest) (st
 	if err != nil {
 		return "", err
 	}
-	return readGuardReviewStream(ctx, ch, guardReviewStreamTimeout)
+	return readGuardReviewStream(ctx, ch, model.LLMGuardReviewTimeout)
 }
 
 func readGuardReviewStream(ctx context.Context, ch <-chan model.Chunk, timeout time.Duration) (string, error) {

@@ -206,17 +206,9 @@ func (c *Compressor) compressHistoryKeepingState(ctx context.Context, messages [
 	if err != nil {
 		return nil, "", 0, err
 	}
-	var state string
-	for chunk := range ch {
-		if chunk.Error != "" {
-			return nil, "", 0, fmt.Errorf("%s", chunk.Error)
-		}
-		if chunk.Content != "" {
-			state += chunk.Content
-		}
-		if chunk.Done {
-			break
-		}
+	state, err := model.ReadStreamTextWithIdle(ctx, ch, model.LLMCompactIdleTimeout, "compact LLM stream timeout")
+	if err != nil {
+		return nil, "", 0, err
 	}
 	state = strings.TrimSpace(state)
 	if state == "" {

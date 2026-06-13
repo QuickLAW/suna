@@ -99,7 +99,7 @@ func (w *Worker) processPending() {
 	if w == nil || w.db == nil || w.memories == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), model.LLMMemoryCompactTimeout)
 	defer cancel()
 	items, err := LoadPendingQueue(ctx, w.db, DefaultUserID, 50)
 	if err != nil || len(items) == 0 {
@@ -166,17 +166,9 @@ func (w *Worker) compact(ctx context.Context, provider model.Provider, current [
 	if err != nil {
 		return nil, err
 	}
-	var full string
-	for chunk := range ch {
-		if chunk.Content != "" {
-			full += chunk.Content
-		}
-		if chunk.Error != "" {
-			return nil, fmt.Errorf("provider stream: %s", chunk.Error)
-		}
-		if chunk.Done {
-			break
-		}
+	full, err := model.ReadStreamTextWithIdle(ctx, ch, model.LLMMemoryCompactTimeout, "memory compact LLM stream timeout")
+	if err != nil {
+		return nil, fmt.Errorf("provider stream: %w", err)
 	}
 	result := parseCompactionResult(full)
 	if result == nil {

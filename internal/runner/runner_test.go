@@ -55,3 +55,30 @@ func TestExecuteToolCallsNotifiesResultsByCompletionAndReturnsOriginalOrder(t *t
 		t.Fatalf("executeToolCalls notification order = %v, want completion order %v", notified, want)
 	}
 }
+
+func TestReadStreamExtendsTimeoutAfterReasoningChunk(t *testing.T) {
+	t.Parallel()
+	ch := make(chan model.Chunk, 2)
+	ch <- model.Chunk{ReasoningContent: "thinking"}
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		ch <- model.Chunk{Done: true}
+		close(ch)
+	}()
+
+	_, _, _, err := (&Runner{}).readStream(context.Background(), ch, 5*time.Millisecond, true, Request{})
+	if err != nil {
+		t.Fatalf("readStream() error = %v, want nil", err)
+	}
+}
+
+func TestReadStreamKeepsChatTimeoutWithoutReasoningChunk(t *testing.T) {
+	t.Parallel()
+	ch := make(chan model.Chunk, 1)
+	ch <- model.Chunk{Content: "hello"}
+
+	_, _, _, err := (&Runner{}).readStream(context.Background(), ch, 5*time.Millisecond, true, Request{})
+	if err == nil {
+		t.Fatal("readStream() error = nil, want idle timeout")
+	}
+}
