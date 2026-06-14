@@ -75,6 +75,12 @@ strengths = ["code", "cheap", "fast"]
 reasoning = { reasoning_effort = "high" }
 
 [[models]]
+provider = "minimax"
+model = "MiniMax-M3"
+base_url = "https://api.minimax.io/v1"
+reasoning = { reasoning_split = true }
+
+[[models]]
 provider = "dreamfield"
 model = "kimi-k2.6"
 base_url = "https://example.com/v1"

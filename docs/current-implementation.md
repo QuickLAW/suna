@@ -66,7 +66,7 @@ Chat slash commands：
 
 LLM 请求使用按场景维护的 idle timeout，而不是任务总时长 timeout。Runner 内的主对话、工具调用前后请求和 subtask 内部请求默认按普通流式响应等待 120 秒；如果实际收到 provider 归一化后的 `ReasoningContent` chunk，本次请求会升级为 30 分钟 idle timeout。这个判断基于 LLM stream 实际返回类型，不基于 `models.reasoning` 配置或模型名。compact、Guard Smart Review、Skill LLM Review、记忆整理等不走 Runner 的单独 LLM 请求使用固定 idle timeout。
 
-当前 OpenAI Responses 和 OpenAI-compatible Chat provider 会把 reasoning delta 归一为 `ReasoningContent`。Anthropic provider 目前使用非 streaming 的 Messages 调用，只在完整响应后返回文本和 tool call，尚未把 Claude thinking block / delta 归一为 `ReasoningContent`；因此 Anthropic thinking 暂不能触发 Runner 的 30 分钟动态 reasoning idle timeout。若要支持，需要先把 Anthropic provider 改为 streaming，并在 provider 层输出 `Chunk{ReasoningContent: ...}`。
+当前 OpenAI Responses 和 OpenAI-compatible Chat provider 会把 reasoning delta 归一为 `ReasoningContent`。Chat-compatible provider 目前支持常见的 `reasoning_content` 字符串，以及 MiniMax M3 在 `reasoning_split=true` 时返回的 `reasoning_details[].text`；这些兼容逻辑只在 provider 层读取可选字段，字段不存在或格式不匹配时会忽略。Anthropic provider 目前使用非 streaming 的 Messages 调用，只在完整响应后返回文本和 tool call，尚未把 Claude thinking block / delta 归一为 `ReasoningContent`；因此 Anthropic thinking 暂不能触发 Runner 的 30 分钟动态 reasoning idle timeout。若要支持，需要先把 Anthropic provider 改为 streaming，并在 provider 层输出 `Chunk{ReasoningContent: ...}`。
 
 当前多模型智能选择主要用于 subtask：主 Agent 可查看可用模型、上下文窗口、strengths 和多模态能力，然后在 `spawn` 时选择模型。主对话、Guard Smart Review、Skill LLM Review、上下文压缩、记忆提取等单独 LLM 请求默认仍使用 active model。
 

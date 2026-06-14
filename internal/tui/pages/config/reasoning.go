@@ -29,7 +29,7 @@ func (m *Model) CloseReasoning() {
 
 func (m *Model) ReasoningMenuItems(tr func(string) string) []string {
 	if m.ReasoningFamily == "" {
-		return []string{tr("tui.config.reasoning.clear"), "GPT", "Claude", "DeepSeek V4", tr("tui.config.reasoning.custom")}
+		return []string{tr("tui.config.reasoning.clear"), "GPT", "Claude", "DeepSeek V4", "MiniMax M3", tr("tui.config.reasoning.custom")}
 	}
 	options := ReasoningOptions(m.ReasoningFamily, "")
 	items := make([]string, 0, len(options)+1)
@@ -75,6 +75,8 @@ func (m *Model) SelectReasoningRoot() (action string) {
 	case 3:
 		m.ReasoningFamily = "deepseek"
 	case 4:
+		m.ReasoningFamily = "minimax"
+	case 5:
 		return "custom"
 	}
 	m.ReasoningCursor = 0
@@ -114,6 +116,10 @@ func ReasoningOptions(family, provider string) []ReasoningOption {
 			{Family: "DeepSeek V4", Label: "High", Reasoning: DeepSeekReasoning("high")},
 			{Family: "DeepSeek V4", Label: "Max", Reasoning: DeepSeekReasoning("max")},
 		}
+	case "minimax":
+		return []ReasoningOption{
+			{Family: "MiniMax M3", Label: "Split", Reasoning: MiniMaxReasoning()},
+		}
 	default:
 		return nil
 	}
@@ -134,6 +140,10 @@ func DeepSeekReasoning(effort string) map[string]any {
 	return map[string]any{"thinking": map[string]any{"type": "enabled"}, "reasoning_effort": effort}
 }
 
+func MiniMaxReasoning() map[string]any {
+	return map[string]any{"reasoning_split": true}
+}
+
 func ReasoningDisplay(mc ModelConfig, customLabel string) string {
 	if len(mc.Reasoning) == 0 {
 		return ""
@@ -145,7 +155,7 @@ func ReasoningDisplay(mc ModelConfig, customLabel string) string {
 }
 
 func MatchReasoningLabel(mc ModelConfig) (string, bool) {
-	for _, family := range []string{"gpt", "claude", "deepseek"} {
+	for _, family := range []string{"gpt", "claude", "deepseek", "minimax"} {
 		for _, opt := range ReasoningOptions(family, mc.Provider) {
 			if SameJSON(mc.Reasoning, opt.Reasoning) {
 				return fmt.Sprintf("%s / %s", opt.Family, opt.Label), true

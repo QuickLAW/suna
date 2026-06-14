@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	openai "github.com/openai/openai-go/v3"
@@ -123,8 +124,14 @@ func chatGeneratedKeys() map[string]bool {
 }
 
 func chatReasoningContent(delta openai.ChatCompletionChunkChoiceDelta) string {
-	field, ok := delta.JSON.ExtraFields["reasoning_content"]
-	if !ok || field.Raw() == "" || field.Raw() == "null" {
+	if reasoning := chatReasoningTextField(delta.JSON.ExtraFields["reasoning_content"]); reasoning != "" {
+		return reasoning
+	}
+	return chatReasoningDetails(delta.JSON.ExtraFields["reasoning_details"])
+}
+
+func chatReasoningTextField(field interface{ Raw() string }) string {
+	if field == nil || field.Raw() == "" || field.Raw() == "null" {
 		return ""
 	}
 	var value string
@@ -132,6 +139,30 @@ func chatReasoningContent(delta openai.ChatCompletionChunkChoiceDelta) string {
 		return ""
 	}
 	return value
+}
+
+func chatReasoningDetails(field interface{ Raw() string }) string {
+	if field == nil || field.Raw() == "" || field.Raw() == "null" {
+		return ""
+	}
+	var details []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal([]byte(field.Raw()), &details); err != nil {
+		return ""
+	}
+	var parts []string
+	for _, detail := range details {
+		if detail.Text == "" {
+			continue
+		}
+		if detail.Type != "" && detail.Type != "reasoning.text" {
+			continue
+		}
+		parts = append(parts, detail.Text)
+	}
+	return strings.Join(parts, "")
 }
 
 func (p *OpenAIChatProvider) EstimateTokens(text string) int { return len(text) / 4 }

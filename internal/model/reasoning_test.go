@@ -51,6 +51,17 @@ func TestChatReasoningContentReadsExtraField(t *testing.T) {
 	}
 }
 
+func TestChatReasoningContentReadsMiniMaxReasoningDetails(t *testing.T) {
+	var chunk openai.ChatCompletionChunk
+	raw := []byte(`{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"think-1"},{"type":"reasoning.text","text":"think-2"}],"content":""}}]}`)
+	if err := json.Unmarshal(raw, &chunk); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if got := chatReasoningContent(chunk.Choices[0].Delta); got != "think-1think-2" {
+		t.Fatalf("chatReasoningContent() = %q, want %q", got, "think-1think-2")
+	}
+}
+
 func TestResponseReasoningContentReadsDeltas(t *testing.T) {
 	tests := []struct {
 		name string
