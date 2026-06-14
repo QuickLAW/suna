@@ -21,8 +21,8 @@ func (EditFile) Spec() tools.Spec {
 				"properties": map[string]any{
 					"old_string":            map[string]any{"type": "string", "description": "Exact text to replace"},
 					"new_string":            map[string]any{"type": "string", "description": "Replacement text"},
-					"mode":                  map[string]any{"type": "string", "enum": []string{"unique", "nth", "all"}, "description": "Replacement mode. unique (default) replaces only when old_string occurs once; nth replaces the specified occurrence; all replaces every match."},
-					"occurrence":            map[string]any{"type": "integer", "description": "1-based occurrence to replace. Required only when mode is nth."},
+					"mode":                  map[string]any{"type": "string", "enum": []string{"unique", "nth", "all"}, "description": "Replacement mode. unique (default) replaces only when old_string occurs exactly once; omit occurrence. nth replaces the specified 1-based occurrence; occurrence is required. all replaces every match; omit occurrence."},
+					"occurrence":            map[string]any{"type": "integer", "description": "1-based occurrence to replace. Include this field only when mode is \"nth\"; omit it for \"unique\" and \"all\"."},
 					"expected_replacements": map[string]any{"type": "integer", "description": "Fail unless this many replacements are made"},
 				},
 				"required": []string{"old_string", "new_string"},
@@ -116,7 +116,7 @@ func parseEditOperations(value any) ([]editOperation, error) {
 			return nil, fmt.Errorf("edits[%d].occurrence is required when mode is nth", i)
 		}
 		if edit.Mode != "nth" && edit.Occurrence > 0 {
-			return nil, fmt.Errorf("edits[%d].occurrence is only valid when mode is nth", i)
+			return nil, fmt.Errorf("edits[%d].occurrence is only valid with mode=\"nth\"; omit occurrence for mode=\"%s\"", i, edit.Mode)
 		}
 		if expected, ok := m["expected_replacements"].(float64); ok && int(expected) >= 0 {
 			n := int(expected)

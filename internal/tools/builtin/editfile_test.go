@@ -95,3 +95,79 @@ func TestEditFileRequiresModeForAmbiguousEdit(t *testing.T) {
 		t.Fatalf("EditFile.Execute() = %#v, want ambiguous match error with mode hint", res)
 	}
 }
+
+func TestEditFileAcceptsZeroOccurrenceForNonNthModes(t *testing.T) {
+	tests := []struct {
+		name string
+		mode string
+	}{
+		{name: "unique", mode: "unique"},
+		{name: "all", mode: "all"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.txt")
+			if err := os.WriteFile(path, []byte("beta"), 0644); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+
+			res := EditFile{}.Execute(context.Background(), map[string]any{
+				"path":  path,
+				"edits": []any{map[string]any{"old_string": "beta", "new_string": "BETA", "mode": tt.mode, "occurrence": float64(0)}},
+			})
+			if res.IsError {
+				t.Fatalf("EditFile.Execute() error = %s", res.Error)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("ReadFile() error = %v", err)
+			}
+			if got, want := string(data), "BETA"; got != want {
+				t.Fatalf("file content = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestEditFileRejectsPositiveOccurrenceForNonNthModes(t *testing.T) {
+	tests := []struct {
+		name string
+		mode string
+	}{
+		{name: "unique", mode: "unique"},
+		{name: "all", mode: "all"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.txt")
+			if err := os.WriteFile(path, []byte("beta"), 0644); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+
+			res := EditFile{}.Execute(context.Background(), map[string]any{
+				"path":  path,
+				"edits": []any{map[string]any{"old_string": "beta", "new_string": "BETA", "mode": tt.mode, "occurrence": float64(1)}},
+			})
+			if !res.IsError || !strings.Contains(res.Error, "omit occurrence") {
+				t.Fatalf("EditFile.Execute() = %#v, want occurrence guidance error", res)
+			}
+		})
+	}
+}
+
+func TestEditFileRequiresOccurrenceForNthMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.txt")
+	if err := os.WriteFile(path, []byte("beta beta"), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	res := EditFile{}.Execute(context.Background(), map[string]any{
+		"path":  path,
+		"edits": []any{map[string]any{"old_string": "beta", "new_string": "BETA", "mode": "nth"}},
+	})
+	if !res.IsError || !strings.Contains(res.Error, "occurrence is required") {
+		t.Fatalf("EditFile.Execute() = %#v, want missing occurrence error", res)
+	}
+}
