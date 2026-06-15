@@ -6,9 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
+	"strings"
 	"time"
 
-	"github.com/alanchenchen/suna/internal/logging"
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 )
@@ -24,7 +25,11 @@ func NewAnthropicProvider(apiKey, baseURL, model string, contextWindow int, medi
 	httpClient := compatibleHTTPClient(&http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}})
 	// 关闭 SDK 隐式重试，避免一次 Suna Complete 在上游产生多次不可见请求；
 	// 未来如需重试应由 Suna 自己实现并记录日志。
-	client := anthropic.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseURL), option.WithHTTPClient(httpClient), option.WithMaxRetries(0))
+	opts := []option.RequestOption{option.WithAPIKey(apiKey), option.WithHTTPClient(httpClient), option.WithMaxRetries(0)}
+	if baseURL != "" {
+		opts = append(opts, option.WithBaseURL(baseURL))
+	}
+	client := anthropic.NewClient(opts...)
 	return &AnthropicProvider{
 		client:        &client,
 		model:         model,
@@ -34,8 +39,6 @@ func NewAnthropicProvider(apiKey, baseURL, model string, contextWindow int, medi
 }
 
 func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest) (<-chan Chunk, error) {
-	ch := make(chan Chunk, providerChunkBuffer)
-
 	messages, buildErr := p.buildMessages(ctx, req)
 	if buildErr != nil {
 		return nil, buildErr
@@ -46,68 +49,129 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 	if req.Model != "" {
 		modelName = req.Model
 	}
-
 	maxTokens := ResolveMaxTokens(req.MaxTokens)
 
+	params := anthropic.MessageNewParams{
+		Model:     modelName,
+		MaxTokens: int64(maxTokens),
+		Messages:  messages,
+	}
+	if req.System != "" {
+		params.System = []anthropic.TextBlockParam{{Text: req.System}}
+	}
+	if len(tools) > 0 {
+		params.Tools = tools
+	}
+	hasReasoning := len(req.Reasoning) > 0
+	if err := p.applyReasoning(&params, req.Reasoning); err != nil {
+		return nil, err
+	}
+	if !hasReasoning {
+		params.Temperature = anthropic.Float(resolveAnthropicTemperature(req.Temperature))
+	}
+
+	ch := make(chan Chunk, providerChunkBuffer)
 	go func() {
 		defer close(ch)
 		started := time.Now()
+		stream := p.client.Messages.NewStreaming(ctx, params)
+		defer stream.Close()
 
-		params := anthropic.MessageNewParams{
-			Model:     modelName,
-			MaxTokens: int64(maxTokens),
-			Messages:  messages,
-		}
-		if req.System != "" {
-			params.System = []anthropic.TextBlockParam{
-				{Text: req.System},
+		var usage *Usage
+		toolCalls := map[int64]*anthropicToolCallAccum{}
+		chunkCount := 0
+		assistantBytes := 0
+		reasoningBytes := 0
+		usageReceived := false
+		lastChunkAt := started
+
+		for stream.Next() {
+			chunkCount++
+			lastChunkAt = time.Now()
+			event := stream.Current()
+			switch event.Type {
+			case "message_start":
+				start := event.AsMessageStart()
+				usage = anthropicUsageFromMessage(start.Message.Usage)
+				usageReceived = true
+			case "message_delta":
+				delta := event.AsMessageDelta()
+				usage = mergeAnthropicUsage(usage, anthropicUsageFromDelta(delta.Usage))
+				usageReceived = true
+			case "content_block_start":
+				start := event.AsContentBlockStart()
+				block := start.ContentBlock
+				switch block.Type {
+				case "text":
+					if block.Text != "" {
+						assistantBytes += len(block.Text)
+						ch <- Chunk{Content: block.Text, Done: false}
+					}
+				case "thinking":
+					if block.Thinking != "" {
+						reasoningBytes += len(block.Thinking)
+						ch <- Chunk{ReasoningContent: block.Thinking, Done: false}
+					}
+				case "tool_use":
+					call := &anthropicToolCallAccum{ID: block.ID, Name: block.Name}
+					if block.Input != nil {
+						if b, err := json.Marshal(block.Input); err == nil && string(b) != "{}" {
+							call.InitialArguments = string(b)
+						}
+					}
+					toolCalls[start.Index] = call
+				}
+			case "content_block_delta":
+				delta := event.AsContentBlockDelta()
+				switch delta.Delta.Type {
+				case "text_delta":
+					if delta.Delta.Text != "" {
+						assistantBytes += len(delta.Delta.Text)
+						ch <- Chunk{Content: delta.Delta.Text, Done: false}
+					}
+				case "thinking_delta":
+					if delta.Delta.Thinking != "" {
+						reasoningBytes += len(delta.Delta.Thinking)
+						ch <- Chunk{ReasoningContent: delta.Delta.Thinking, Done: false}
+					}
+				case "input_json_delta":
+					call := toolCalls[delta.Index]
+					if call == nil {
+						call = &anthropicToolCallAccum{}
+						toolCalls[delta.Index] = call
+					}
+					call.Arguments.WriteString(delta.Delta.PartialJSON)
+				}
 			}
 		}
-		if len(tools) > 0 {
-			params.Tools = tools
-		}
-		if err := p.applyReasoning(&params, req.Reasoning); err != nil {
-			logLLMFailure(req, err, loggingFields(started, nil))
+
+		if err := stream.Err(); err != nil {
+			fields := loggingFields(started, usage)
+			fields["chunk_count"] = chunkCount
+			fields["assistant_bytes"] = assistantBytes
+			fields["reasoning_bytes"] = reasoningBytes
+			fields["usage_received"] = usageReceived
+			fields["last_chunk_age_ms"] = time.Since(lastChunkAt).Milliseconds()
+			logLLMFailure(req, err, fields)
 			ch <- Chunk{Done: true, Error: err.Error()}
 			return
 		}
 
-		msg, err := p.client.Messages.New(ctx, params)
-		if err != nil {
-			logLLMFailure(req, err, loggingFields(started, nil))
-			ch <- Chunk{Done: true, Error: fmt.Sprintf("%v", err)}
+		calls := anthropicAccumulatedToolCalls(toolCalls)
+		fields := loggingFields(started, usage)
+		fields["tool_calls"] = len(calls)
+		fields["chunk_count"] = chunkCount
+		fields["assistant_bytes"] = assistantBytes
+		fields["reasoning_bytes"] = reasoningBytes
+		fields["usage_received"] = usageReceived
+		logLLMSuccess(req, fields)
+		if len(calls) > 0 {
+			ch <- Chunk{ToolCalls: calls, Done: false}
+		}
+		if usage != nil {
+			ch <- Chunk{Done: true, Usage: usage}
 			return
 		}
-
-		var textContent string
-		var toolCalls []ToolCall
-
-		for _, block := range msg.Content {
-			switch block.Type {
-			case "text":
-				textContent += block.Text
-			case "tool_use":
-				argsJSON := "{}"
-				if block.Input != nil {
-					if b, err := block.Input.MarshalJSON(); err == nil {
-						argsJSON = string(b)
-					}
-				}
-				toolCalls = append(toolCalls, ToolCall{
-					ID:        block.ID,
-					Name:      block.Name,
-					Arguments: argsJSON,
-				})
-			}
-		}
-
-		if textContent != "" {
-			ch <- Chunk{Content: textContent, Done: false}
-		}
-		if len(toolCalls) > 0 {
-			ch <- Chunk{ToolCalls: toolCalls, Done: false}
-		}
-		logLLMSuccess(req, logging.Event{"duration_ms": time.Since(started).Milliseconds(), "tool_calls": len(toolCalls)})
 		ch <- Chunk{Done: true}
 	}()
 
@@ -160,6 +224,86 @@ func numericInt64(v any) (int64, bool) {
 		return i, err == nil
 	default:
 		return 0, false
+	}
+}
+
+func resolveAnthropicTemperature(t float64) float64 {
+	if t > 0 {
+		return t
+	}
+	return 0.7
+}
+
+type anthropicToolCallAccum struct {
+	ID               string
+	Name             string
+	InitialArguments string
+	Arguments        strings.Builder
+}
+
+func anthropicAccumulatedToolCalls(acc map[int64]*anthropicToolCallAccum) []ToolCall {
+	if len(acc) == 0 {
+		return nil
+	}
+	indexes := make([]int64, 0, len(acc))
+	for index := range acc {
+		indexes = append(indexes, index)
+	}
+	sort.Slice(indexes, func(i, j int) bool { return indexes[i] < indexes[j] })
+
+	calls := make([]ToolCall, 0, len(indexes))
+	for _, index := range indexes {
+		call := acc[index]
+		if call == nil || call.ID == "" || call.Name == "" {
+			continue
+		}
+		args := call.Arguments.String()
+		if args == "" {
+			args = call.InitialArguments
+		}
+		if strings.TrimSpace(args) == "" {
+			args = "{}"
+		}
+		calls = append(calls, ToolCall{ID: call.ID, Name: call.Name, Arguments: args})
+	}
+	return calls
+}
+
+func anthropicUsageFromMessage(u anthropic.Usage) *Usage {
+	return anthropicUsage(int(u.InputTokens), int(u.CacheCreationInputTokens), int(u.CacheReadInputTokens), int(u.OutputTokens))
+}
+
+func anthropicUsageFromDelta(u anthropic.MessageDeltaUsage) *Usage {
+	return anthropicUsage(int(u.InputTokens), int(u.CacheCreationInputTokens), int(u.CacheReadInputTokens), int(u.OutputTokens))
+}
+
+func mergeAnthropicUsage(prev, next *Usage) *Usage {
+	if prev == nil {
+		return next
+	}
+	if next == nil {
+		return prev
+	}
+	merged := *next
+	if merged.InputTokens == 0 {
+		merged.InputTokens = prev.InputTokens
+	}
+	if merged.CachedTokens == 0 {
+		merged.CachedTokens = prev.CachedTokens
+	}
+	if merged.TotalTokens == merged.OutputTokens && merged.InputTokens > 0 {
+		merged.TotalTokens = merged.InputTokens + merged.OutputTokens
+	}
+	return &merged
+}
+
+func anthropicUsage(inputTokens, cacheCreationTokens, cacheReadTokens, outputTokens int) *Usage {
+	inputTotal := inputTokens + cacheCreationTokens + cacheReadTokens
+	return &Usage{
+		InputTokens:  inputTotal,
+		OutputTokens: outputTokens,
+		CachedTokens: cacheReadTokens,
+		TotalTokens:  inputTotal + outputTokens,
 	}
 }
 
@@ -254,7 +398,7 @@ func (p *AnthropicProvider) buildAssistantBlocks(ctx context.Context, m Message)
 		blocks = append(blocks, anthropic.NewTextBlock(m.TextContent))
 	}
 	for _, tc := range m.ToolCalls {
-		blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, tc.Arguments, tc.Name))
+		blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, ParseToolCallArguments(tc.Arguments), tc.Name))
 	}
 	return blocks, nil
 }
