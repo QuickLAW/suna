@@ -200,6 +200,67 @@ func TestSearchSymbolModeFindsDocumentAndConfigStructure(t *testing.T) {
 	}
 }
 
+func TestSearchGlobMatchSupportsDoublestarPaths(t *testing.T) {
+	root := t.TempDir()
+	deepDir := filepath.Join(root, "internal", "tools", "builtin")
+	if err := os.MkdirAll(deepDir, 0755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(deepDir, "search_test.go"), []byte("package builtin\n"), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	res := Search{}.Execute(context.Background(), map[string]any{"path": root, "pattern": "internal/**/search*.go", "mode": "path", "match": "glob"})
+	if res.IsError {
+		t.Fatalf("Search.Execute() error = %s", res.Error)
+	}
+	if !strings.Contains(res.Content, "internal/tools/builtin/search_test.go") {
+		t.Fatalf("Search.Execute() content = %q, want doublestar glob path match", res.Content)
+	}
+}
+
+func TestSearchIncludeGlobSupportsDoublestarPaths(t *testing.T) {
+	root := t.TempDir()
+	deepDir := filepath.Join(root, "a", "b")
+	if err := os.MkdirAll(deepDir, 0755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(deepDir, "target.go"), []byte("needle\n"), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(deepDir, "target.txt"), []byte("needle\n"), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	res := Search{}.Execute(context.Background(), map[string]any{"path": root, "pattern": "needle", "mode": "content", "include": []any{"**/*.go"}})
+	if res.IsError {
+		t.Fatalf("Search.Execute() error = %s", res.Error)
+	}
+	if !strings.Contains(res.Content, "a/b/target.go") {
+		t.Fatalf("Search.Execute() content = %q, want deep go file match", res.Content)
+	}
+	if strings.Contains(res.Content, "target.txt") {
+		t.Fatalf("Search.Execute() content = %q, want txt file filtered by include", res.Content)
+	}
+}
+
+func TestSearchTermsWorkWhenPatternIsEmptyString(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "schema.txt"), []byte("pattern\nterms\nmode\nscope\n"), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	res := Search{}.Execute(context.Background(), map[string]any{"path": root, "pattern": "", "terms": []any{"pattern", "terms", "mode", "scope"}, "mode": "content"})
+	if res.IsError {
+		t.Fatalf("Search.Execute() error = %s", res.Error)
+	}
+	for _, want := range []string{"pattern", "terms", "[matched: pattern]", "[matched: terms]"} {
+		if !strings.Contains(res.Content, want) {
+			t.Fatalf("Search.Execute() content = %q, want substring %q", res.Content, want)
+		}
+	}
+}
+
 func TestSearchTermsMatchLiteralAlternatives(t *testing.T) {
 	root := t.TempDir()
 	content := "alpha\ndescribe(\nmount(\n"

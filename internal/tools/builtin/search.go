@@ -627,15 +627,57 @@ func (s *searchState) matchTerm(value string, term searchTerm) bool {
 }
 
 func globMatch(value string, pattern string) bool {
-	value = filepath.ToSlash(value)
-	pattern = filepath.ToSlash(pattern)
-	if ok, _ := filepath.Match(pattern, value); ok {
+	value = cleanGlobPath(value)
+	pattern = cleanGlobPath(pattern)
+	if doublestarGlobMatch(pattern, value) {
 		return true
 	}
-	if ok, _ := filepath.Match(pattern, filepath.Base(value)); ok {
-		return true
+	// 没有路径分隔符的 glob 按文件名匹配，贴近常见 find/fd 使用习惯。
+	if !strings.Contains(pattern, "/") {
+		return doublestarGlobMatch(pattern, filepath.Base(value))
 	}
 	return false
+}
+
+func cleanGlobPath(path string) string {
+	path = filepath.ToSlash(strings.TrimSpace(path))
+	path = strings.TrimPrefix(path, "./")
+	path = strings.Trim(path, "/")
+	return path
+}
+
+func doublestarGlobMatch(pattern string, value string) bool {
+	if pattern == "" {
+		return value == ""
+	}
+	return matchGlobParts(strings.Split(pattern, "/"), strings.Split(value, "/"))
+}
+
+func matchGlobParts(patternParts []string, valueParts []string) bool {
+	if len(patternParts) == 0 {
+		return len(valueParts) == 0
+	}
+	part := patternParts[0]
+	if part == "**" {
+		// ** 匹配零个或多个路径段，支持 **/*.go、dir/** 和 dir/**/file 等常见 glob。
+		if matchGlobParts(patternParts[1:], valueParts) {
+			return true
+		}
+		for i := range valueParts {
+			if matchGlobParts(patternParts[1:], valueParts[i+1:]) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(valueParts) == 0 {
+		return false
+	}
+	ok, err := filepath.Match(part, valueParts[0])
+	if err != nil || !ok {
+		return false
+	}
+	return matchGlobParts(patternParts[1:], valueParts[1:])
 }
 
 func identifierWordMatch(value, query string) bool {
