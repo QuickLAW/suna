@@ -92,12 +92,12 @@ LLM 请求使用按场景维护的 idle timeout，而不是任务总时长 timeo
 | 工具 | 类型 | 当前用途 |
 |---|---|---|
 | `readfile` | 感知 | 按行范围、tail 或 base64 读取本地文件。 |
-| `listdir` | 感知 | 列目录，支持递归、分页、include/exclude 和隐藏文件开关。 |
-| `search` | 感知 | 通用本地搜索工具。`path` 可指向文件或目录；`kind=auto` 会同时返回路径、轻量结构入口和正文分组，也可指定 `content` / `path` / `symbol`；`symbol` 表示文档标题、配置段/key、常见定义/声明等轻量结构入口，不限于代码。支持 `context_lines`、`max_results`、include/exclude、regex、大小写和 word 匹配。默认排除常见依赖/构建目录和凭据文件，并通过扫描文件数、文件大小、输出大小限制保持有界；空结果或截断时只在正文追加诊断提示，不改变 TUI 依赖的 metadata contract。 |
+| `listdir` | 感知 | 列目录，支持递归、分页、include/exclude 和隐藏文件开关；`max_depth` 上限 3。 |
+| `search` | 感知 | 通用本地搜索工具。`path` 可指向文件或目录；`mode=auto` 同时返回路径、轻量结构入口和正文分组，也可指定 `content` / `path` / `symbol`；`symbol` 表示文档标题、配置段/key、常见定义/声明等轻量结构入口，不限于代码。支持 `context`(默认 1，最大 5)、`limit`(默认 100，最大 1000)、`depth`(默认 8，最大 20)、include/exclude、`match=literal/regex/glob`、`case=smart/insensitive/sensitive`、`scope=workspace/deps/all` 和 `word`。默认排除常见依赖/构建/缓存/VCS 目录和凭据文件，并通过扫描文件数、文件大小、输出大小限制保持有界；空结果或截断时只在正文追加诊断提示，不改变 TUI 依赖的 metadata contract。 |
 | `exec` | 行动 | 执行 shell 命令；Guard 会把可证明只读的命令归为 low risk。 |
-| `writefile` | 行动 | 创建、覆盖或追加文件，支持父目录创建和写前 SHA-256 校验。 |
+| `writefile` | 行动 | 创建、覆盖或追加文件，支持 `create_dirs=true` 自动创建父目录和写前 SHA-256 校验；创建新文件场景应优先使用本工具而不是先 `filesystem mkdir` 再写。 |
 | `editfile` | 行动 | 对单个文件原子应用一个或多个精确文本替换；默认要求 `old_string` 唯一匹配，`target="all"` 替换全部，`target="2"` 按 1-based 序号替换第 2 个匹配。 |
-| `filesystem` | 行动 | `stat` / `mkdir` / `move` / `copy` / `remove` 文件系统路径；`stat` 为只读低风险调用。 |
+| `filesystem` | 行动 | `stat` / `mkdir` / `move` / `copy` / `remove` 文件系统路径；`stat` 为只读低风险调用。创建新文件优先使用 `writefile create_dirs=true`，避免无意义的预先 `mkdir`。 |
 | `http` | 行动 | 统一 HTTP 请求工具；`GET` / `HEAD` 为只读低风险调用，写方法按风险审查。 |
 | `askuser` | runtime | 向用户提问。 |
 | `spawn` | runtime | 委派独立 subtask。 |

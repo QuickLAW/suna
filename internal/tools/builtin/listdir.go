@@ -19,17 +19,17 @@ const (
 type ListDir struct{}
 
 func (ListDir) Spec() tools.Spec {
-	return builtinSpec("listdir", "List directory contents as structured entries. Supports offset/limit pagination and recursive listing up to depth 3.", tools.Perceive, map[string]any{
+	return builtinSpec("listdir", "List directory contents as structured entries. Supports pagination and recursive listing.", tools.Perceive, map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"path":           map[string]any{"type": "string", "description": "Directory path"},
-			"recursive":      map[string]any{"type": "boolean", "description": "Whether to recursively list subdirectories"},
-			"max_depth":      map[string]any{"type": "integer", "description": "Maximum recursion depth, default 3"},
-			"offset":         map[string]any{"type": "integer", "description": "Starting entry index, 1-indexed, for continuing large directory listings"},
-			"limit":          map[string]any{"type": "integer", "description": "Maximum entries to return, default 500, max 1000"},
-			"include":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Glob patterns to include"},
-			"exclude":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Glob patterns to exclude"},
-			"include_hidden": map[string]any{"type": "boolean", "description": "Whether to include hidden entries"},
+			"recursive":      map[string]any{"type": "boolean", "description": "Recursively list subdirectories"},
+			"max_depth":      map[string]any{"type": "integer", "description": "Max recursion depth. Default 3, max 3"},
+			"offset":         map[string]any{"type": "integer", "description": "Starting entry index, 1-indexed, for pagination"},
+			"limit":          map[string]any{"type": "integer", "description": "Max entries. Default 500, max 1000"},
+			"include":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Glob include filters"},
+			"exclude":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Glob exclude filters"},
+			"include_hidden": map[string]any{"type": "boolean", "description": "Include hidden entries"},
 		},
 		"required": []string{"path"},
 	})

@@ -71,68 +71,22 @@ var (
 type Search struct{}
 
 func (Search) Spec() tools.Spec {
-	return builtinSpec("search", "Search local files, paths, symbols, or text. Use this structured search instead of shell find/grep/glob/global-style searches when possible.", tools.Perceive, map[string]any{
+	return builtinSpec("search", "Search local files, paths, symbols, or text. Prefer over shell find/grep.", tools.Perceive, map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"path": map[string]any{
-				"type":        "string",
-				"description": "File or directory to search. Use project-relative paths when possible.",
-			},
-			"pattern": map[string]any{
-				"type":        "string",
-				"description": "Single search pattern. Literal by default and safe for punctuation such as parentheses, brackets, dots, paths, and markup. Use terms for multiple alternatives instead of writing foo|bar.",
-			},
-			"terms": map[string]any{
-				"type":        "array",
-				"items":       map[string]any{"type": "string"},
-				"description": "Multiple literal alternatives. Matches if any term appears. Prefer this for searching several names, phrases, files, commands, symbols, or text snippets.",
-			},
-			"mode": map[string]any{
-				"type":        "string",
-				"enum":        []string{"auto", "content", "path", "symbol"},
-				"description": "Search mode. content is like grep/rg, path is like find/fd/glob, symbol searches headings/config keys/declarations, auto searches path + symbol + content. Default auto.",
-			},
-			"match": map[string]any{
-				"type":        "string",
-				"enum":        []string{"literal", "regex", "glob"},
-				"description": "Pattern match mode for pattern. Default literal. Use regex only for valid Go regular expressions. Use glob mainly with mode=path. terms are always literal alternatives.",
-			},
-			"case": map[string]any{
-				"type":        "string",
-				"enum":        []string{"smart", "insensitive", "sensitive"},
-				"description": "Case matching. Default smart: case-insensitive unless the search text contains uppercase.",
-			},
-			"scope": map[string]any{
-				"type":        "string",
-				"enum":        []string{"workspace", "deps", "all"},
-				"description": "Built-in search scope. workspace skips dependencies/build/cache/VCS/secret files. deps includes dependency source such as node_modules or vendor but still skips build/cache/VCS/secret files. all searches generated/cache/dependency files too, while still protecting common secret files. Default workspace.",
-			},
-			"word": map[string]any{
-				"type":        "boolean",
-				"description": "Match whole identifier-like words. Usually omit unless substring matches are too noisy.",
-			},
-			"include": map[string]any{
-				"type":        "array",
-				"items":       map[string]any{"type": "string"},
-				"description": "Glob filters for files to include, like grep/rg -g or find path filters. Example: [\"**/*.go\", \"docs/**\"].",
-			},
-			"exclude": map[string]any{
-				"type":        "array",
-				"items":       map[string]any{"type": "string"},
-				"description": "Glob filters to exclude, in addition to the selected scope's built-in excludes.",
-			},
-			"context": map[string]any{
-				"type":        "integer",
-				"description": "Lines of context around content/symbol matches. Default 1, max 5.",
-			},
-			"limit": map[string]any{
-				"type":        "integer",
-				"description": "Maximum matches to return. Default 100, max 1000.",
-			},
-			"depth": map[string]any{
-				"type":        "integer",
-				"description": "Maximum directory depth when path is a directory. Default 8, max 20. Use 0 for only the current directory.",
-			},
+			"path":    map[string]any{"type": "string", "description": "File or directory to search"},
+			"pattern": map[string]any{"type": "string", "description": "Search pattern. Literal by default, safe for punctuation. Use terms for multiple alternatives."},
+			"terms":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Multiple literal alternatives; matches if any appears"},
+			"mode":    map[string]any{"type": "string", "enum": []string{"auto", "content", "path", "symbol"}, "description": "content=grep, path=find/glob, symbol=headings/keys/declarations, auto=all. Default auto"},
+			"match":   map[string]any{"type": "string", "enum": []string{"literal", "regex", "glob"}, "description": "Match mode. Default literal. regex=Go regexp, glob=best with mode=path"},
+			"case":    map[string]any{"type": "string", "enum": []string{"smart", "insensitive", "sensitive"}, "description": "Default smart: insensitive unless pattern has uppercase"},
+			"scope":   map[string]any{"type": "string", "enum": []string{"workspace", "deps", "all"}, "description": "workspace skips deps/build/cache/VCS/secrets, deps includes node_modules/vendor, all includes everything except secrets. Default workspace"},
+			"word":    map[string]any{"type": "boolean", "description": "Match whole identifier words; omit unless substring too noisy"},
+			"include": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Glob include filters, e.g. [\"**/*.go\"]"},
+			"exclude": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Glob exclude filters, in addition to scope excludes"},
+			"context": map[string]any{"type": "integer", "description": "Context lines around matches. Default 1, max 5"},
+			"limit":   map[string]any{"type": "integer", "description": "Max matches. Default 100, max 1000"},
+			"depth":   map[string]any{"type": "integer", "description": "Max directory depth. Default 8, max 20. 0=current dir only"},
 		},
 		"required": []string{"path"},
 	})

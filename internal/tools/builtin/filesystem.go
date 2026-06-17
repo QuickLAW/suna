@@ -11,7 +11,7 @@ import (
 type FileSystem struct{}
 
 func (FileSystem) Spec() tools.Spec {
-	return builtinSpec("filesystem", "Manage filesystem paths: stat, mkdir, move, copy, or permanently remove files and directories.", tools.Act, map[string]any{
+	return builtinSpec("filesystem", "Manage filesystem paths: stat, mkdir, move, copy, or permanently remove files and directories. Prefer writefile with create_dirs=true to create new files.", tools.Act, map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"action":        map[string]any{"type": "string", "enum": []string{"stat", "mkdir", "move", "copy", "remove"}, "description": "Filesystem action"},

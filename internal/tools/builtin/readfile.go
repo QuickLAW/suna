@@ -27,10 +27,10 @@ func (ReadFile) Spec() tools.Spec {
 		"type": "object",
 		"properties": map[string]any{
 			"path":       map[string]any{"type": "string", "description": "File path"},
-			"start_line": map[string]any{"type": "integer", "description": "Starting line number, 1-indexed"},
-			"line_count": map[string]any{"type": "integer", "description": "Maximum lines to return, default 2000, max 5000"},
+			"start_line": map[string]any{"type": "integer", "description": "Starting line, 1-indexed"},
+			"line_count": map[string]any{"type": "integer", "description": "Max lines. Default 2000, max 5000"},
 			"tail_lines": map[string]any{"type": "integer", "description": "Read the last N lines"},
-			"encoding":   map[string]any{"type": "string", "enum": []string{"text", "base64"}, "description": "Output encoding"},
+			"encoding":   map[string]any{"type": "string", "enum": []string{"text", "base64"}, "description": "Output encoding. Default text"},
 		},
 		"required": []string{"path"},
 	})

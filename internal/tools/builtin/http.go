@@ -20,11 +20,11 @@ func (HTTP) Spec() tools.Spec {
 		"type": "object",
 		"properties": map[string]any{
 			"url":            map[string]any{"type": "string", "description": "Request URL"},
-			"method":         map[string]any{"type": "string", "enum": []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}, "description": "HTTP method, default GET"},
+			"method":         map[string]any{"type": "string", "enum": []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}, "description": "HTTP method. Default GET"},
 			"headers":        map[string]any{"type": "object", "description": "Request headers"},
 			"body":           map[string]any{"type": "string", "description": "Request body"},
-			"timeout":        map[string]any{"type": "integer", "description": "Timeout in seconds, default 30"},
-			"max_body_bytes": map[string]any{"type": "integer", "description": "Maximum response body bytes, default 100KB"},
+			"timeout":        map[string]any{"type": "integer", "description": "Timeout seconds. Default 30"},
+			"max_body_bytes": map[string]any{"type": "integer", "description": "Max response body bytes. Default 100KB"},
 		},
 		"required": []string{"url"},
 	})

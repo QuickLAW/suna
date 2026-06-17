@@ -25,9 +25,9 @@ func (Exec) Spec() tools.Spec {
 		"properties": map[string]any{
 			"command": map[string]any{"type": "string", "description": "Command to execute"},
 			"cwd":     map[string]any{"type": "string", "description": "Working directory"},
-			"timeout": map[string]any{"type": "integer", "description": "Timeout in seconds, default 60"},
+			"timeout": map[string]any{"type": "integer", "description": "Timeout seconds. Default 60"},
 			"env":     map[string]any{"type": "object", "description": "Environment variables"},
-			"shell":   map[string]any{"type": "string", "description": "Shell type: auto|bash|powershell|cmd"},
+			"shell":   map[string]any{"type": "string", "description": "Shell type: auto|bash|powershell|cmd. Default auto"},
 		},
 		"required": []string{"command"},
 	})
