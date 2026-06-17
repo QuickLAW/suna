@@ -18,6 +18,32 @@ func IndentLines(s, prefix string) string {
 	return strings.Join(lines, "\n")
 }
 
+func ExpandTabs(s string, tabWidth int) string {
+	if s == "" || !strings.Contains(s, "\t") {
+		return s
+	}
+	if tabWidth <= 0 {
+		tabWidth = 4
+	}
+	var b strings.Builder
+	col := 0
+	for _, r := range s {
+		switch r {
+		case '\t':
+			spaces := tabWidth - col%tabWidth
+			b.WriteString(strings.Repeat(" ", spaces))
+			col += spaces
+		case '\n', '\r':
+			b.WriteRune(r)
+			col = 0
+		default:
+			b.WriteRune(r)
+			col += lipgloss.Width(string(r))
+		}
+	}
+	return b.String()
+}
+
 func IndentWrappedPlain(s, prefix string, width int) string {
 	if s == "" {
 		return prefix

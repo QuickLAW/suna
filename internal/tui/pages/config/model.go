@@ -92,25 +92,18 @@ func ModelStatusMark(mc ModelConfig, active bool) string {
 	return "○"
 }
 
-func ModelSummary(mc ModelConfig, active bool, fmtTok func(int) string) string {
+func ModelSummary(mc ModelConfig, _ bool, fmtTok func(int) string) string {
 	var parts []string
-	if active {
-		parts = append(parts, "active")
-	}
 	if !mc.HasAPIKey {
 		parts = append(parts, "missing_api_key")
 	} else if mc.Ref() == "" {
 		parts = append(parts, "invalid")
 	}
-	parts = append(parts, mc.Provider, mc.Model)
 	if mc.ContextWindow > 0 {
 		parts = append(parts, "ctx "+fmtTok(mc.ContextWindow))
 	}
 	if mc.MaxOutputTokens > 0 {
 		parts = append(parts, "out "+fmtTok(mc.MaxOutputTokens))
-	}
-	if mc.BaseURL != "" {
-		parts = append(parts, "endpoint_configured")
 	}
 	if len(mc.Strengths) > 0 {
 		parts = append(parts, strings.Join(mc.Strengths, ", "))

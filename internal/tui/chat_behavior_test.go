@@ -416,3 +416,13 @@ func TestCachedStreamingTextMatchesFullRender(t *testing.T) {
 		t.Fatalf("cachedStreamingText cached mismatch\ngot:\n%q\nwant:\n%q", got, want)
 	}
 }
+
+func TestRenderStreamingTextExpandsTabsBeforeWrapping(t *testing.T) {
+	got := renderStreamingText("if ok {\n\treturn true", 12)
+	if strings.Contains(got, "\t") {
+		t.Fatalf("renderStreamingText() = %q, should not contain tabs", got)
+	}
+	if !strings.Contains(got, "    return") {
+		t.Fatalf("renderStreamingText() = %q, want tab expanded indentation", got)
+	}
+}

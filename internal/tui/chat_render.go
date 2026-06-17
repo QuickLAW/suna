@@ -351,6 +351,7 @@ func (t *TUI) cachedStreamingText(msg *chatMsg, content string, width int) strin
 		msg.Render = msgRenderCache{Width: width}
 		return ""
 	}
+	content = textutil.ExpandTabs(content, 4)
 	if cache.Width != width || cache.ContentLen > len(content) {
 		out := renderStreamingText(content, width)
 		lines := splitRenderedLines(out)
@@ -440,6 +441,7 @@ func renderStreamingText(content string, width int) string {
 	if content == "" {
 		return ""
 	}
+	content = textutil.ExpandTabs(content, 4)
 	var lines []string
 	for _, line := range strings.Split(strings.TrimRight(content, "\n"), "\n") {
 		lines = append(lines, textutil.WrapLine(line, width)...)

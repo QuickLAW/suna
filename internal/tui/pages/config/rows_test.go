@@ -33,3 +33,35 @@ func TestModelRowsActiveModelUsesMarkerWithoutRepeatedActiveText(t *testing.T) {
 		t.Fatalf("active model row = %q / %q, should not repeat active text", label, value)
 	}
 }
+
+func TestModelSummaryKeepsCapabilitiesBriefAndPrioritizesStrengths(t *testing.T) {
+	mc := ModelConfig{
+		Provider:        "DF",
+		Model:           "MiniMax-M3",
+		BaseURL:         "https://example.test",
+		ContextWindow:   1000000,
+		MaxOutputTokens: 128000,
+		Strengths:       []string{"多模态", "1M长上下文", "快速代码辅助"},
+		HasAPIKey:       true,
+	}
+
+	got := ModelSummary(mc, true, func(n int) string {
+		switch n {
+		case 1000000:
+			return "1.0M"
+		case 128000:
+			return "128.0k"
+		default:
+			return "?"
+		}
+	})
+	want := "ctx 1.0M · out 128.0k · 多模态, 1M长上下文, 快速代码辅助"
+	if got != want {
+		t.Fatalf("ModelSummary() = %q, want %q", got, want)
+	}
+	for _, unexpected := range []string{"DF", "MiniMax-M3", "endpoint_configured", "active"} {
+		if strings.Contains(got, unexpected) {
+			t.Fatalf("ModelSummary() = %q, should not contain %q", got, unexpected)
+		}
+	}
+}
