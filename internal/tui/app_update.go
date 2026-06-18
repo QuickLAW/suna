@@ -15,7 +15,7 @@ func (t *TUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			t.initWelcomeList()
 		}
 		if t.mode == uipage.Chat {
-			t.syncContent()
+			return t, t.scheduleTranscriptSync()
 		}
 		return t, nil
 	}

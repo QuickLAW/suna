@@ -79,6 +79,10 @@ type TUI struct {
 	contextTokens    int
 	contextWindow    int
 	lastTextStreamAt time.Time
+
+	// transcript 同步由 daemon 通知触发时按帧合并，避免流式输出和工具事件风暴反复完整重渲染。
+	transcriptSyncDirty     bool
+	transcriptSyncScheduled bool
 }
 
 type guardConfirmView = chatpage.GuardConfirmView

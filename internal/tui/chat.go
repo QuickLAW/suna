@@ -21,6 +21,9 @@ const chatMaxCommandSuggestions = chatpage.MaxCommandSuggestions
 type phase = chatpage.Phase
 
 type manualCompactRequestMsg struct{}
+type transcriptSyncMsg struct{}
+
+const transcriptSyncFrameInterval = 8 * time.Millisecond
 
 const (
 	phaseIdle             = chatpage.PhaseIdle
@@ -81,6 +84,7 @@ func (t *TUI) initChatComponents() tea.Cmd {
 }
 
 func (t *TUI) syncContent() {
+	t.transcriptSyncDirty = false
 	t.chat.SyncTranscript(chatpage.TranscriptDeps{
 		Width:         t.width,
 		MarkdownWidth: max(24, t.width-8),
@@ -116,6 +120,25 @@ func (t *TUI) syncContent() {
 		RenderStatusLine:   t.renderCurrentStatusLine,
 		HasVisibleProgress: t.hasVisibleActiveProgress,
 	})
+}
+
+func (t *TUI) scheduleTranscriptSync() tea.Cmd {
+	t.transcriptSyncDirty = true
+	if t.transcriptSyncScheduled {
+		return nil
+	}
+	t.transcriptSyncScheduled = true
+	return tea.Tick(transcriptSyncFrameInterval, func(time.Time) tea.Msg {
+		return transcriptSyncMsg{}
+	})
+}
+
+func (t *TUI) flushScheduledTranscriptSync() {
+	t.transcriptSyncScheduled = false
+	if !t.transcriptSyncDirty || t.mode != uipage.Chat {
+		return
+	}
+	t.syncContent()
 }
 
 func (t *TUI) currentInputPolicy() chatpage.InputPolicy {
@@ -154,6 +177,10 @@ const textStreamSpinnerSuppressWindow = 120 * time.Millisecond
 
 func (t *TUI) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m := msg.(type) {
+	case transcriptSyncMsg:
+		t.flushScheduledTranscriptSync()
+		return t, nil
+
 	case tea.WindowSizeMsg:
 		t.width = m.Width
 		t.height = m.Height
