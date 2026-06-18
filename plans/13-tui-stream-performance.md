@@ -41,7 +41,7 @@ daemon 在 `runAgent` 出口对文本流做传输级 micro-batching：
 TUI 在 notification pump 层合并连续文本流：
 
 - 只合并 `agent.stream` 和 `agent.reasoning`。
-- 默认约 8ms flush 一次，比原 16ms 更接近字符级反馈，但仍避免每个 delta 都触发完整 UI 重绘。
+- 默认约 8ms flush 一次，保留接近字符级的 notification 反馈；Chat transcript 视觉同步另有约 16ms dirty frame，用于把 viewport 正文刷新限制在约 60fps。
 - 遇到 `done`、tool、ask、guard、error 等非文本事件时，先 flush pending 文本，再即时投递状态事件。
 - local transport read loop 仍不阻塞在 `program.Send` 上，避免反向卡住 daemon 写入。
 
@@ -63,7 +63,7 @@ TUI 在 notification pump 层合并连续文本流：
 - tool detail 将 title/tool/intent/params/guard/result 拆成 section，并通过 `virtualScrollWindow` 只渲染当前可见窗口。
 - `wrappedLineSection` 只保存原始逻辑行和 wrap 后行数；滚动到某一行时才切出目标展示行，不缓存完整 wrap 后文本。
 - `Ctrl+T`、`Esc`、`PgUp/PgDn`、`↑/↓`、鼠标滚轮这类只影响 overlay 的操作不再调用 `syncContent()`，避免重算整个 chat viewport。
-- Chat 当前 `bubbles/viewport` 只负责显示窗口滚动，`syncContent()` 仍会生成完整聊天字符串；若长会话后续成为瓶颈，应按同一 line source 模型做消息级虚拟渲染。
+- Chat 当前 `bubbles/viewport` 只负责显示窗口滚动，`syncContent()` 使用消息级窗口化和约 16ms 视觉合帧；若长会话后续仍成为瓶颈，应按同一 line source 模型继续降低可见窗口切片成本。
 
 ### Markdown 缓存
 
@@ -99,6 +99,7 @@ TUI 在 notification pump 层合并连续文本流：
 - 不合并 tool/ask/guard/done 等状态事件，保证交互及时。
 - `done` 必须优先触发 pending 文本 flush，避免结束状态被大量旧 delta 堵住。
 - 流式轻量渲染只用于运行态；最终展示必须保持 Markdown。
+- 性能优化优先发生在 UI 视觉同步、窗口化和缓存层；不得延迟 tool/ask/guard/done 等关键事件，也不得改变 daemon 传输语义。
 - 新增代码文件必须保持小文件，避免继续扩大 `app.go` / `chat.go`。
 
 ## 诊断

@@ -24,7 +24,9 @@ type manualCompactRequestMsg struct{}
 type transcriptSyncMsg struct{}
 type inputCursorBlinkMsg struct{}
 
-const transcriptSyncFrameInterval = 8 * time.Millisecond
+// transcriptSyncFrameInterval 只限制 TUI 聊天正文的同步频率，不影响 daemon 收流；
+// 16ms 约等于 60fps，比 8ms/125fps 更适合终端渲染，能降低 VSCode renderer 压力。
+const transcriptSyncFrameInterval = 16 * time.Millisecond
 
 const (
 	phaseIdle             = chatpage.PhaseIdle
