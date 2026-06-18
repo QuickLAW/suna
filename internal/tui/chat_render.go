@@ -76,11 +76,11 @@ func (t *TUI) renderThinkingBox(content string, running bool, startedAt, endedAt
 	width := max(24, min(t.width-8, 62))
 	inner := width - 4
 	elapsed := reasoningElapsed(running, startedAt, endedAt)
-	title := " ◎ " + t.tr("tui.chat.thinking") + " "
+	title := t.tr("tui.chat.thinking")
 	if running {
-		title = fmt.Sprintf(" ◎ %s %s %.1fs ", t.tr("tui.chat.thinking"), t.chat.Spinner.View(), elapsed.Seconds())
+		title = fmt.Sprintf("%s %s %.1fs", t.chat.Spinner.View(), t.tr("tui.chat.thinking"), elapsed.Seconds())
 	} else if elapsed > 0 {
-		title = fmt.Sprintf(" ◎ %s %.1fs ", t.tr("tui.chat.thinking"), elapsed.Seconds())
+		title = fmt.Sprintf("✓ %s %.1fs", t.tr("tui.chat.thinking"), elapsed.Seconds())
 	}
 	display := strings.TrimSpace(content)
 	if running && display == "" {
@@ -91,7 +91,7 @@ func (t *TUI) renderThinkingBox(content string, running bool, startedAt, endedAt
 		if display == "" {
 			display = t.tr("tui.chat.thought_done")
 		}
-		display += "    [Ctrl+R " + t.tr("tui.key.reasoning_detail") + "]"
+		display += "\n[Ctrl+R " + t.tr("tui.key.reasoning_detail") + "]"
 	} else {
 		trimmed := strings.TrimSpace(content)
 		if running {
@@ -113,16 +113,41 @@ func (t *TUI) renderThinkingBox(content string, running bool, startedAt, endedAt
 			lines = append(lines[:15], "...")
 		}
 	}
-	var sb strings.Builder
-	sb.WriteString("    " + styleDim.Render("┌─"+title+strings.Repeat("─", max(0, width-lipgloss.Width(title)-3))+"┐") + "\n")
+	body := make([]string, 0, len(lines))
 	for _, line := range lines {
-		for _, wrapped := range textutil.WrapLine(line, inner) {
-			sb.WriteString("    " + styleDim.Render("│ ") + wrapped + strings.Repeat(" ", max(0, inner-lipgloss.Width(wrapped))) + styleDim.Render(" │") + "\n")
-		}
+		body = append(body, textutil.WrapLine(line, inner)...)
 	}
-	sb.WriteString("    " + styleDim.Render("└"+strings.Repeat("─", width-2)+"┘") + "\n")
-	return sb.String()
+	body = fixedThinkingBodyRows(body, t.chat.ShowReasoningDetail, running)
+	return textutil.IndentLines(renderThinkingRoundBox(width, title, body), "    ") + "\n"
 }
+func fixedThinkingBodyRows(lines []string, detail bool, running bool) []string {
+	if !running {
+		return lines
+	}
+	target := 3
+	if detail {
+		target = 15
+	}
+	if len(lines) > target {
+		return append([]string(nil), lines[len(lines)-target:]...)
+	}
+	out := append([]string(nil), lines...)
+	if !detail && len(out) > 1 {
+		// 折叠态最后一行通常是快捷提示。空白补在提示前，避免块底部出现空行。
+		last := out[len(out)-1]
+		out = append([]string(nil), out[:len(out)-1]...)
+		for len(out) < target-1 {
+			out = append(out, "")
+		}
+		out = append(out, last)
+		return out
+	}
+	for len(out) < target {
+		out = append(out, "")
+	}
+	return out
+}
+
 func reasoningElapsed(running bool, startedAt, endedAt time.Time) time.Duration {
 	if startedAt.IsZero() {
 		return 0
@@ -194,7 +219,7 @@ func (t *TUI) renderSkillReviewMessage(p protocol.SkillReviewParams) string {
 	return textutil.IndentLines(boxStyle.BorderForeground(ColorBrand).Width(width).Padding(1, 2).Render(content), "  ")
 }
 func (t *TUI) hasVisibleActiveProgress() bool {
-	if t.hasRunningTools() {
+	if t.chat.CurrentToolBlock != nil && len(t.chat.CurrentToolBlock.Order) > 0 {
 		return true
 	}
 	for i := len(t.chat.Messages) - 1; i >= 0; i-- {
@@ -224,6 +249,19 @@ func (t *TUI) renderCurrentStatusLine() string {
 		elapsed = time.Since(t.chat.PhaseStart).Seconds()
 	}
 	return fmt.Sprintf("    %s %s %s\n", t.chat.Spinner.View(), styleDim.Render(label), styleDim.Render(fmt.Sprintf("%.1fs", elapsed)))
+}
+func (t *TUI) renderCompactStatusLine() string {
+	elapsed := 0.0
+	if !t.chat.PhaseStart.IsZero() {
+		elapsed = time.Since(t.chat.PhaseStart).Seconds()
+	}
+	return fmt.Sprintf("    %s %s\n", t.chat.Spinner.View(), styleDim.Render(fmt.Sprintf("%.1fs", elapsed)))
+}
+func (t *TUI) currentInputStatusLabel() string {
+	if t.hasVisibleActiveProgress() && !t.chat.Compacting {
+		return t.tr("status.running")
+	}
+	return t.currentStatusLabel()
 }
 func (t *TUI) currentStatusLabel() string {
 	if t.chat.Compacting {
@@ -529,6 +567,7 @@ func (t *TUI) handlePaste(content string) tea.Cmd {
 		return nil
 	}
 	t.chat.EnqueueImagePaste(pending)
+	t.layoutChat()
 	return nil
 }
 
@@ -543,8 +582,8 @@ func (t *TUI) updatePendingImagePaste(key string) tea.Cmd {
 		p := t.chat.CancelPendingImagePaste()
 		if t.chat.PendingPasteShouldRestoreRaw(p) {
 			t.chat.Textarea.InsertString(p.Raw)
-			t.layoutChat()
 		}
+		t.layoutChat()
 	}
 	return nil
 }
@@ -555,6 +594,7 @@ func (t *TUI) confirmPendingImagePaste() tea.Cmd {
 		return nil
 	}
 	t.chat.CancelPendingImagePaste()
+	t.layoutChat()
 	if p.SourceKind == "data_uri" {
 		path, name, size, err := t.savePastedImage(p)
 		if err != nil {
@@ -567,6 +607,7 @@ func (t *TUI) confirmPendingImagePaste() tea.Cmd {
 		p.Size = size
 	}
 	t.chat.AddConfirmedImageAttachment(p)
+	t.layoutChat()
 	return nil
 }
 
@@ -599,7 +640,7 @@ func (t *TUI) renderAttachmentPanel() string {
 		return ""
 	}
 	if view.Pending != nil {
-		return t.renderPendingImagePaste()
+		return ""
 	}
 	return t.renderAttachmentBox(view.Items, view.Cursor, view.Mode, view.Help)
 }
@@ -672,6 +713,15 @@ func (t *TUI) renderAttachmentList(items []attachmentItem, cursor int, selectabl
 		lines = append(lines, styleDim.Render(fmt.Sprintf("  +%d more", len(items)-limit)))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (t *TUI) renderPendingImagePasteOverlay(width int) string {
+	content := strings.TrimSpace(t.renderPendingImagePaste())
+	if content == "" {
+		return ""
+	}
+	boxWidth := max(36, min(width-8, 72))
+	return boxStyle.Width(boxWidth).Padding(1, 2).BorderForeground(ColorDim).Render(content)
 }
 
 func (t *TUI) renderPendingImagePaste() string {

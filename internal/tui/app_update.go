@@ -19,6 +19,13 @@ func (t *TUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return t, nil
 	}
+	if _, ok := msg.(inputCursorBlinkMsg); ok {
+		if t.mode == uipage.Chat && t.ready {
+			return t, t.updateInputCursorBlink()
+		}
+		return t, nil
+	}
+
 	if !t.ready {
 		if ws, ok := msg.(tea.WindowSizeMsg); ok {
 			t.width = ws.Width

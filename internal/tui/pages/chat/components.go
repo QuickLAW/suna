@@ -24,7 +24,7 @@ func (m *Model) InitComponents(deps ComponentDeps) {
 	m.Viewport.MouseWheelDelta = MouseWheelDelta
 
 	ta := textarea.New()
-	ta.Prompt = "> "
+	ta.Prompt = ""
 	ta.Placeholder = deps.Placeholder
 	ta.DynamicHeight = true
 	ta.MaxHeight = InputMaxHeight
@@ -42,6 +42,12 @@ func (m *Model) InitComponents(deps ComponentDeps) {
 	m.ToolStartTimes = make(map[string]time.Time)
 	m.CurrentToolBlock = nil
 	m.SelectedToolID = ""
+	m.SubtaskCursor = 0
+	m.SubtaskCursorUserSet = false
+	m.SubtaskToolCursor = 0
+	m.SubtaskToolCursorUserSet = false
+	m.SubtaskToolDetailExpanded = false
+	m.SubtaskToolDetailScroll = 0
 }
 
 func (m *Model) RestorePendingInput() {

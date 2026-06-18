@@ -22,6 +22,7 @@ type phase = chatpage.Phase
 
 type manualCompactRequestMsg struct{}
 type transcriptSyncMsg struct{}
+type inputCursorBlinkMsg struct{}
 
 const transcriptSyncFrameInterval = 8 * time.Millisecond
 
@@ -80,7 +81,8 @@ func (t *TUI) initChatComponents() tea.Cmd {
 	t.syncContent()
 	t.chat.RestorePendingInput()
 
-	return t.syncInputFocus()
+	t.inputCursorVisible = true
+	return tea.Batch(t.syncInputFocus(), t.inputCursorBlinkCmd())
 }
 
 func (t *TUI) syncContent() {
@@ -100,6 +102,7 @@ func (t *TUI) syncContent() {
 		RenderAssistant:      t.renderAssistantMessage,
 		RenderReasoning:      t.renderReasoningMessage,
 		RenderToolBlock:      t.renderToolBlock,
+		RenderSubtaskBlock:   t.renderSubtaskBlock,
 		RenderError:          t.renderErrorMessage,
 		RenderRestoreSummary: t.renderRestoreSummaryBox,
 		RenderSkillLoad:      t.renderSkillLoadMessage,
@@ -116,9 +119,10 @@ func (t *TUI) syncContent() {
 		RenderAskHelp: func(help string) string {
 			return styleDim.Render("  "+help) + "\n\n"
 		},
-		RenderModelPicker:  t.renderModelPicker,
-		RenderStatusLine:   t.renderCurrentStatusLine,
-		HasVisibleProgress: t.hasVisibleActiveProgress,
+		RenderModelPicker:       t.renderModelPicker,
+		RenderStatusLine:        t.renderCurrentStatusLine,
+		RenderCompactStatusLine: t.renderCompactStatusLine,
+		HasVisibleProgress:      t.hasVisibleActiveProgress,
 	})
 }
 
@@ -141,13 +145,26 @@ func (t *TUI) flushScheduledTranscriptSync() {
 	t.syncContent()
 }
 
+const inputCursorBlinkInterval = 530 * time.Millisecond
+
+func (t *TUI) inputCursorBlinkCmd() tea.Cmd {
+	return tea.Tick(inputCursorBlinkInterval, func(time.Time) tea.Msg {
+		return inputCursorBlinkMsg{}
+	})
+}
+
+func (t *TUI) updateInputCursorBlink() tea.Cmd {
+	t.inputCursorVisible = !t.inputCursorVisible
+	return t.inputCursorBlinkCmd()
+}
+
 func (t *TUI) currentInputPolicy() chatpage.InputPolicy {
 	return chatpage.CurrentInputPolicy(chatpage.InputPolicyState{
 		Compacting:      t.chat.Compacting,
 		Loading:         t.chat.Loading,
 		InteractionKind: t.chat.ActiveInteractionKind(),
 		AskAllowCustom:  activeAskAllowCustom(t.chat.ActiveAsk()),
-		StatusLabel:     t.currentStatusLabel(),
+		StatusLabel:     t.currentInputStatusLabel(),
 		SpinnerView:     t.chat.Spinner.View(),
 		CompactRunning:  t.compactRunningLabel(),
 		RespondingLabel: t.tr("status.responding"),
@@ -216,6 +233,17 @@ func (t *TUI) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return t, cmd
 
 	case tea.MouseMsg:
+		if t.chat.SubtaskToolDetailExpanded && t.hasActiveSubtaskPanel() {
+			if mm, ok := any(m).(tea.MouseWheelMsg); ok {
+				switch mm.Mouse().Button {
+				case tea.MouseWheelUp:
+					t.scrollSubtaskToolDetail(-t.chat.Viewport.MouseWheelDelta)
+				case tea.MouseWheelDown:
+					t.scrollSubtaskToolDetail(t.chat.Viewport.MouseWheelDelta)
+				}
+				return t, nil
+			}
+		}
 		if t.mouseInComposer(m) {
 			return t, nil
 		}
@@ -474,6 +502,11 @@ func (t *TUI) updateChatKeyNormal(ks string, msg tea.Msg) (tea.Model, tea.Cmd) {
 		t.showHelp = !t.showHelp
 		return t, nil
 	case ks == "enter":
+		if t.hasActiveSubtaskPanel() {
+			t.chat.SubtaskToolDetailExpanded = !t.chat.SubtaskToolDetailExpanded
+			t.chat.SubtaskToolDetailScroll = 0
+			return t, nil
+		}
 		t.chat.ClearResponseNav()
 		return t.updateChatEnter()
 	case ks == "shift+enter" || ks == "ctrl+j":
@@ -485,6 +518,11 @@ func (t *TUI) updateChatKeyNormal(ks string, msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ks == "ctrl+t":
 		t.toggleToolDetail()
 		return t, nil
+	case ks == "tab":
+		if t.hasActiveSubtaskPanel() {
+			t.moveSubtaskCursor(1)
+			return t, nil
+		}
 	case ks == "ctrl+r":
 		t.chat.ToggleReasoningDetail()
 		t.syncContent()
@@ -496,15 +534,31 @@ func (t *TUI) updateChatKeyNormal(ks string, msg tea.Msg) (tea.Model, tea.Cmd) {
 		t.jumpToBottom()
 		return t, nil
 	case ks == "pgup":
+		if t.chat.SubtaskToolDetailExpanded && t.hasActiveSubtaskPanel() {
+			t.scrollSubtaskToolDetail(-max(1, t.subtaskToolDetailHeight()-1))
+			return t, nil
+		}
 		t.scrollChatPage(-1)
 		return t, nil
 	case ks == "pgdown":
+		if t.chat.SubtaskToolDetailExpanded && t.hasActiveSubtaskPanel() {
+			t.scrollSubtaskToolDetail(max(1, t.subtaskToolDetailHeight()-1))
+			return t, nil
+		}
 		t.scrollChatPage(1)
 		return t, nil
 	case ks == "up":
+		if t.hasActiveSubtaskPanel() {
+			t.moveSubtaskToolCursor(-1)
+			return t, nil
+		}
 		t.moveChatCursor(-1)
 		return t, nil
 	case ks == "down":
+		if t.hasActiveSubtaskPanel() {
+			t.moveSubtaskToolCursor(1)
+			return t, nil
+		}
 		t.moveChatCursor(1)
 		return t, nil
 	}
@@ -545,6 +599,11 @@ func (t *TUI) updateChatEnter() (tea.Model, tea.Cmd) {
 }
 
 func (t *TUI) updateChatEsc() (tea.Model, tea.Cmd) {
+	if t.chat.SubtaskToolDetailExpanded && t.hasActiveSubtaskPanel() {
+		t.chat.SubtaskToolDetailExpanded = false
+		t.chat.SubtaskToolDetailScroll = 0
+		return t, nil
+	}
 	if t.chat.ShowToolDetail {
 		t.chat.ShowToolDetail = false
 		return t, nil
@@ -563,13 +622,179 @@ func (t *TUI) updateChatEsc() (tea.Model, tea.Cmd) {
 		t.mode = uipage.Welcome
 		return t, t.refreshDaemonStatusCmd()
 	}
-	t.chat.RequestDiscardDraft()
-	t.layoutChat()
+	// Esc 的帮助文案是“清空”，因此这里直接清空草稿；不再弹确认，避免输入区确认态闪烁。
+	t.discardDraft()
 	return t, t.syncInputFocus()
 }
 
 func (t *TUI) toggleToolDetail() {
 	t.chat.ToggleToolDetail(t.visibleToolIDs())
+}
+
+func (t *TUI) hasActiveSubtaskPanel() bool {
+	return len(t.visibleSubtaskIDs()) > 0
+}
+
+func (t *TUI) selectedSubtaskID() string {
+	ids := t.visibleSubtaskIDs()
+	if len(ids) == 0 {
+		return ""
+	}
+	t.clampSubtaskCursor()
+	return ids[t.chat.SubtaskCursor]
+}
+
+func (t *TUI) selectedSubtask() *toolEntry {
+	return t.findTool(t.selectedSubtaskID())
+}
+
+func (t *TUI) selectedSubtaskTools() []*toolEntry {
+	parent := t.selectedSubtask()
+	if parent == nil || t.chat.CurrentToolBlock == nil {
+		return nil
+	}
+	return toolview.SubtaskChildren(t.chat.CurrentToolBlock, parent.ID)
+}
+
+func (t *TUI) selectedSubtaskTool() *toolEntry {
+	children := t.selectedSubtaskTools()
+	if len(children) == 0 {
+		return nil
+	}
+	if !t.chat.SubtaskToolCursorUserSet {
+		t.chat.SubtaskToolCursor = t.defaultSubtaskToolCursor()
+	}
+	t.clampSubtaskToolCursor()
+	return children[t.chat.SubtaskToolCursor]
+}
+
+func (t *TUI) moveSubtaskCursor(delta int) {
+	ids := t.visibleSubtaskIDs()
+	if len(ids) == 0 {
+		t.chat.SubtaskCursor = 0
+		t.chat.SubtaskCursorUserSet = false
+		t.chat.SubtaskToolCursor = 0
+		t.chat.SubtaskToolCursorUserSet = false
+		t.chat.SubtaskToolDetailScroll = 0
+		return
+	}
+	t.chat.SubtaskCursor += delta
+	t.chat.SubtaskCursorUserSet = true
+	if t.chat.SubtaskCursor < 0 {
+		t.chat.SubtaskCursor = len(ids) - 1
+	}
+	if t.chat.SubtaskCursor >= len(ids) {
+		t.chat.SubtaskCursor = 0
+	}
+	t.chat.SubtaskToolCursor = t.defaultSubtaskToolCursor()
+	t.chat.SubtaskToolCursorUserSet = false
+	t.chat.SubtaskToolDetailScroll = 0
+}
+
+func (t *TUI) moveSubtaskToolCursor(delta int) {
+	children := t.selectedSubtaskTools()
+	if len(children) == 0 {
+		t.chat.SubtaskToolCursor = 0
+		t.chat.SubtaskToolCursorUserSet = false
+		t.chat.SubtaskToolDetailScroll = 0
+		return
+	}
+	t.chat.SubtaskToolCursor += delta
+	t.chat.SubtaskToolCursorUserSet = true
+	if t.chat.SubtaskToolCursor < 0 {
+		t.chat.SubtaskToolCursor = 0
+	}
+	if t.chat.SubtaskToolCursor >= len(children) {
+		t.chat.SubtaskToolCursor = len(children) - 1
+	}
+	t.chat.SubtaskToolDetailScroll = 0
+}
+
+func (t *TUI) clampSubtaskCursor() {
+	ids := t.visibleSubtaskIDs()
+	if len(ids) == 0 {
+		t.chat.SubtaskCursor = 0
+		return
+	}
+	if t.chat.SubtaskCursor < 0 {
+		t.chat.SubtaskCursor = 0
+	}
+	if t.chat.SubtaskCursor >= len(ids) {
+		t.chat.SubtaskCursor = len(ids) - 1
+	}
+}
+
+func (t *TUI) clampSubtaskToolCursor() {
+	children := t.selectedSubtaskTools()
+	if len(children) == 0 {
+		t.chat.SubtaskToolCursor = 0
+		return
+	}
+	if t.chat.SubtaskToolCursor < 0 {
+		t.chat.SubtaskToolCursor = 0
+	}
+	if t.chat.SubtaskToolCursor >= len(children) {
+		t.chat.SubtaskToolCursor = len(children) - 1
+	}
+}
+
+func (t *TUI) ensureSubtaskSelection() {
+	if !t.chat.SubtaskCursorUserSet {
+		t.chat.SubtaskCursor = t.defaultSubtaskCursor()
+	}
+	t.clampSubtaskCursor()
+	if !t.chat.SubtaskToolCursorUserSet {
+		t.chat.SubtaskToolCursor = t.defaultSubtaskToolCursor()
+	}
+	t.clampSubtaskToolCursor()
+}
+
+func (t *TUI) defaultSubtaskCursor() int {
+	ids := t.visibleSubtaskIDs()
+	if len(ids) == 0 {
+		return 0
+	}
+	for i, id := range ids {
+		if te := t.findTool(id); te != nil && te.Status == toolview.StatusRunning {
+			return i
+		}
+	}
+	return 0
+}
+
+func (t *TUI) defaultSubtaskToolCursor() int {
+	children := t.selectedSubtaskTools()
+	if len(children) == 0 {
+		return 0
+	}
+	lastDone := 0
+	for i, child := range children {
+		if child.Status == toolview.StatusRunning {
+			return i
+		}
+		if child.Status == toolview.StatusDone || child.Status == toolview.StatusError {
+			lastDone = i
+		}
+	}
+	return lastDone
+}
+
+func (t *TUI) scrollSubtaskToolDetail(delta int) {
+	te := t.selectedSubtaskTool()
+	if te == nil {
+		t.chat.SubtaskToolDetailScroll = 0
+		return
+	}
+	deps := t.toolDetailDeps()
+	source := toolview.DetailLineSource(te, deps)
+	maxOffset := max(0, source.Len()-t.subtaskToolDetailHeight())
+	t.chat.SubtaskToolDetailScroll += delta
+	if t.chat.SubtaskToolDetailScroll < 0 {
+		t.chat.SubtaskToolDetailScroll = 0
+	}
+	if t.chat.SubtaskToolDetailScroll > maxOffset {
+		t.chat.SubtaskToolDetailScroll = maxOffset
+	}
 }
 
 func (t *TUI) jumpToLastAssistantStart() {

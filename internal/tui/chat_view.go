@@ -7,9 +7,12 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/alanchenchen/suna/internal/tui/components/overlay"
+	"github.com/alanchenchen/suna/internal/tui/components/scroll"
 	textutil "github.com/alanchenchen/suna/internal/tui/components/text"
+	"github.com/alanchenchen/suna/internal/tui/components/toolview"
 	chatpage "github.com/alanchenchen/suna/internal/tui/pages/chat"
 	tuiconfig "github.com/alanchenchen/suna/internal/tui/pages/config"
 )
@@ -21,6 +24,7 @@ func (t *TUI) viewChat() string {
 	t.layoutChat()
 	petState := t.chatPetState()
 	separator := styleDim.Render(strings.Repeat("─", t.width))
+	inputSeparator := renderInputSeparator(t.width)
 	helpOverlay := ""
 	if t.showHelp {
 		helpOverlay = t.renderHelpOverlay(t.width)
@@ -45,18 +49,25 @@ func (t *TUI) viewChat() string {
 	if t.chat.ActiveInteractionKind() == chatpage.InteractionGuardConfirm {
 		guardOverlay = t.renderGuardOverlay(t.width)
 	}
+	imagePasteOverlay := ""
+	if t.chat.ActiveImagePaste() != nil {
+		imagePasteOverlay = t.renderPendingImagePasteOverlay(t.width)
+	}
 	cmdSuggestions := ""
 	if len(t.chat.CmdSuggestions) > 0 {
 		cmdSuggestions = t.renderCommandSuggestions()
 	}
-	return t.chat.View(chatpage.ViewDeps{
+	preInputHint := t.renderPreInputHint()
+	view := t.chat.View(chatpage.ViewDeps{
 		Width:              t.width,
 		MiniPet:            renderMiniPet(petState),
 		TopMeta:            t.chatTopMeta(),
 		Conn:               t.chatConnectionDot(petState),
 		Content:            t.chat.Viewport.View(),
 		Separator:          separator,
+		InputSeparator:     inputSeparator,
 		InputArea:          t.renderInputArea(),
+		PreInputHint:       preInputHint,
 		CommandSuggestions: cmdSuggestions,
 		StatusBar:          t.renderChatStatusBar(),
 		ToolDetailOverlay:  toolOverlay,
@@ -67,16 +78,25 @@ func (t *TUI) viewChat() string {
 		GuardOverlay:       guardOverlay,
 		Overlay:            overlay.OverlayBlock,
 	})
+	if imagePasteOverlay != "" {
+		return t.overlayImagePasteAboveInput(view, imagePasteOverlay, cmdSuggestions)
+	}
+	return view
 }
 
 func (t *TUI) layoutChat() {
+	preInputHint := t.renderPreInputHint()
+	inputArea := t.renderInputArea()
+	cmdSuggestions := ""
+	if len(t.chat.CmdSuggestions) > 0 {
+		cmdSuggestions = t.renderCommandSuggestions()
+	}
 	layout := chatpage.ComputeLayout(chatpage.LayoutInput{
-		Width:            t.width,
-		Height:           t.height,
-		InputHeight:      t.chat.Textarea.Height(),
-		AttachmentHeight: chatpage.AttachmentPanelHeight(t.renderAttachmentPanel()),
-		SuggestionCount:  len(t.chat.CmdSuggestions),
-		ConfirmDiscard:   t.chat.HasDiscardDraftConfirm(),
+		Width:              t.width,
+		Height:             t.height,
+		InputAreaHeight:    chatpage.RenderedLineCount(inputArea),
+		SuggestionHeight:   chatpage.RenderedLineCount(cmdSuggestions),
+		PreInputHintHeight: chatpage.RenderedLineCount(preInputHint),
 	})
 	if layout.ViewportHeight == 0 && layout.InputWidth == 0 {
 		return
@@ -154,31 +174,73 @@ func (t *TUI) chatTopMeta() string {
 	if reasoning != "" {
 		modelRef += "·" + strings.ReplaceAll(reasoning, " / ", "/")
 	}
-	if t.contextWindow <= 0 {
-		return styleHL.Render(modelRef)
-	}
-	ctxTokens := t.contextTokens
-	ctx := "?"
-	if ctxTokens > 0 {
-		ctx = fmtTok(ctxTokens)
-	}
-	pct := int(float64(ctxTokens) / float64(t.contextWindow) * 100)
-	if ctxTokens <= 0 {
-		pct = 0
-	}
-	return styleHL.Render(textutil.TruncateRunes(modelRef, max(10, t.width/3))) + strings.Repeat(" ", 2) + styleDim.Render(fmt.Sprintf("ctx(%d%%) %s/%s", pct, ctx, fmtTok(t.contextWindow)))
+	return styleHL.Render(textutil.TruncateRunes(modelRef, max(10, t.width/3)))
 }
 
 func (t *TUI) mouseInComposer(msg tea.MouseMsg) bool {
 	m := msg.Mouse()
+	cmdSuggestions := ""
+	if len(t.chat.CmdSuggestions) > 0 {
+		cmdSuggestions = t.renderCommandSuggestions()
+	}
 	return chatpage.MouseInComposer(chatpage.ComposerHitInput{
-		Height:           t.height,
-		Y:                m.Y,
-		InputHeight:      t.chat.Textarea.Height(),
-		AttachmentHeight: chatpage.AttachmentPanelHeight(t.renderAttachmentPanel()),
-		SuggestionCount:  len(t.chat.CmdSuggestions),
-		ConfirmDiscard:   t.chat.HasDiscardDraftConfirm(),
+		Height:             t.height,
+		Y:                  m.Y,
+		InputAreaHeight:    chatpage.RenderedLineCount(t.renderInputArea()),
+		SuggestionHeight:   chatpage.RenderedLineCount(cmdSuggestions),
+		PreInputHintHeight: chatpage.RenderedLineCount(t.renderPreInputHint()),
 	})
+}
+
+func (t *TUI) overlayImagePasteAboveInput(view, panel, cmdSuggestions string) string {
+	if strings.TrimSpace(panel) == "" {
+		return view
+	}
+	lines := strings.Split(view, "\n")
+	panelLines := strings.Split(strings.TrimRight(panel, "\n"), "\n")
+	if len(lines) == 0 || len(panelLines) == 0 {
+		return view
+	}
+	composerRows := 2 + chatpage.RenderedLineCount(t.renderInputArea()) + chatpage.RenderedLineCount(t.renderPreInputHint()) // 输入分割线 + 输入区 + token 状态栏 + 预输入提示
+	if cmdSuggestions != "" {
+		composerRows += chatpage.RenderedLineCount(cmdSuggestions)
+	}
+	composerStart := len(lines) - composerRows
+	if composerStart < 0 {
+		composerStart = 0
+	}
+	// 图片粘贴提示应贴近输入区，但不能在小窗口/内容很少时覆盖顶部 pet 和模型状态。
+	minStart := min(4, len(lines))
+	available := composerStart - minStart
+	if available < len(panelLines) {
+		return view
+	}
+	start := composerStart - len(panelLines)
+	for i, line := range panelLines {
+		idx := start + i
+		padded := leftAlignInputOverlayLine(line, t.width)
+		if idx >= len(lines) {
+			lines = append(lines, padded)
+			continue
+		}
+		lines[idx] = padded
+	}
+	return strings.Join(lines, "\n")
+}
+
+func leftAlignInputOverlayLine(line string, width int) string {
+	if width <= 0 {
+		return line
+	}
+	left := 2
+	if width <= left {
+		left = 0
+	}
+	available := max(1, width-left)
+	if lipgloss.Width(line) > available {
+		line = ansi.Truncate(line, available, "…")
+	}
+	return strings.Repeat(" ", left) + line
 }
 
 func (t *TUI) renderChatStatusBar() string {
@@ -186,15 +248,33 @@ func (t *TUI) renderChatStatusBar() string {
 	if t.copyMode {
 		copyHint = styleDim.Render(" · ") + styleHL.Render(t.tr("tui.key.copy_mode")) + styleDim.Render(" [Ctrl+Y/Esc]")
 	}
+	ctx := "?"
+	if t.contextTokens > 0 {
+		ctx = fmtTok(t.contextTokens)
+	}
+	window := "?"
+	pct := 0
+	if t.contextWindow > 0 {
+		window = fmtTok(t.contextWindow)
+		window = strings.ReplaceAll(strings.ReplaceAll(window, ".0k", "k"), ".0M", "M")
+		if t.contextTokens > 0 {
+			pct = int(float64(t.contextTokens) / float64(t.contextWindow) * 100)
+		}
+	}
+	ctxPct := styleDim.Render(fmt.Sprintf("(%d%%)", pct))
+	if t.contextWindow > 0 {
+		ctxPct = styleDim.Render("(") + t.contextPercentStyle(pct).Render(fmt.Sprintf("%d%%", pct)) + styleDim.Render(")")
+	}
+	ctxPart := styleDim.Render(fmt.Sprintf("ctx %s/%s ", ctx, window)) + ctxPct
 	if !t.hasUsage {
-		return "  " + styleDim.Render("↑? ↓? ⟳? · ?t/s") + copyHint
+		return "  " + ctxPart + styleDim.Render(" · ") + styleDim.Render("↑? ↓? ↻? · ?t/s") + copyHint
 	}
 	tokParts := []string{
 		styleUser.Render("↑" + fmtTok(t.lastInputTok)),
 		styleAgent.Render("↓" + fmtTok(t.lastOutputTok)),
-		styleDim.Render("⟳" + fmtTok(t.lastCachedTok)),
+		styleDim.Render("↻" + fmtTok(t.lastCachedTok)),
 	}
-	parts := []string{joinNonEmpty(tokParts, " ")}
+	parts := []string{ctxPart, joinNonEmpty(tokParts, " ")}
 	if t.lastTokensPerSec > 0 {
 		parts = append(parts, fmt.Sprintf("%.0ft/s", t.lastTokensPerSec))
 	} else if t.lastOutputTok > 0 && t.lastDuration.Seconds() > 0 {
@@ -203,6 +283,16 @@ func (t *TUI) renderChatStatusBar() string {
 		parts = append(parts, "0t/s")
 	}
 	return "  " + joinNonEmpty(parts, styleDim.Render(" · ")) + copyHint
+}
+
+func (t *TUI) contextPercentStyle(pct int) lipgloss.Style {
+	if pct >= 85 {
+		return styleError
+	}
+	if pct >= 60 {
+		return lipgloss.NewStyle().Bold(true).Foreground(ColorTool)
+	}
+	return styleBrand
 }
 
 func (t *TUI) renderCommandSuggestions() string {
@@ -255,26 +345,85 @@ func (t *TUI) renderModelPicker() string {
 	return textutil.IndentLines(boxStyle.Width(view.Width).Padding(1, 2).Render(strings.Join(lines, "\n")), "  ") + "\n"
 }
 
+const subtaskTimelineMaxRows = 5
+
+func renderInputSeparator(width int) string {
+	if width <= 0 {
+		return ""
+	}
+	lineWidth := max(12, width-4)
+	return "  " + styleDim.Render(strings.Repeat("─", lineWidth))
+}
+
 func (t *TUI) renderInputArea() string {
 	confirm := ""
 	if t.chat.HasDiscardDraftConfirm() {
 		confirm = styleError.Render(t.tr("tui.chat.discard_draft")) + " " + styleDim.Render(t.tr("tui.chat.discard_draft_help"))
 	}
-	separator := "  " + styleDim.Render(strings.Repeat("─", max(10, t.width-4)))
-	return t.chat.InputArea(chatpage.InputAreaView{
-		Textarea:          t.chat.Textarea.View(),
-		LockedPlaceholder: styleDim.Render(t.lockedInputPlaceholder()),
-		Locked:            t.inputLocked(),
-		HasDraft:          t.hasDraft(),
-		Confirm:           confirm,
-		Hint:              t.inputHint(),
-		AttachmentPanel:   t.renderAttachmentPanel(),
-		Separator:         separator,
-	})
+	width := max(40, t.width-4)
+	text := strings.TrimRight(t.chat.Textarea.View(), "\n")
+	emptyInput := !t.inputLocked() && !t.hasDraft()
+	if t.inputLocked() && !t.hasDraft() {
+		text = styleDim.Render(t.lockedInputPlaceholder())
+	}
+	if emptyInput {
+		text = styleDim.Render(t.tr("tui.chat.input_placeholder"))
+	}
+	bar := renderInputComposerBar(width, strings.Split(text, "\n"), emptyInput, t.inputCursorVisible)
+	parts := make([]string, 0, 5)
+	if panel := t.renderAttachmentPanel(); panel != "" {
+		parts = append(parts, textutil.IndentLines(panel, "  "))
+	}
+	parts = append(parts, textutil.IndentLines(bar, "  "))
+	if help := t.inputHelp(); help != "" {
+		parts = append(parts, "  "+styleDim.Render(help))
+	}
+	if confirm != "" {
+		parts = append(parts, "  "+confirm)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func renderInputComposerBar(width int, lines []string, emptyInput bool, cursorVisible bool) string {
+	contentWidth := max(8, width-4)
+	prepared := make([]string, 0, max(1, len(lines)))
+	for i, line := range lines {
+		wrapped := textutil.WrapLine(line, contentWidth)
+		if len(wrapped) == 0 {
+			wrapped = []string{""}
+		}
+		for j, visualLine := range wrapped {
+			prefix := styleBrand.Render("▌ ")
+			if emptyInput && i == 0 && j == 0 && !cursorVisible {
+				prefix = "  "
+			}
+			prepared = append(prepared, prefix+visualLine)
+		}
+	}
+	if len(prepared) == 0 {
+		if cursorVisible {
+			prepared = append(prepared, styleBrand.Render("▌"))
+		} else {
+			prepared = append(prepared, " ")
+		}
+	}
+	return strings.Join(prepared, "\n")
 }
 
 func (t *TUI) lockedInputPlaceholder() string {
-	return t.currentInputPolicy().DisplayPlaceholder(t.tr("status.responding"), t.tr("tui.key.cancel"))
+	policy := t.currentInputPolicy()
+	if policy.Placeholder != "" {
+		return policy.Placeholder
+	}
+	return t.tr("status.responding")
+}
+
+func (t *TUI) renderPreInputHint() string {
+	hint := t.inputHint()
+	if hint == "" {
+		return ""
+	}
+	return "  " + hint
 }
 
 func (t *TUI) inputHint() string {
@@ -285,6 +434,403 @@ func (t *TUI) inputHint() string {
 		return hint
 	}
 	return t.responseNavHint()
+}
+
+func (t *TUI) inputHelp() string {
+	if t.inputLocked() {
+		if t.chat.Compacting {
+			return ""
+		}
+		return t.tr("tui.chat.input_help_running")
+	}
+	if t.hasDraft() {
+		return t.tr("tui.chat.input_help_draft")
+	}
+	return t.tr("tui.chat.input_help_empty")
+}
+
+func (t *TUI) renderSubtaskBlock(block *toolBlock) string {
+	if block == nil {
+		return ""
+	}
+	ids := subtaskIDsInBlock(block)
+	if len(ids) == 0 {
+		return ""
+	}
+	active := block == t.chat.CurrentToolBlock
+	if active {
+		t.ensureSubtaskSelection()
+	}
+	width := max(40, t.width-8)
+	innerWidth := max(24, width-8)
+	done, running, failed := t.subtaskStatusCounts(ids)
+	title := fmt.Sprintf("%s "+t.tr("tui.subtask_panel.title"), t.subtaskBlockStatusIcon(done, running, failed, len(ids)), len(ids), running, done, failed)
+	lines := make([]string, 0)
+	selected := -1
+	if active {
+		selected = t.chat.SubtaskCursor
+	}
+	lines = append(lines, t.renderSubtaskRows(ids, innerWidth, selected)...)
+	if active {
+		if current := t.selectedSubtask(); current != nil {
+			lines = append(lines, t.subtaskSectionTitle(t.tr("tui.subtask_panel.current"), innerWidth))
+			lines = append(lines, t.renderSelectedSubtaskSummary(current, innerWidth)...)
+			lines = append(lines, t.subtaskSectionTitle(t.tr("tui.subtask_panel.tools"), innerWidth))
+			lines = append(lines, t.renderSelectedSubtaskTools(innerWidth)...)
+			if t.chat.SubtaskToolDetailExpanded {
+				lines = append(lines, t.subtaskSectionTitle(t.tr("tui.subtask_panel.tool_detail"), innerWidth))
+				lines = append(lines, t.renderSelectedSubtaskToolDetail(innerWidth)...)
+			}
+		}
+		lines = append(lines, styleDim.Render(t.tr(t.subtaskPanelHelpKey())))
+	}
+	return textutil.IndentLines(renderTitledRoundBox(width, title, lines), "  ")
+}
+
+func subtaskIDsInBlock(block *toolBlock) []string {
+	if block == nil {
+		return nil
+	}
+	ids := make([]string, 0, len(block.Order))
+	for _, id := range block.Order {
+		te := block.Entries[id]
+		if toolview.IsSubtask(te) {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+func renderTitledRoundBox(width int, title string, lines []string) string {
+	return renderTitledRoundBoxWithStyles(width, title, lines, styleHL, styleDim)
+}
+
+func renderThinkingRoundBox(width int, title string, lines []string) string {
+	return renderTitledRoundBoxWithStyles(width, title, lines, styleBrand, styleBrand)
+}
+
+func renderTitledRoundBoxWithStyles(width int, title string, lines []string, titleStyle, borderStyle lipgloss.Style) string {
+	// 手工绘制带标题边框时，width 表示整块外宽；边框之间的可用宽度是 width-2。
+	// 内容行在进入这里前已经按内宽截断，这里只负责补齐，避免 ANSI 样式导致右边框漂移。
+	width = max(12, width)
+	contentWidth := max(8, width-2)
+	titleText := strings.TrimSpace(title)
+	if lipgloss.Width(titleText) > contentWidth-3 {
+		titleText = textutil.TruncateRunes(titleText, max(1, contentWidth-3))
+	}
+	titlePrefix := "─ "
+	titleSuffix := " "
+	titleWidth := lipgloss.Width(titlePrefix) + lipgloss.Width(titleText) + lipgloss.Width(titleSuffix)
+	topRest := strings.Repeat("─", max(0, contentWidth-titleWidth))
+	top := borderStyle.Render("╭"+titlePrefix) + titleStyle.Render(titleText) + borderStyle.Render(titleSuffix+topRest+"╮")
+	body := make([]string, 0, len(lines)+2)
+	body = append(body, top)
+	for _, line := range lines {
+		content := ansi.Truncate(" "+line+" ", contentWidth, "…")
+		pad := strings.Repeat(" ", max(0, contentWidth-lipgloss.Width(content)))
+		body = append(body, borderStyle.Render("│")+content+pad+borderStyle.Render("│"))
+	}
+	body = append(body, borderStyle.Render("╰"+strings.Repeat("─", contentWidth)+"╯"))
+	return strings.Join(body, "\n")
+}
+
+func (t *TUI) renderSubtaskRows(ids []string, innerWidth int, selected int) []string {
+	rows := make([]string, 0, len(ids))
+	for i, id := range ids {
+		te := t.findTool(id)
+		if te == nil {
+			continue
+		}
+		cursor := "  "
+		labelStyle := lipgloss.NewStyle()
+		if i == selected {
+			cursor = styleCursor.Render("▶ ")
+			labelStyle = styleHL
+		}
+		icon := t.subtaskStatusIcon(te)
+		prefixWidth := 4 // cursor(2) + icon(1) + space(1)
+		dur := t.subtaskDuration(te)
+		durWidth := 0
+		if dur != "" {
+			durWidth = lipgloss.Width(" · " + dur)
+		}
+		activityBudget := max(0, innerWidth-prefixWidth-durWidth-3)
+		titleWidth := min(max(12, innerWidth/2), max(4, activityBudget/2))
+		if titleWidth <= 0 {
+			titleWidth = max(4, innerWidth-prefixWidth-durWidth)
+		}
+		label := textutil.TruncateRunes(toolview.PlainIntentLabel(te), titleWidth)
+		remaining := max(0, innerWidth-prefixWidth-lipgloss.Width(label)-durWidth)
+		activity := ""
+		if remaining > 4 {
+			activity = textutil.TruncateRunes(t.subtaskActivity(te), remaining-3)
+		}
+		line := fmt.Sprintf("%s%s %s", cursor, icon, labelStyle.Render(label))
+		if activity != "" {
+			line += styleDim.Render(" · " + activity)
+		}
+		if dur != "" {
+			line += styleDim.Render(" · " + dur)
+		}
+		rows = append(rows, line)
+	}
+	return rows
+}
+
+func (t *TUI) renderSelectedSubtaskSummary(te *toolEntry, innerWidth int) []string {
+	label := textutil.TruncateRunes(toolview.PlainIntentLabel(te), max(12, innerWidth))
+	parts := []string{styleHL.Render(label)}
+	if model := subtaskParamLabel(te, "model"); model != "" {
+		parts = append(parts, styleDim.Render(t.tr("tui.tool.model")+": ")+styleToolDim.Render(textutil.TruncateRunes(model, max(10, innerWidth-8))))
+	}
+	if tools := subtaskParamLabel(te, "tools"); tools != "" {
+		parts = append(parts, styleDim.Render(t.tr("tui.tool.tools")+": ")+styleToolDim.Render(textutil.TruncateRunes(tools, max(10, innerWidth-8))))
+	}
+	if task := subtaskParamLabel(te, "task"); task != "" {
+		parts = append(parts, styleDim.Render(t.tr("tui.tool.task")+": ")+styleToolDim.Render(textutil.TruncateRunes(task, max(12, innerWidth-8))))
+	}
+	return parts
+}
+
+func (t *TUI) renderSelectedSubtaskTools(innerWidth int) []string {
+	children := t.selectedSubtaskTools()
+	if len(children) == 0 {
+		if t.selectedSubtaskWaitingForTool() {
+			return []string{styleToolRun.Render("◐ ") + styleDim.Render(t.tr("tui.subtask_panel.waiting_tool"))}
+		}
+		return []string{styleDim.Render(t.tr("tui.subtask_panel.no_tools"))}
+	}
+	t.ensureSubtaskSelection()
+	height := min(len(children), t.subtaskTimelineHeight())
+	start := t.chat.SubtaskToolCursor - height + 1
+	if start < 0 {
+		start = 0
+	}
+	if start+height > len(children) {
+		start = max(0, len(children)-height)
+	}
+	end := min(len(children), start+height)
+	rows := make([]string, 0, height+2)
+	if start > 0 {
+		rows = append(rows, styleDim.Render(fmt.Sprintf(t.tr("tui.subtask_panel.more_above"), start)))
+	}
+	for i := start; i < end; i++ {
+		child := children[i]
+		cursor := "  "
+		labelStyle := lipgloss.NewStyle()
+		if i == t.chat.SubtaskToolCursor {
+			cursor = styleCursor.Render("▶ ")
+			labelStyle = styleHL
+		}
+		icon := t.subtaskStatusIcon(child)
+		prefixWidth := 4 // cursor(2) + icon(1) + space(1)
+		dur := ""
+		if child.Duration > 0 {
+			dur = fmt.Sprintf("%.1fs", child.Duration.Seconds())
+		}
+		durWidth := 0
+		if dur != "" {
+			durWidth = lipgloss.Width(" · " + dur)
+		}
+		remaining := max(0, innerWidth-prefixWidth-durWidth)
+		label := t.subtaskToolTimelineLabel(child, max(4, remaining))
+		line := fmt.Sprintf("%s%s %s", cursor, icon, labelStyle.Render(label))
+		if dur != "" {
+			line += styleDim.Render(" · " + dur)
+		}
+		rows = append(rows, line)
+	}
+	if end < len(children) {
+		rows = append(rows, styleDim.Render(fmt.Sprintf(t.tr("tui.subtask_panel.more_below"), len(children)-end)))
+	} else if t.selectedSubtaskWaitingForTool() {
+		rows = append(rows, styleToolRun.Render("◐ ")+styleDim.Render(" "+t.tr("tui.subtask_panel.waiting_tool")))
+	}
+	return rows
+}
+
+func (t *TUI) subtaskTimelineHeight() int {
+	// 详情展开时优先保留顶部子任务信息和下方详情区，小终端下进一步压缩工具列表高度。
+	if t.chat.SubtaskToolDetailExpanded {
+		return min(5, max(3, t.height/10))
+	}
+	return min(7, max(subtaskTimelineMaxRows, t.height/8))
+}
+
+func (t *TUI) subtaskToolTimelineLabel(child *toolEntry, width int) string {
+	if child == nil {
+		return ""
+	}
+	if intent := strings.TrimSpace(toolview.PlainIntentLabel(child)); intent != "" {
+		return textutil.TruncateRunes(intent, width)
+	}
+	if semantic := strings.TrimSpace(toolview.SemanticSummary(child, width, t.toolRenderDeps().Labels)); semantic != "" {
+		return textutil.TruncateRunes(semantic, width)
+	}
+	name := strings.TrimSpace(child.Name)
+	if name == "" {
+		name = toolview.DisplayName(child.RawName)
+	}
+	return textutil.TruncateRunes(name, width)
+}
+
+func (t *TUI) subtaskActiveToolLabel(child *toolEntry, width int) string {
+	if child == nil {
+		return ""
+	}
+	name := strings.TrimSpace(child.Name)
+	if name == "" {
+		name = toolview.DisplayName(child.RawName)
+	}
+	semantic := strings.TrimSpace(toolview.SemanticSummary(child, max(8, width-lipgloss.Width(name)-1), t.toolRenderDeps().Labels))
+	if semantic == "" || semantic == name {
+		return textutil.TruncateRunes(name, width)
+	}
+	return textutil.TruncateRunes(strings.TrimSpace(name+" "+semantic), width)
+}
+
+func (t *TUI) selectedSubtaskWaitingForTool() bool {
+	parent := t.selectedSubtask()
+	if parent == nil || parent.Status != toolview.StatusRunning {
+		return false
+	}
+	for _, child := range t.selectedSubtaskTools() {
+		if child.Status == toolview.StatusRunning {
+			return false
+		}
+	}
+	return true
+}
+
+func (t *TUI) renderSelectedSubtaskToolDetail(innerWidth int) []string {
+	te := t.selectedSubtaskTool()
+	if te == nil {
+		return []string{styleDim.Render(t.tr("tui.subtask_panel.no_tools"))}
+	}
+	deps := t.toolDetailDeps()
+	deps.Width = max(44, innerWidth)
+	source := toolview.DetailLineSource(te, deps)
+	body, start, total := scroll.Window(source, t.subtaskToolDetailHeight(), &t.chat.SubtaskToolDetailScroll)
+	if total == 0 {
+		return []string{styleDim.Render(t.tr("tui.subtask_panel.no_detail"))}
+	}
+	lines := append([]string(nil), body...)
+	end := min(total, start+t.subtaskToolDetailHeight())
+	lines = append(lines, styleDim.Render(fmt.Sprintf("PgUp/PgDn/%s %s %d-%d/%d", t.tr("tui.subtask_panel.wheel"), t.tr("tui.overlay.scroll"), start+1, end, total)))
+	return lines
+}
+
+func (t *TUI) subtaskSectionTitle(title string, width int) string {
+	text := "─ " + title + " "
+	return styleDim.Render(text + strings.Repeat("─", max(0, width-lipgloss.Width(text))))
+}
+
+func (t *TUI) subtaskPanelHelpKey() string {
+	if t.chat.SubtaskToolDetailExpanded {
+		return "tui.subtask_panel.help_expanded"
+	}
+	return "tui.subtask_panel.help"
+}
+
+func (t *TUI) subtaskToolDetailHeight() int {
+	// 工具详情是可展开区域，不能在矮终端里挤掉上方的子任务列表和工具 timeline。
+	return max(4, min(6, t.height/6))
+}
+
+func subtaskParamLabel(te *toolEntry, key string) string {
+	if te == nil || te.ParamsRaw == nil {
+		return ""
+	}
+	value, ok := te.ParamsRaw[key]
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprintf("%v", value))
+}
+
+func (t *TUI) subtaskStatusCounts(ids []string) (done, running, failed int) {
+	for _, id := range ids {
+		switch te := t.findTool(id); {
+		case te == nil:
+		case te.Status == toolview.StatusDone:
+			done++
+		case te.Status == toolview.StatusError:
+			failed++
+		default:
+			running++
+		}
+	}
+	return done, running, failed
+}
+
+func (t *TUI) subtaskBlockStatusIcon(done, running, failed, total int) string {
+	if running > 0 {
+		return t.chat.Spinner.View()
+	}
+	if failed > 0 {
+		return "✗"
+	}
+	if total > 0 && done == total {
+		return "✓"
+	}
+	return "◷"
+}
+
+func (t *TUI) subtaskStatusIcon(te *toolEntry) string {
+	if te == nil {
+		return styleDim.Render("◷")
+	}
+	switch te.Status {
+	case toolview.StatusDone:
+		return styleToolOk.Render("✓")
+	case toolview.StatusError:
+		return styleToolErr.Render("✗")
+	default:
+		return styleToolRun.Render("◐")
+	}
+}
+
+func (t *TUI) subtaskActivity(te *toolEntry) string {
+	if te == nil || t.chat.CurrentToolBlock == nil {
+		return ""
+	}
+	children := toolview.SubtaskChildren(t.chat.CurrentToolBlock, te.ID)
+	var latest *toolEntry
+	for _, child := range children {
+		if child.Status == toolview.StatusRunning {
+			return t.subtaskActiveToolLabel(child, 48)
+		}
+		latest = child
+	}
+	if latest != nil {
+		return t.subtaskActiveToolLabel(latest, 48)
+	}
+	if te.Status == toolview.StatusError {
+		return t.subtaskFailureReason(te)
+	}
+	if te.Status == toolview.StatusDone {
+		return t.tr("tui.subtask_panel.done")
+	}
+	return t.tr("tui.subtask_panel.waiting")
+}
+
+func (t *TUI) subtaskFailureReason(te *toolEntry) string {
+	if te == nil {
+		return ""
+	}
+	return toolview.ShortToolError(te.Result)
+}
+
+func (t *TUI) subtaskDuration(te *toolEntry) string {
+	if te == nil {
+		return ""
+	}
+	if te.Duration > 0 {
+		return fmt.Sprintf("%.1fs", te.Duration.Seconds())
+	}
+	if !te.StartedAt.IsZero() {
+		return fmt.Sprintf("%.0fs", time.Since(te.StartedAt).Seconds())
+	}
+	return ""
 }
 
 func (t *TUI) resumeHint() string {

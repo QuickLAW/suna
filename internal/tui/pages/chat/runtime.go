@@ -11,6 +11,12 @@ func (m *Model) ResetToolState() {
 	m.ToolStartTimes = make(map[string]time.Time)
 	m.CurrentToolBlock = nil
 	m.SelectedToolID = ""
+	m.SubtaskCursor = 0
+	m.SubtaskCursorUserSet = false
+	m.SubtaskToolCursor = 0
+	m.SubtaskToolCursorUserSet = false
+	m.SubtaskToolDetailExpanded = false
+	m.SubtaskToolDetailScroll = 0
 }
 
 func (m *Model) StartLLMWait(now time.Time) {
@@ -24,6 +30,12 @@ func (m *Model) StartLLMWait(now time.Time) {
 
 func (m *Model) AppendMessage(msg Msg) {
 	m.CurrentToolBlock = nil
+	m.SubtaskCursor = 0
+	m.SubtaskCursorUserSet = false
+	m.SubtaskToolCursor = 0
+	m.SubtaskToolCursorUserSet = false
+	m.SubtaskToolDetailExpanded = false
+	m.SubtaskToolDetailScroll = 0
 	m.Messages = append(m.Messages, msg)
 }
 

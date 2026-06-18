@@ -22,7 +22,8 @@ func (t *TUI) renderToolEntry(te *toolEntry, nested bool) string {
 
 func (t *TUI) toolRenderDeps() toolview.RenderDeps {
 	return toolview.RenderDeps{
-		Width: t.width,
+		Width:   t.width,
+		Spinner: t.chat.Spinner.View(),
 		Labels: toolview.RenderLabels{
 			Tools:                t.tr("tui.tool.tools"),
 			Subtask:              t.tr("tui.tool.subtask"),
@@ -45,7 +46,6 @@ func (t *TUI) toolRenderDeps() toolview.RenderDeps {
 			SearchScanned:        t.tr("tui.tool.search.scanned"),
 			SearchTruncated:      t.tr("tui.tool.search.truncated"),
 			ModeContent:          t.tr("tui.tool.mode.content"),
-			SubtaskWaiting:       t.tr("tui.tool.subtask_waiting"),
 		},
 		Styles:             toolviewStyles(),
 		GuardDecisionLabel: t.guardDecisionLabel,
@@ -60,6 +60,7 @@ func (t *TUI) toolDetailDeps() toolview.DetailDeps {
 		OverlayMaxHeight: t.overlayMaxHeight(),
 		SelectedIndex:    idx,
 		SelectedTotal:    total,
+		ShowPosition:     true,
 		Labels: toolview.DetailLabels{
 			DetailTitle:        t.tr("tui.tool.detail_title"),
 			SubtaskDetailTitle: t.tr("tui.tool.subtask_detail_title"),
@@ -126,6 +127,7 @@ func isSubtaskChild(te *toolEntry) bool {
 }
 func (t *TUI) findTool(id string) *toolEntry    { return t.chat.FindTool(id) }
 func (t *TUI) visibleToolIDs() []string         { return t.chat.VisibleToolIDs() }
+func (t *TUI) visibleSubtaskIDs() []string      { return t.chat.VisibleSubtaskIDs() }
 func (t *TUI) selectedToolPosition() (int, int) { return t.chat.SelectedToolPosition() }
 func (t *TUI) runningToolCount() int            { return t.chat.RunningToolCount() }
 func (t *TUI) markToolRejected(id string) {

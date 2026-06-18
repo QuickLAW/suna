@@ -114,6 +114,13 @@ type Model struct {
 	ToolDetailScroll    int
 	SelectedToolID      string
 
+	SubtaskCursor             int
+	SubtaskCursorUserSet      bool
+	SubtaskToolCursor         int
+	SubtaskToolCursorUserSet  bool
+	SubtaskToolDetailExpanded bool
+	SubtaskToolDetailScroll   int
+
 	ActiveTools      map[string]*toolview.Entry
 	ToolStartTimes   map[string]time.Time
 	CurrentToolBlock *toolview.Block

@@ -53,14 +53,14 @@ func (m Model) RouteKey(key string, inputLocked bool, compacting bool) KeyTarget
 func AllowLockedInputKey(key string, compacting bool) bool {
 	if compacting {
 		switch key {
-		case "ctrl+c", "?", "ctrl+t", "ctrl+r", "pgup", "pgdown", "up", "down":
+		case "ctrl+c", "?", "ctrl+t", "ctrl+r", "pgup", "pgdown", "up", "down", "tab":
 			return true
 		default:
 			return false
 		}
 	}
 	switch key {
-	case "ctrl+c", "?", "esc", "enter", "ctrl+j", "ctrl+t", "ctrl+r", "pgup", "pgdown", "up", "down":
+	case "ctrl+c", "?", "esc", "enter", "ctrl+j", "ctrl+t", "ctrl+r", "pgup", "pgdown", "up", "down", "tab":
 		return true
 	default:
 		return false
@@ -76,9 +76,30 @@ func (m *Model) ToggleReasoningDetail() {
 }
 
 func (m *Model) ToggleToolDetail(visibleIDs []string) {
+	if len(visibleIDs) == 0 {
+		m.ShowToolDetail = false
+		m.SelectedToolID = ""
+		m.ToolDetailScroll = 0
+		return
+	}
 	m.ShowToolDetail = !m.ShowToolDetail
 	m.ToolDetailScroll = 0
-	if m.ShowToolDetail && m.SelectedToolID == "" && len(visibleIDs) > 0 {
+	if !m.ShowToolDetail {
+		return
+	}
+	if !containsString(visibleIDs, m.SelectedToolID) {
+		m.SelectedToolID = ""
+	}
+	if m.SelectedToolID == "" && len(visibleIDs) > 0 {
 		m.SelectedToolID = visibleIDs[0]
 	}
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
 }

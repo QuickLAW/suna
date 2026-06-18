@@ -29,22 +29,24 @@ type TranscriptDeps struct {
 	AskHelp       string
 	AskChoiceHelp string
 
-	RenderSunaHeader     func(string) string
-	RenderUserMessage    func(any, int) string
-	RenderAssistant      func(*Msg) string
-	RenderReasoning      func(*Msg) string
-	RenderToolBlock      func(*toolview.Block) string
-	RenderError          func(string) string
-	RenderRestoreSummary func(string) string
-	RenderSkillLoad      func(protocol.SkillLoadParams) string
-	RenderSkillReview    func(protocol.SkillReviewParams) string
-	RenderSystem         func(string) string
-	RenderAskSelected    func(string) string
-	RenderAskOption      func(string) string
-	RenderAskHelp        func(string) string
-	RenderModelPicker    func() string
-	RenderStatusLine     func() string
-	HasVisibleProgress   func() bool
+	RenderSunaHeader        func(string) string
+	RenderUserMessage       func(any, int) string
+	RenderAssistant         func(*Msg) string
+	RenderReasoning         func(*Msg) string
+	RenderToolBlock         func(*toolview.Block) string
+	RenderSubtaskBlock      func(*toolview.Block) string
+	RenderError             func(string) string
+	RenderRestoreSummary    func(string) string
+	RenderSkillLoad         func(protocol.SkillLoadParams) string
+	RenderSkillReview       func(protocol.SkillReviewParams) string
+	RenderSystem            func(string) string
+	RenderAskSelected       func(string) string
+	RenderAskOption         func(string) string
+	RenderAskHelp           func(string) string
+	RenderModelPicker       func() string
+	RenderStatusLine        func() string
+	RenderCompactStatusLine func() string
+	HasVisibleProgress      func() bool
 }
 
 type transcriptBlock struct {
@@ -186,6 +188,9 @@ func (m Model) RenderTranscriptBlocksWithNav(deps TranscriptDeps) ([]transcriptB
 				if deps.RenderToolBlock != nil {
 					addBlock(i, msg.Streaming, deps.RenderToolBlock(v))
 				}
+				if deps.RenderSubtaskBlock != nil {
+					addBlock(i, msg.Streaming, deps.RenderSubtaskBlock(v))
+				}
 			}
 		case "error":
 			content, _ := msg.Content.(string)
@@ -248,10 +253,16 @@ func (m Model) RenderTranscriptBlocksWithNav(deps TranscriptDeps) ([]transcriptB
 	if deps.HasVisibleProgress != nil {
 		visibleProgress = deps.HasVisibleProgress()
 	}
-	if m.Loading && m.PhaseStart.After(time.Time{}) && !visibleProgress {
+	if m.Loading && m.PhaseStart.After(time.Time{}) {
 		renderSunaHeader()
-		if deps.RenderStatusLine != nil {
-			addBlock(-1, false, deps.RenderStatusLine())
+		if m.Phase == PhaseWaitingAfterTool && visibleProgress && !m.Compacting {
+			if deps.RenderCompactStatusLine != nil {
+				addBlock(-1, false, deps.RenderCompactStatusLine())
+			}
+		} else if !visibleProgress || m.Compacting {
+			if deps.RenderStatusLine != nil {
+				addBlock(-1, false, deps.RenderStatusLine())
+			}
 		}
 	}
 	return blocks, nav

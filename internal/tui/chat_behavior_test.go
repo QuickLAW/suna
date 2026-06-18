@@ -7,8 +7,10 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/alanchenchen/suna/internal/protocol"
+	chatpage "github.com/alanchenchen/suna/internal/tui/pages/chat"
 	uipage "github.com/alanchenchen/suna/internal/tui/pages/page"
 	tuitransport "github.com/alanchenchen/suna/internal/tui/transport"
 )
@@ -251,8 +253,8 @@ func TestActiveReasoningSuppressesDuplicateStatusLine(t *testing.T) {
 
 	tui.syncContent()
 	view := stripANSIForTest(tui.chat.Viewport.View())
-	if count := strings.Count(view, "◎ 思考"); count != 1 {
-		t.Fatalf("strings.Count(view, %q) = %d, want %d; view = %q", "◎ 思考", count, 1, view)
+	if !strings.Contains(view, "╭") || !strings.Contains(view, "思考") {
+		t.Fatalf("view = %q, want reasoning title box", view)
 	}
 	if strings.Contains(view, "Esc 取消") {
 		t.Fatalf("view = %q, should not contain duplicate bottom status line", view)
@@ -295,7 +297,7 @@ func TestWaitingAfterSubtaskShowsSpecificStatusLine(t *testing.T) {
 	}
 }
 
-func TestRunningToolSuppressesDuplicateStatusLine(t *testing.T) {
+func TestRunningToolShowsCompactStatusLine(t *testing.T) {
 	tui := &TUI{i18n: newTranslator(LocaleZH), width: 80, height: 24}
 	tui.initChatComponents()
 	tui.chat.Loading = true
@@ -307,8 +309,15 @@ func TestRunningToolSuppressesDuplicateStatusLine(t *testing.T) {
 
 	tui.syncContent()
 	view := stripANSIForTest(tui.chat.Viewport.View())
+	if strings.Contains(view, "执行工具中") {
+		t.Fatalf("view = %q, should not repeat tool-specific global status", view)
+	}
 	if strings.Contains(view, "Esc 取消") {
 		t.Fatalf("view = %q, should not contain duplicate bottom status line", view)
+	}
+	input := stripANSIForTest(tui.renderInputArea())
+	if !strings.Contains(input, "运行中") || !strings.Contains(input, "Esc 取消") {
+		t.Fatalf("renderInputArea() = %q, want compact running placeholder", input)
 	}
 }
 
@@ -393,14 +402,16 @@ func TestRenderInputAreaSeparatesAttachmentBoxFromComposer(t *testing.T) {
 	tui.chat.Attachments = []attachmentItem{{Type: "image", Name: "image.png", Size: 1024}}
 
 	view := stripANSIForTest(tui.renderInputArea())
-	boxEnd := strings.LastIndex(view, "╰")
+	attachmentStart := strings.Index(view, "Pending attachments")
 	inputStart := strings.LastIndex(view, "describe this image")
-	if boxEnd < 0 || inputStart < 0 || boxEnd >= inputStart {
-		t.Fatalf("renderInputArea() = %q, want attachment box before composer", view)
+	if attachmentStart < 0 || inputStart < 0 || !(attachmentStart < inputStart) {
+		t.Fatalf("renderInputArea() = %q, want attachment box before input box", view)
 	}
-	between := view[boxEnd:inputStart]
-	if !strings.Contains(between, "──") {
-		t.Fatalf("renderInputArea() = %q, want separator between attachment box and composer", view)
+	if strings.Contains(view, "Input") {
+		t.Fatalf("renderInputArea() = %q, should not show redundant input title", view)
+	}
+	if strings.Contains(view, "@") {
+		t.Fatalf("renderInputArea() = %q, should not advertise @ file command", view)
 	}
 }
 
@@ -537,5 +548,377 @@ func TestUsageNotificationFallsBackToProviderContextTokens(t *testing.T) {
 
 	if got, want := tui.contextTokens, 42200; got != want {
 		t.Fatalf("contextTokens = %d, want fallback %d", got, want)
+	}
+}
+
+func TestSubtaskPanelKeyboardAndToolDetail(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleZH), width: 100, height: 30, mode: uipage.Chat}
+	tui.initChatComponents()
+	block := tui.ensureToolBlock()
+	block.Add(&toolEntry{ID: "spawn-1", Name: "Spawn", RawName: "spawn", Intent: "调研提示词", Status: toolRunning, ParamsRaw: map[string]any{"model": "DF/glm-5.2", "tools": []string{"http"}, "task": "调研主流 agent 提示词"}, StartedAt: time.Now().Add(-time.Second)})
+	block.Add(&toolEntry{ID: "spawn:spawn-1:http-1", ParentID: "spawn-1", Name: "HTTP", RawName: "http", Intent: "获取资料", ParamsRaw: map[string]any{"url": "https://kilo.ai/"}, Params: `{"url":"https://kilo.ai/"}`, Result: strings.Repeat("result\n", 20), Status: toolRunning, StartedAt: time.Now().Add(-time.Second)})
+	block.Add(&toolEntry{ID: "spawn-2", Name: "Spawn", RawName: "spawn", Intent: "结果复核", Status: toolRunning})
+
+	input := stripANSIForTest(tui.renderInputArea())
+	if strings.Contains(input, "Tab 聚焦子任务") {
+		t.Fatalf("renderInputArea() = %q, should not show subtask focus hint", input)
+	}
+	panel := stripANSIForTest(tui.renderSubtaskBlock(block))
+	for _, want := range []string{"调研提示词", "当前子任务", "工具调用", "获取资料", "Enter 展开工具详情"} {
+		if !strings.Contains(panel, want) {
+			t.Fatalf("renderSubtaskPanel() = %q, want %q", panel, want)
+		}
+	}
+	if strings.Contains(panel, "─ 工具详情") {
+		t.Fatalf("renderSubtaskPanel() = %q, should keep tool detail collapsed by default", panel)
+	}
+
+	_, _ = tui.updateChatKey("tab", tea.KeyPressMsg{})
+	if got, want := tui.chat.SubtaskCursor, 1; got != want {
+		t.Fatalf("SubtaskCursor = %d after Tab, want %d", got, want)
+	}
+	_, _ = tui.updateChatKey("tab", tea.KeyPressMsg{})
+	if got, want := tui.chat.SubtaskCursor, 0; got != want {
+		t.Fatalf("SubtaskCursor = %d after second Tab, want %d", got, want)
+	}
+
+	_, _ = tui.updateChatKey("enter", tea.KeyPressMsg{})
+	if !tui.chat.SubtaskToolDetailExpanded {
+		t.Fatalf("SubtaskToolDetailExpanded = false after Enter, want true")
+	}
+	expanded := stripANSIForTest(tui.renderSubtaskBlock(block))
+	if !strings.Contains(expanded, "工具详情") || !strings.Contains(expanded, "PgUp/PgDn") {
+		t.Fatalf("expanded panel = %q, want inline scrollable tool detail", expanded)
+	}
+	_, _ = tui.updateChatKey("esc", tea.KeyPressMsg{})
+	if tui.chat.SubtaskToolDetailExpanded {
+		t.Fatalf("SubtaskToolDetailExpanded = true after Esc, want false")
+	}
+}
+
+func TestGlobalToolDetailSkipsSpawnAndSubtaskChildren(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleZH), width: 100, height: 28, mode: uipage.Chat}
+	tui.initChatComponents()
+	block := tui.ensureToolBlock()
+	block.Add(&toolEntry{ID: "spawn-1", Name: "Spawn", RawName: "spawn", Intent: "调研提示词", Status: toolRunning})
+	block.Add(&toolEntry{ID: "spawn:spawn-1:http-1", ParentID: "spawn-1", Name: "HTTP", RawName: "http", Intent: "获取资料", Status: toolRunning})
+	block.Add(&toolEntry{ID: "read-1", Name: "Readfile", RawName: "readfile", Intent: "读取文件", Status: toolDone})
+	tui.chat.SelectedToolID = "spawn:spawn-1:http-1"
+
+	tui.toggleToolDetail()
+	if !tui.chat.ShowToolDetail {
+		t.Fatalf("ShowToolDetail = false after toggle, want true")
+	}
+	if got, want := tui.chat.SelectedToolID, "read-1"; got != want {
+		t.Fatalf("SelectedToolID = %q, want %q", got, want)
+	}
+}
+
+func TestGlobalToolDetailNoopsWhenOnlySubtasks(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleZH), width: 100, height: 28, mode: uipage.Chat}
+	tui.initChatComponents()
+	block := tui.ensureToolBlock()
+	block.Add(&toolEntry{ID: "spawn-1", Name: "Spawn", RawName: "spawn", Intent: "调研提示词", Status: toolRunning})
+	block.Add(&toolEntry{ID: "spawn:spawn-1:http-1", ParentID: "spawn-1", Name: "HTTP", RawName: "http", Intent: "获取资料", Status: toolRunning})
+
+	tui.toggleToolDetail()
+	if tui.chat.ShowToolDetail {
+		t.Fatalf("ShowToolDetail = true with only subtask tools, want false")
+	}
+}
+
+func TestSubtaskBlockRendersAsTranscriptContent(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleZH), width: 100, height: 30, mode: uipage.Chat}
+	tui.initChatComponents()
+	block := tui.ensureToolBlock()
+	block.Add(&toolEntry{ID: "spawn-1", Name: "Spawn", RawName: "spawn", Intent: "调研提示词", Status: toolRunning})
+	block.Add(&toolEntry{ID: "spawn:spawn-1:http-1", ParentID: "spawn-1", Name: "HTTP", RawName: "http", Intent: "获取资料", Status: toolDone, Result: strings.Repeat("result\n", 20)})
+	block.Add(&toolEntry{ID: "spawn:spawn-1:read-1", ParentID: "spawn-1", Name: "Readfile", RawName: "readfile", Intent: "读取文件", Status: toolRunning})
+
+	collapsed := tui.renderSubtaskBlock(block)
+	if got := renderedLineCount(collapsed); got == 0 {
+		t.Fatalf("collapsed rendered rows = 0; panel = %q", stripANSIForTest(collapsed))
+	}
+	_, _ = tui.updateChatKey("enter", tea.KeyPressMsg{})
+	expanded := tui.renderSubtaskBlock(block)
+	if got := renderedLineCount(expanded); got <= renderedLineCount(collapsed) {
+		t.Fatalf("expanded rendered rows = %d, collapsed rows = %d; panel = %q", got, renderedLineCount(collapsed), stripANSIForTest(expanded))
+	}
+	plain := stripANSIForTest(expanded)
+	if !strings.Contains(plain, "获取资料") || !strings.Contains(plain, "读取文件") || !strings.Contains(plain, "工具详情") {
+		t.Fatalf("expanded panel = %q, want tools and detail", plain)
+	}
+}
+
+func renderedLineCount(s string) int {
+	s = strings.TrimRight(s, "\n")
+	if s == "" {
+		return 0
+	}
+	return strings.Count(s, "\n") + 1
+}
+
+func TestSubtaskBlockTimelineWindowsAroundRunningTool(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleZH), width: 100, height: 24, mode: uipage.Chat}
+	tui.initChatComponents()
+	block := tui.ensureToolBlock()
+	block.Add(&toolEntry{ID: "spawn-1", Name: "Spawn", RawName: "spawn", Intent: "调研提示词", Status: toolRunning})
+	for i := 0; i < 12; i++ {
+		status := toolDone
+		if i == 10 {
+			status = toolRunning
+		}
+		block.Add(&toolEntry{ID: fmt.Sprintf("spawn:spawn-1:tool-%02d", i), ParentID: "spawn-1", Name: "Readfile", RawName: "readfile", Intent: fmt.Sprintf("读取文件 %02d", i), Status: status})
+	}
+
+	plain := stripANSIForTest(tui.renderSubtaskBlock(block))
+	if !strings.Contains(plain, "读取文件 10") {
+		t.Fatalf("renderSubtaskBlock() = %q, want running tool visible", plain)
+	}
+	if !strings.Contains(plain, "上方还有") {
+		t.Fatalf("renderSubtaskBlock() = %q, want above-more hint", plain)
+	}
+	if strings.Contains(plain, "读取文件 00") {
+		t.Fatalf("renderSubtaskBlock() = %q, should window old tools out", plain)
+	}
+	if got, want := tui.chat.SubtaskToolCursor, 10; got != want {
+		t.Fatalf("SubtaskToolCursor = %d, want running tool index %d", got, want)
+	}
+}
+
+func TestSubtaskToolCursorMovesWithArrowKeys(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleZH), width: 100, height: 28, mode: uipage.Chat}
+	tui.initChatComponents()
+	block := tui.ensureToolBlock()
+	block.Add(&toolEntry{ID: "spawn-1", Name: "Spawn", RawName: "spawn", Intent: "调研提示词", Status: toolRunning})
+	block.Add(&toolEntry{ID: "spawn:spawn-1:tool-1", ParentID: "spawn-1", Name: "Search", RawName: "search", Intent: "搜索", Status: toolDone})
+	block.Add(&toolEntry{ID: "spawn:spawn-1:tool-2", ParentID: "spawn-1", Name: "Readfile", RawName: "readfile", Intent: "读取", Status: toolRunning})
+
+	_ = tui.renderSubtaskBlock(block)
+	if got, want := tui.chat.SubtaskToolCursor, 1; got != want {
+		t.Fatalf("initial SubtaskToolCursor = %d, want running index %d", got, want)
+	}
+	_, _ = tui.updateChatKey("up", tea.KeyPressMsg{})
+	if got, want := tui.chat.SubtaskToolCursor, 0; got != want {
+		t.Fatalf("SubtaskToolCursor after up = %d, want %d", got, want)
+	}
+	_, _ = tui.updateChatKey("down", tea.KeyPressMsg{})
+	if got, want := tui.chat.SubtaskToolCursor, 1; got != want {
+		t.Fatalf("SubtaskToolCursor after down = %d, want %d", got, want)
+	}
+}
+
+func TestSubtaskBlockShowsWaitingForNextTool(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleZH), width: 100, height: 28, mode: uipage.Chat}
+	tui.initChatComponents()
+	block := tui.ensureToolBlock()
+	block.Add(&toolEntry{ID: "spawn-1", Name: "Spawn", RawName: "spawn", Intent: "调研提示词", Status: toolRunning})
+	block.Add(&toolEntry{ID: "spawn:spawn-1:tool-1", ParentID: "spawn-1", Name: "Search", RawName: "search", Intent: "搜索", Status: toolDone})
+
+	plain := stripANSIForTest(tui.renderSubtaskBlock(block))
+	if !strings.Contains(plain, "等待下一个工具调用") {
+		t.Fatalf("renderSubtaskBlock() = %q, want waiting next tool row", plain)
+	}
+}
+
+func TestRenderTitledRoundBoxKeepsRightBorderAligned(t *testing.T) {
+	box := renderTitledRoundBox(48, "子任务  共 3 个 · 3 运行中 · 0 完成 · 0 失败", []string{
+		styleHL.Render("检查子任务面板实现") + styleDim.Render(" · ") + styleToolDim.Render("Find implementation files and docs that mention subtask blocks"),
+		styleDim.Render("─ 工具调用 ─────────────────────────────────────────────"),
+	})
+	for i, line := range strings.Split(box, "\n") {
+		if got, want := lipgloss.Width(line), 48; got != want {
+			t.Fatalf("line %d width = %d, want %d; line = %q", i, got, want, line)
+		}
+	}
+}
+
+func TestThinkingBoxUsesRoundedTitleBorder(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleZH), width: 100}
+	tui.initChatComponents()
+	got := tui.renderThinkingBox("正在分析", true, time.Now(), time.Time{})
+	plain := stripANSIForTest(got)
+	if !strings.Contains(plain, "╭") || !strings.Contains(plain, "╯") {
+		t.Fatalf("renderThinkingBox() = %q, want rounded border", plain)
+	}
+	if !strings.Contains(plain, "思考") {
+		t.Fatalf("renderThinkingBox() = %q, want title in border", plain)
+	}
+}
+
+func TestSubtaskBlockTitleShowsStatusIconAndFailureReason(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleZH), width: 100, height: 30, mode: uipage.Chat}
+	tui.initChatComponents()
+	block := tui.ensureToolBlock()
+	block.Add(&toolEntry{ID: "spawn-1", Name: "Spawn", RawName: "spawn", Intent: "失败子任务", Status: toolError, Result: "quota exceeded\ntry later"})
+
+	panel := stripANSIForTest(tui.renderSubtaskBlock(block))
+	if !strings.Contains(panel, "✗ 子任务") {
+		t.Fatalf("renderSubtaskBlock() = %q, want failed title icon", panel)
+	}
+	if !strings.Contains(panel, "quota exceeded") {
+		t.Fatalf("renderSubtaskBlock() = %q, want failure reason", panel)
+	}
+}
+
+func TestChatTopMetaOmitsContextStats(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleZH), width: 100}
+	tui.providerName = "Froghire"
+	tui.modelName = "gpt-5.5"
+	tui.contextTokens = 36200
+	tui.contextWindow = 400000
+
+	got := stripANSIForTest(tui.chatTopMeta())
+	if !strings.Contains(got, "Froghire/gpt-5.5") {
+		t.Fatalf("chatTopMeta() = %q, want model ref", got)
+	}
+	if strings.Contains(got, "ctx") || strings.Contains(got, "36.2k") || strings.Contains(got, "400k") {
+		t.Fatalf("chatTopMeta() = %q, should omit context stats", got)
+	}
+}
+
+func TestRenderChatStatusBarShowsContextAndUsage(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleZH), width: 100}
+	tui.hasUsage = true
+	tui.contextTokens = 36200
+	tui.contextWindow = 400000
+	tui.lastInputTok = 32600
+	tui.lastOutputTok = 2300
+	tui.lastCachedTok = 29700
+	tui.lastTokensPerSec = 50
+
+	raw := tui.renderChatStatusBar()
+	got := stripANSIForTest(raw)
+	for _, want := range []string{"ctx 36.2k/400k", "9%", "↑32.6k", "↓2.3k", "↻29.7k", "50t/s"} {
+		if !strings.Contains(got, want) && !strings.Contains(raw, want) {
+			t.Fatalf("renderChatStatusBar() = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestInputComposerMarkerRepeatsForWrappedVisualLines(t *testing.T) {
+	long := strings.Repeat("长", 40)
+	got := stripANSIForTest(renderInputComposerBar(24, []string{long}, false, true))
+	lines := strings.Split(got, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("renderInputComposerBar() = %q, want wrapped lines", got)
+	}
+	for _, line := range lines {
+		if !strings.Contains(line, "▌") {
+			t.Fatalf("renderInputComposerBar() = %q, every wrapped line should keep input marker", got)
+		}
+	}
+}
+
+func TestPendingImagePasteDoesNotRenderAsAttachmentPanel(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleZH), width: 80, height: 24}
+	tui.initChatComponents()
+	tui.chat.EnqueueImagePaste(pendingImagePaste{Name: "image.png", SourceKind: "clipboard"})
+	if panel := tui.renderAttachmentPanel(); panel != "" {
+		t.Fatalf("renderAttachmentPanel() = %q, pending paste should render as overlay instead", panel)
+	}
+	if overlay := tui.renderPendingImagePasteOverlay(80); !strings.Contains(stripANSIForTest(overlay), "image.png") {
+		t.Fatalf("renderPendingImagePasteOverlay() = %q, want pending image name", overlay)
+	}
+}
+
+func TestThinkingBoxStreamingKeepsStableHeight(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleZH), width: 100}
+	tui.initChatComponents()
+	started := time.Now().Add(-time.Second)
+	short := tui.renderThinkingBox("短句", true, started, time.Time{})
+	long := tui.renderThinkingBox("这是一个非常非常非常非常非常非常非常非常非常非常非常长的推理片段，会因为换行而变高", true, started, time.Time{})
+	if got, want := chatpage.RenderedLineCount(long), chatpage.RenderedLineCount(short); got != want {
+		t.Fatalf("streaming thinking height = %d, want stable %d", got, want)
+	}
+}
+
+func TestWaitingAfterToolWithCompletedToolShowsCompactSpinner(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleZH), width: 80, height: 24}
+	tui.initChatComponents()
+	tui.chat.Loading = true
+	tui.chat.Phase = phaseWaitingAfterTool
+	tui.chat.PhaseStart = time.Now().Add(-time.Second)
+	block := tui.ensureToolBlock()
+	block.Add(&toolEntry{ID: "1", Name: "Read", Intent: "读取文件", Status: toolDone, StartedAt: time.Now().Add(-2 * time.Second), EndedAt: time.Now().Add(-time.Second)})
+
+	tui.syncContent()
+	view := stripANSIForTest(tui.chat.Viewport.View())
+	if strings.Contains(view, "工具已完成") || strings.Contains(view, "子任务已完成") {
+		t.Fatalf("view = %q, waiting after completed tool should use compact empty spinner", view)
+	}
+	if !strings.Contains(view, "1.0s") {
+		t.Fatalf("view = %q, want compact spinner elapsed time", view)
+	}
+}
+
+func TestEscClearsDraftWithoutDiscardConfirm(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleZH), width: 80, height: 24}
+	tui.initChatComponents()
+	tui.mode = uipage.Chat
+	tui.chat.Textarea.SetValue("需要清空的草稿")
+
+	_, cmd := tui.updateChatKeyNormal("esc", tea.KeyPressMsg{})
+	if cmd == nil {
+		t.Fatalf("updateChatKeyNormal(esc) returned nil command, want input focus command")
+	}
+	if got := tui.chat.Textarea.Value(); got != "" {
+		t.Fatalf("Textarea.Value() = %q, want empty draft", got)
+	}
+	if tui.chat.HasDiscardDraftConfirm() {
+		t.Fatal("HasDiscardDraftConfirm() = true, want direct clear without confirm")
+	}
+}
+
+func TestImagePasteOverlayLeftAlignsWithInputArea(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleZH), width: 80, height: 24}
+	tui.initChatComponents()
+	view := strings.Join([]string{
+		"pet top",
+		"pet meta",
+		"pet bottom",
+		"top separator",
+		"content 1",
+		"content 2",
+		"content 3",
+		"content 4",
+		"  ────────────────────────────────",
+		"  ▌ 输入消息...",
+		"  help",
+		"  status",
+	}, "\n")
+	panel := "╭────────╮\n│ image │\n╰────────╯"
+
+	got := tui.overlayImagePasteAboveInput(view, panel, "")
+	lines := strings.Split(got, "\n")
+	if len(lines) < 8 {
+		t.Fatalf("overlayImagePasteAboveInput() lines = %d, want >= 8", len(lines))
+	}
+	if !strings.HasPrefix(lines[5], "  ╭") {
+		t.Fatalf("overlay first line = %q, want left aligned with two-space input margin", lines[5])
+	}
+	if lines[0] != "pet top" || lines[1] != "pet meta" || lines[2] != "pet bottom" || lines[3] != "top separator" {
+		t.Fatalf("overlayImagePasteAboveInput() = %q, should not cover top chrome", got)
+	}
+}
+
+func TestImagePasteOverlayKeepsTinyViewUnchanged(t *testing.T) {
+	tui := &TUI{i18n: newTranslator(LocaleZH), width: 80, height: 8}
+	tui.initChatComponents()
+	view := strings.Join([]string{
+		"pet top",
+		"pet meta",
+		"pet bottom",
+		"top separator",
+		"  ────────────────────────────────",
+		"  ▌ 输入消息...",
+		"  help",
+		"  status",
+	}, "\n")
+	panel := "╭────────╮\n│ image │\n╰────────╯"
+
+	got := tui.overlayImagePasteAboveInput(view, panel, "")
+	if got != view {
+		t.Fatalf("overlayImagePasteAboveInput() = %q, want tiny view unchanged to avoid covering top chrome", got)
 	}
 }

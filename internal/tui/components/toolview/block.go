@@ -18,6 +18,21 @@ func ParseSubtaskID(id string) (string, string) {
 	return parts[0], parts[1]
 }
 
+func VisibleMainEntries(block *Block) []*Entry {
+	if block == nil {
+		return nil
+	}
+	entries := make([]*Entry, 0, len(block.Order))
+	for _, id := range block.Order {
+		te := block.Entries[id]
+		if te == nil || IsSubtask(te) || IsSubtaskChild(te) {
+			continue
+		}
+		entries = append(entries, te)
+	}
+	return entries
+}
+
 func VisibleEntries(block *Block) []*Entry {
 	if block == nil {
 		return nil
@@ -95,6 +110,22 @@ func IsSubtask(te *Entry) bool {
 
 func IsSubtaskChild(te *Entry) bool {
 	return te != nil && te.ParentID != ""
+}
+
+// SubtaskChildren 返回某个子任务的内部工具调用，顺序与工具块事件顺序一致。
+func SubtaskChildren(block *Block, parentID string) []*Entry {
+	if block == nil || parentID == "" {
+		return nil
+	}
+	entries := make([]*Entry, 0)
+	for _, childID := range block.Order {
+		child := block.Entries[childID]
+		if child == nil || child.ParentID != parentID {
+			continue
+		}
+		entries = append(entries, child)
+	}
+	return entries
 }
 
 func BlockTitle(entries []*Entry, labels RenderLabels) string {

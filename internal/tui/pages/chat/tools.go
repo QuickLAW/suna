@@ -94,7 +94,30 @@ func (m *Model) VisibleToolIDs() []string {
 	if block == nil {
 		return nil
 	}
-	return append([]string(nil), block.Order...)
+	ids := make([]string, 0, len(block.Order))
+	for _, id := range block.Order {
+		te := block.Entries[id]
+		if te == nil || toolview.IsSubtask(te) || toolview.IsSubtaskChild(te) {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func (m *Model) VisibleSubtaskIDs() []string {
+	block := m.CurrentToolBlock
+	if block == nil {
+		return nil
+	}
+	ids := make([]string, 0, len(block.Order))
+	for _, id := range block.Order {
+		te := block.Entries[id]
+		if toolview.IsSubtask(te) {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func (m *Model) SelectedToolPosition() (int, int) {

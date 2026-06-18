@@ -80,6 +80,9 @@ type TUI struct {
 	contextWindow    int
 	lastTextStreamAt time.Time
 
+	// 输入区空态光标由 TUI 自己定时闪烁，避免依赖终端 ANSI blink 支持。
+	inputCursorVisible bool
+
 	// transcript 同步由 daemon 通知触发时按帧合并，避免流式输出和工具事件风暴反复完整重渲染。
 	transcriptSyncDirty     bool
 	transcriptSyncScheduled bool

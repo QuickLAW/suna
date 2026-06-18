@@ -41,6 +41,7 @@ type DetailDeps struct {
 	OverlayMaxHeight int
 	SelectedIndex    int
 	SelectedTotal    int
+	ShowPosition     bool
 	Labels           DetailLabels
 	Styles           RenderStyles
 	Box              lipgloss.Style
@@ -105,7 +106,7 @@ func BuildDetailLineSource(te *Entry, inner int, deps DetailDeps) scroll.LineSou
 	} else if IsSubtaskChild(te) {
 		title = labels.SubtaskToolTitle
 	}
-	if deps.SelectedTotal > 0 {
+	if deps.ShowPosition && deps.SelectedTotal > 0 {
 		title += fmt.Sprintf(" · %d/%d", deps.SelectedIndex+1, deps.SelectedTotal)
 	}
 	appendLines(deps.Styles.HL.Render(title))

@@ -16,6 +16,8 @@ type ViewDeps struct {
 	Content            string
 	Separator          string
 	InputArea          string
+	InputSeparator     string
+	PreInputHint       string
 	CommandSuggestions string
 	StatusBar          string
 
@@ -68,12 +70,24 @@ func (m Model) View(deps ViewDeps) string {
 		content = overlay(content, deps.GuardOverlay, deps.Overlay)
 	}
 	sb.WriteString(content)
-	sb.WriteString(deps.Separator + "\n")
+	if content != "" && !strings.HasSuffix(content, "\n") {
+		// Content 通常来自 viewport，部分场景不会带尾部换行；输入分割线必须单独成行，
+		// 否则会被拼到最后一行消息后面，视觉上像是没有显示。
+		sb.WriteString("\n")
+	}
+	if deps.PreInputHint != "" {
+		sb.WriteString(deps.PreInputHint + "\n")
+	}
+	inputSeparator := deps.InputSeparator
+	if inputSeparator == "" {
+		inputSeparator = deps.Separator
+	}
+	sb.WriteString(inputSeparator + "\n")
 	sb.WriteString(deps.InputArea)
 	if deps.CommandSuggestions != "" {
 		sb.WriteString("\n" + deps.CommandSuggestions)
 	}
-	sb.WriteString("\n" + deps.StatusBar + "\n")
+	sb.WriteString("\n" + deps.StatusBar)
 	return sb.String()
 }
 

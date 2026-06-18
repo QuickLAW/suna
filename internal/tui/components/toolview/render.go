@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	textutil "github.com/alanchenchen/suna/internal/tui/components/text"
 )
@@ -49,14 +50,14 @@ type RenderLabels struct {
 	SearchScanned        string
 	SearchTruncated      string
 	ModeContent          string
-	SubtaskWaiting       string
 }
 
 // RenderDeps 汇总工具块渲染所需依赖。
 type RenderDeps struct {
-	Width  int
-	Labels RenderLabels
-	Styles RenderStyles
+	Width   int
+	Spinner string
+	Labels  RenderLabels
+	Styles  RenderStyles
 
 	GuardDecisionLabel func(*GuardInfo) string
 	RiskLabel          func(string) string
@@ -74,19 +75,82 @@ func RenderBlock(block *Block, deps RenderDeps) string {
 	if block == nil || len(block.Order) == 0 {
 		return ""
 	}
-	entries := VisibleEntries(block)
-	var sb strings.Builder
-	sb.WriteString("    " + deps.Styles.Dim.Render(BlockTitle(entries, deps.Labels)) + "\n")
-	for _, te := range topLevelEntries(block) {
-		sb.WriteString(RenderEntry(te, false, deps))
-		for _, child := range childEntries(block, te.ID) {
-			sb.WriteString(RenderEntry(child, true, deps))
-		}
-		if shouldRenderSubtaskWaiting(block, te) {
-			sb.WriteString(renderSubtaskWaitingLine(deps))
+	entries := VisibleMainEntries(block)
+	if len(entries) == 0 {
+		return ""
+	}
+	var lines []string
+	for _, te := range entries {
+		entryLines := strings.Split(strings.TrimSuffix(RenderEntry(te, false, deps), "\n"), "\n")
+		for _, line := range entryLines {
+			lines = append(lines, trimToolBlockIndent(line))
 		}
 	}
-	return sb.String()
+	return renderToolTitledBox(deps.width(), toolBlockTitleWithStatus(entries, deps), lines, deps.Styles)
+}
+
+func trimToolBlockIndent(line string) string {
+	// 工具条目原本为了独立渲染带有左缩进；放进圆角容器后去掉整层缩进，避免边框内留白过大。
+	line = strings.TrimPrefix(line, "      ")
+	return strings.TrimPrefix(line, "    ")
+}
+
+func toolBlockTitleWithStatus(entries []*Entry, deps RenderDeps) string {
+	return strings.TrimSpace(toolBlockStatusIcon(entries, deps) + " " + BlockTitle(entries, deps.Labels))
+}
+
+func toolBlockStatusIcon(entries []*Entry, deps RenderDeps) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	running := 0
+	failed := 0
+	for _, te := range entries {
+		if te == nil {
+			continue
+		}
+		switch te.Status {
+		case StatusRunning:
+			running++
+		case StatusError:
+			failed++
+		}
+	}
+	if running > 0 {
+		if strings.TrimSpace(deps.Spinner) != "" {
+			return deps.Spinner
+		}
+		return "◐"
+	}
+	if failed > 0 {
+		return "✗"
+	}
+	return "✓"
+}
+
+func renderToolTitledBox(width int, title string, lines []string, styles RenderStyles) string {
+	maxOuterWidth := maxInt(20, width-4)
+	maxContentWidth := maxInt(8, maxOuterWidth-2)
+	title = textutil.TruncateRunes(strings.TrimSpace(title), maxInt(4, maxContentWidth-3))
+	titlePrefix := "─ "
+	titleSuffix := " "
+	titleWidth := lipgloss.Width(titlePrefix) + lipgloss.Width(title) + lipgloss.Width(titleSuffix)
+	contentWidth := maxInt(8, titleWidth)
+	for _, line := range lines {
+		contentWidth = maxInt(contentWidth, lipgloss.Width(line)+2)
+	}
+	contentWidth = minInt(maxContentWidth, contentWidth)
+	topRest := strings.Repeat("─", maxInt(0, contentWidth-titleWidth))
+	top := styles.Dim.Render("╭"+titlePrefix) + styles.HL.Render(title) + styles.Dim.Render(titleSuffix+topRest+"╮")
+	bottom := styles.Dim.Render("╰" + strings.Repeat("─", contentWidth) + "╯")
+	out := []string{"    " + top}
+	for _, line := range lines {
+		content := ansi.Truncate(" "+line+" ", contentWidth, "…")
+		pad := strings.Repeat(" ", maxInt(0, contentWidth-lipgloss.Width(content)))
+		out = append(out, "    "+styles.Dim.Render("│")+content+pad+styles.Dim.Render("│"))
+	}
+	out = append(out, "    "+bottom)
+	return strings.Join(out, "\n") + "\n"
 }
 
 // RenderEntry 渲染单个工具调用摘要。纯组件渲染只能依赖 Entry 和 RenderDeps。
@@ -114,21 +178,12 @@ func RenderEntry(te *Entry, nested bool, deps RenderDeps) string {
 	}
 	maxWidth := maxInt(20, deps.width()-lipgloss.Width(stripANSI(prefix))-8)
 	mainLabel, detailLabel := entryLabels(te, maxWidth, deps)
-	maxLines := 2
-	if IsSubtask(te) {
-		maxLines = 3
-	}
-	wrapped := textutil.WrapLineLimit(mainLabel, maxWidth, maxLines)
-	if len(wrapped) == 0 {
-		wrapped = []string{""}
-	}
-	if len(wrapped) > maxLines {
-		wrapped = wrapped[:maxLines]
-	}
-	line := fmt.Sprintf("%s%s %s%s", prefix, statusIcon, s.HL.Render(wrapped[0]), s.Dim.Render(dur))
-	for _, extra := range wrapped[1:] {
-		line += "\n" + prefix + "  " + s.HL.Render(extra)
-	}
+	// 首行必须为耗时预留空间，避免长命令或长路径把右侧 duration 挤出可视区域。
+	durWidth := lipgloss.Width(dur)
+	statusWidth := lipgloss.Width(statusIcon)
+	headerBudget := maxInt(8, maxWidth-statusWidth-durWidth-2)
+	mainLabel = ansi.Truncate(mainLabel, headerBudget, "…")
+	line := fmt.Sprintf("%s%s %s%s", prefix, statusIcon, s.HL.Render(mainLabel), s.Dim.Render(dur))
 	if detailLabel != "" {
 		for _, detail := range splitWrappedStyle(detailLabel, maxWidth, 2, s.Intent, s) {
 			line += "\n" + prefix + "  " + detail
@@ -401,38 +456,5 @@ func topLevelEntries(block *Block) []*Entry {
 }
 
 func childEntries(block *Block, parentID string) []*Entry {
-	if block == nil || parentID == "" {
-		return nil
-	}
-	entries := make([]*Entry, 0)
-	for _, childID := range block.Order {
-		child := block.Entries[childID]
-		if child == nil || child.ParentID != parentID {
-			continue
-		}
-		entries = append(entries, child)
-	}
-	return entries
-}
-
-func shouldRenderSubtaskWaiting(block *Block, te *Entry) bool {
-	if !IsSubtask(te) || te.Status != StatusRunning {
-		return false
-	}
-	for _, child := range childEntries(block, te.ID) {
-		if child.Status == StatusRunning {
-			return false
-		}
-	}
-	return true
-}
-
-func renderSubtaskWaitingLine(deps RenderDeps) string {
-	label := strings.TrimSpace(deps.Labels.SubtaskWaiting)
-	if label == "" {
-		label = "Waiting for subtask model..."
-	}
-	s := deps.Styles
-	prefix := "      " + s.Dim.Render("└─ ")
-	return fmt.Sprintf("%s%s %s\n", prefix, s.Run.Render("◐"), s.ToolDim.Render(label))
+	return SubtaskChildren(block, parentID)
 }
