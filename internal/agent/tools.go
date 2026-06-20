@@ -213,19 +213,37 @@ func (a *Agent) ExecuteSpawnTool(ctx context.Context, id string, params map[stri
 	r := a.newSubtaskRunner(events, spawnID, allowedTools)
 	st := subtask.New(subtask.Request{ID: spawnID, Task: task, Input: inputBlocks, ModelRef: modelRef, ModelID: resolveModelID(a.cfg, modelRef), System: subtaskPrompt, ToolDefs: toolDefs})
 	res, err := st.Run(ctx, r)
-	if err != nil && res.Text == "" {
-		res.Text = err.Error()
-		res.Status = err.Error()
+	if err != nil && res.Status == "" {
+		res = subtask.Result{
+			Status: subtask.StatusFailed,
+			Error:  err.Error(),
+			SideEffects: subtask.SideEffects{
+				Status:  subtask.SideEffectsUnknown,
+				Summary: "Subtask failed before reporting side effects.",
+			},
+		}
 	}
-	out, _ := json.Marshal(map[string]any{"result": res.Text, "success": res.Success, "status": res.Status})
+	out, _ := json.Marshal(spawnResultPayload(res))
 	return spawnToolResult(string(out), res)
 }
 
+func spawnResultPayload(res subtask.Result) map[string]any {
+	payload := map[string]any{
+		"status":       res.Status,
+		"result":       res.Text,
+		"side_effects": res.SideEffects,
+	}
+	if strings.TrimSpace(res.Error) != "" {
+		payload["error"] = res.Error
+	}
+	return payload
+}
+
 func spawnToolResult(content string, res subtask.Result) tools.Result {
-	if res.Success {
+	if res.Status != subtask.StatusFailed {
 		return tools.TextResult(content)
 	}
-	errText := strings.TrimSpace(res.Status)
+	errText := strings.TrimSpace(res.Error)
 	if errText == "" {
 		errText = strings.TrimSpace(res.Text)
 	}

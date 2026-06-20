@@ -34,8 +34,13 @@ func TestSubtaskReadFileBlocksSensitivePath(t *testing.T) {
 }
 
 func TestSpawnToolResultMarksFailedSubtaskAsToolError(t *testing.T) {
-	res := subtask.Result{Success: false, Text: "context deadline exceeded", Status: "context deadline exceeded"}
-	out := spawnToolResult(`{"result":"context deadline exceeded","success":false,"status":"context deadline exceeded"}`, res)
+	res := subtask.Result{Status: subtask.StatusFailed, Error: "context deadline exceeded", SideEffects: subtask.SideEffects{Status: subtask.SideEffectsUnknown}}
+	payload := spawnResultPayload(res)
+	outBytes, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Marshal spawn result: %v", err)
+	}
+	out := spawnToolResult(string(outBytes), res)
 	if !out.IsError {
 		t.Fatalf("spawnToolResult IsError = false, want true")
 	}
@@ -44,6 +49,22 @@ func TestSpawnToolResultMarksFailedSubtaskAsToolError(t *testing.T) {
 	}
 	if out.Content == "" || out.Content[0] != '{' {
 		t.Fatalf("spawnToolResult Content = %q, want JSON payload preserved", out.Content)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(out.Content), &decoded); err != nil {
+		t.Fatalf("spawnToolResult Content JSON: %v", err)
+	}
+	if _, ok := decoded["success"]; ok {
+		t.Fatalf("spawn result contains success = %v, want field removed", decoded["success"])
+	}
+	if decoded["status"] != string(subtask.StatusFailed) {
+		t.Fatalf("status = %v, want %s", decoded["status"], subtask.StatusFailed)
+	}
+	if decoded["error"] != "context deadline exceeded" {
+		t.Fatalf("error = %v, want context deadline exceeded", decoded["error"])
+	}
+	if decoded["side_effects"] == nil {
+		t.Fatalf("side_effects missing in %#v", decoded)
 	}
 }
 

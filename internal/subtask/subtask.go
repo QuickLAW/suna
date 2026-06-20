@@ -2,6 +2,9 @@ package subtask
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
 
 	"github.com/alanchenchen/suna/internal/memory"
 	"github.com/alanchenchen/suna/internal/model"
@@ -22,10 +25,34 @@ type Request struct {
 	MaxToolCalls int
 }
 
+type Status string
+
+const (
+	StatusCompleted             Status = "completed"
+	StatusCompletedUnstructured Status = "completed_unstructured"
+	StatusFailed                Status = "failed"
+)
+
+type SideEffectStatus string
+
+const (
+	SideEffectsNone      SideEffectStatus = "none"
+	SideEffectsCleaned   SideEffectStatus = "cleaned"
+	SideEffectsRemaining SideEffectStatus = "remaining"
+	SideEffectsUnknown   SideEffectStatus = "unknown"
+)
+
+type SideEffects struct {
+	Status  SideEffectStatus `json:"status"`
+	Summary string           `json:"summary,omitempty"`
+	Paths   []string         `json:"paths,omitempty"`
+}
+
 type Result struct {
-	Success bool
-	Text    string
-	Status  string
+	Status      Status
+	Text        string
+	Error       string
+	SideEffects SideEffects
 }
 
 type Subtask struct {
@@ -67,10 +94,104 @@ func (s *Subtask) Run(ctx context.Context, r *runner.Runner) (Result, error) {
 		MaxToolCalls:  s.req.MaxToolCalls,
 	})
 	if err != nil {
-		return Result{Success: false, Status: err.Error()}, err
+		return failedResult(err.Error(), res.HadToolCall), err
 	}
-	if res.FinalText == "" {
-		return Result{Success: false, Status: "subtask returned no answer", Text: "subtask returned no answer"}, nil
+	if strings.TrimSpace(res.FinalText) == "" {
+		return failedResult("subtask returned no answer", res.HadToolCall), nil
 	}
-	return Result{Success: true, Text: res.FinalText}, nil
+	return parseFinalResult(res.FinalText), nil
+}
+
+func failedResult(message string, hadToolCall bool) Result {
+	return Result{
+		Status: StatusFailed,
+		Error:  message,
+		SideEffects: fallbackSideEffects(
+			hadToolCall,
+			"Subtask failed before reporting side effects.",
+		),
+	}
+}
+
+type finalOutput struct {
+	Result      string      `json:"result"`
+	SideEffects SideEffects `json:"side_effects"`
+}
+
+func parseFinalResult(raw string) Result {
+	text := strings.TrimSpace(raw)
+	var out finalOutput
+	if err := json.Unmarshal([]byte(jsonPayload(text)), &out); err != nil {
+		return Result{
+			Status: StatusCompletedUnstructured,
+			Text:   text,
+			SideEffects: SideEffects{
+				Status:  SideEffectsUnknown,
+				Summary: "Subtask completed but did not return a valid side_effects report.",
+			},
+		}
+	}
+	out.Result = strings.TrimSpace(out.Result)
+	if out.Result == "" {
+		return Result{
+			Status: StatusCompletedUnstructured,
+			Text:   text,
+			SideEffects: SideEffects{
+				Status:  SideEffectsUnknown,
+				Summary: "Subtask returned JSON without a non-empty result.",
+			},
+		}
+	}
+	se := normalizeSideEffects(out.SideEffects)
+	return Result{Status: StatusCompleted, Text: out.Result, SideEffects: se}
+}
+
+func jsonPayload(text string) string {
+	text = strings.TrimSpace(text)
+	if strings.HasPrefix(text, "```") {
+		lines := strings.Split(text, "\n")
+		if len(lines) >= 3 && strings.HasPrefix(strings.TrimSpace(lines[len(lines)-1]), "```") {
+			return strings.TrimSpace(strings.Join(lines[1:len(lines)-1], "\n"))
+		}
+	}
+	if start := strings.Index(text, "{"); start >= 0 {
+		if end := strings.LastIndex(text, "}"); end > start {
+			return strings.TrimSpace(text[start : end+1])
+		}
+	}
+	return text
+}
+
+func normalizeSideEffects(se SideEffects) SideEffects {
+	switch se.Status {
+	case SideEffectsNone, SideEffectsCleaned, SideEffectsRemaining, SideEffectsUnknown:
+		return se
+	case "":
+		se.Status = SideEffectsUnknown
+		se.Summary = mergeSummary("Subtask omitted side_effects.status.", se.Summary)
+		return se
+	default:
+		se.Summary = mergeSummary(fmt.Sprintf("Subtask reported unsupported side_effects.status %q.", se.Status), se.Summary)
+		se.Status = SideEffectsUnknown
+		return se
+	}
+}
+
+func fallbackSideEffects(hadToolCall bool, summary string) SideEffects {
+	if hadToolCall {
+		return SideEffects{Status: SideEffectsUnknown, Summary: summary}
+	}
+	return SideEffects{Status: SideEffectsNone}
+}
+
+func mergeSummary(prefix, summary string) string {
+	prefix = strings.TrimSpace(prefix)
+	summary = strings.TrimSpace(summary)
+	if prefix == "" {
+		return summary
+	}
+	if summary == "" {
+		return prefix
+	}
+	return prefix + " " + summary
 }
