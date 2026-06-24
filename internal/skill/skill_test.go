@@ -36,8 +36,88 @@ func TestManagerContentChangeDoesNotDisableEnabledSkill(t *testing.T) {
 	if err := m.Reload(context.Background()); err != nil {
 		t.Fatalf("Reload() error = %v", err)
 	}
-	if _, ok, reason := m.Load("review-skill"); !ok || reason != "" {
+	content, ok, reason := m.Load("review-skill")
+	if !ok || reason != "" {
 		t.Fatalf("Load(review-skill) ok = %v, reason = %q, want ok with empty reason", ok, reason)
+	}
+	if got, want := content, "---\nname: review-skill\ndescription: New desc.\n---\n# Review\n"; got != want {
+		t.Fatalf("Load(review-skill) content = %q, want %q", got, want)
+	}
+}
+
+func TestManagerReloadUsesSkillIndexWithoutFullContent(t *testing.T) {
+	root := t.TempDir()
+	path := writeSkill(t, root, "large", "large-skill", "Use for large tasks.")
+	largeTail := make([]byte, maxSkillIndexBytes*2)
+	for i := range largeTail {
+		largeTail[i] = 'x'
+	}
+	writeFile(t, path, "---\nname: large-skill\ndescription: Use for large tasks.\n---\n\n"+string(largeTail))
+	m := NewManager(root, map[string]Record{"large-skill": {Enabled: true}})
+
+	if err := m.Reload(context.Background()); err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	if got := m.Summary(); got != "- large-skill: Use for large tasks." {
+		t.Fatalf("Summary() = %q, want %q", got, "- large-skill: Use for large tasks.")
+	}
+	content, ok, reason := m.Load("large-skill")
+	if !ok || reason != "" {
+		t.Fatalf("Load(large-skill) ok = %v, reason = %q, want ok with empty reason", ok, reason)
+	}
+	if len(content) <= maxSkillIndexBytes {
+		t.Fatalf("len(Load(large-skill)) = %d, want full content larger than index limit", len(content))
+	}
+}
+
+func TestManagerReloadReadsFrontmatterMetaInAnyOrder(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "ordered", "SKILL.md"), "---\ndescription: Description first.\nname: ordered-skill\n---\n\n# ignored\n")
+	m := NewManager(root, map[string]Record{"ordered-skill": {Enabled: true}})
+
+	if err := m.Reload(context.Background()); err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	if got := m.Summary(); got != "- ordered-skill: Description first." {
+		t.Fatalf("Summary() = %q, want %q", got, "- ordered-skill: Description first.")
+	}
+}
+
+func TestManagerReloadReadsPartialFrontmatterMeta(t *testing.T) {
+	root := t.TempDir()
+	padding := make([]byte, maxSkillIndexBytes-len("---\ndescription: Early description.\nname: partial-frontmatter\n")+1)
+	for i := range padding {
+		padding[i] = 'x'
+	}
+	writeFile(t, filepath.Join(root, "frontmatter", "SKILL.md"), "---\ndescription: Early description.\nname: partial-frontmatter\n"+string(padding)+"\n---\n")
+	m := NewManager(root, map[string]Record{"partial-frontmatter": {Enabled: true}})
+
+	if err := m.Reload(context.Background()); err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	if got := m.Summary(); got != "- partial-frontmatter: Early description." {
+		t.Fatalf("Summary() = %q, want %q", got, "- partial-frontmatter: Early description.")
+	}
+}
+
+func TestManagerReloadIgnoresPartialTrailingIndexLine(t *testing.T) {
+	root := t.TempDir()
+	padding := make([]byte, maxSkillIndexBytes-len("# partial\n")-len("description starts but is incomplete"))
+	for i := range padding {
+		padding[i] = 'x'
+	}
+	writeFile(t, filepath.Join(root, "partial", "SKILL.md"), "# partial\n"+string(padding)+"description starts but is incomplete!")
+	m := NewManager(root, map[string]Record{"partial": {Enabled: true}})
+
+	if err := m.Reload(context.Background()); err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	infos := m.List()
+	if got, want := len(infos), 1; got != want {
+		t.Fatalf("len(infos) = %d, want %d", got, want)
+	}
+	if got := infos[0].Description; got != "" {
+		t.Fatalf("infos[0].Description = %q, want empty because trailing line is partial", got)
 	}
 }
 
