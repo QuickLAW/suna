@@ -39,6 +39,16 @@ func TestShouldUpdateUsesSemverAndDevBuilds(t *testing.T) {
 	}
 }
 
+func TestLatestFromReleaseIncludesTrimmedReleaseNotes(t *testing.T) {
+	latest := latestFromRelease("v0.3.0", release{TagName: "v0.3.1", HTMLURL: "https://example.test/release", Body: "\n## Changes\n- one\n"})
+	if latest.ReleaseNotes != "## Changes\n- one" {
+		t.Fatalf("ReleaseNotes = %q, want trimmed notes", latest.ReleaseNotes)
+	}
+	if !latest.UpdateNeeded {
+		t.Fatal("UpdateNeeded = false, want true")
+	}
+}
+
 func TestFindAssetReportsAvailableNames(t *testing.T) {
 	_, err := findAsset(release{TagName: "v0.3.0", Assets: []asset{{Name: "checksums.txt"}, {Name: "suna-linux-amd64.tar.gz"}}}, "suna-darwin-arm64.zip")
 	if err == nil {

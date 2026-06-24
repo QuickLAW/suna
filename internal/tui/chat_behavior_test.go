@@ -803,13 +803,13 @@ func TestSubtaskBlockPrioritizesFailureReasonOverLastChild(t *testing.T) {
 
 func TestChatTopMetaOmitsContextStats(t *testing.T) {
 	tui := &TUI{i18n: newTranslator(LocaleZH), width: 100}
-	tui.providerName = "Froghire"
-	tui.modelName = "gpt-5.5"
+	tui.providerName = "openai"
+	tui.modelName = "gpt-4.1"
 	tui.contextTokens = 36200
 	tui.contextWindow = 400000
 
 	got := stripANSIForTest(tui.chatTopMeta())
-	if !strings.Contains(got, "Froghire/gpt-5.5") {
+	if !strings.Contains(got, "openai/gpt-4.1") {
 		t.Fatalf("chatTopMeta() = %q, want model ref", got)
 	}
 	if strings.Contains(got, "ctx") || strings.Contains(got, "36.2k") || strings.Contains(got, "400k") {

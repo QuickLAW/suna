@@ -230,9 +230,9 @@ func testWorkingMemory(userText string) *memory.WorkingMemory {
 
 func TestExecuteSpawnToolRejectsModelHiddenBySubtaskFor(t *testing.T) {
 	cfg := &config.Config{
-		ActiveModel: "Froghire/gpt-5.5",
+		ActiveModel: "openai/gpt-4.1",
 		Models: []config.ModelConfig{
-			{Provider: "Froghire", Model: "gpt-5.5", BaseURL: "https://api.example.com/v1", ContextWindow: 400000, MaxOutputTokens: 8192, APIKey: "sk-test"},
+			{Provider: "openai", Model: "gpt-4.1", BaseURL: "https://api.example.com/v1", ContextWindow: 400000, MaxOutputTokens: 8192, APIKey: "sk-test"},
 			{Provider: "DF", Model: "MiniMax-M3", BaseURL: "https://api.example.com/v1", ContextWindow: 1000000, MaxOutputTokens: 8192, APIKey: "sk-test", SubtaskFor: []string{"DF/**"}},
 		},
 	}

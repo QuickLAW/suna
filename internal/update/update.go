@@ -39,12 +39,14 @@ type Latest struct {
 	CurrentVersion string
 	LatestVersion  string
 	ReleaseURL     string
+	ReleaseNotes   string
 	UpdateNeeded   bool
 }
 
 type release struct {
 	TagName string  `json:"tag_name"`
 	HTMLURL string  `json:"html_url"`
+	Body    string  `json:"body"`
 	Assets  []asset `json:"assets"`
 }
 
@@ -59,12 +61,17 @@ func Check(ctx context.Context, opts Options) (Latest, error) {
 		return Latest{}, err
 	}
 	current := version.Current()
+	return latestFromRelease(current, rel), nil
+}
+
+func latestFromRelease(current string, rel release) Latest {
 	return Latest{
 		CurrentVersion: current,
 		LatestVersion:  rel.TagName,
 		ReleaseURL:     rel.HTMLURL,
+		ReleaseNotes:   strings.TrimSpace(rel.Body),
 		UpdateNeeded:   shouldUpdate(current, rel.TagName),
-	}, nil
+	}
 }
 
 func Install(ctx context.Context, opts Options) (Latest, error) {
@@ -77,12 +84,7 @@ func Install(ctx context.Context, opts Options) (Latest, error) {
 		return Latest{}, err
 	}
 	current := version.Current()
-	latest := Latest{
-		CurrentVersion: current,
-		LatestVersion:  rel.TagName,
-		ReleaseURL:     rel.HTMLURL,
-		UpdateNeeded:   shouldUpdate(current, rel.TagName),
-	}
+	latest := latestFromRelease(current, rel)
 	if !latest.UpdateNeeded {
 		return latest, nil
 	}

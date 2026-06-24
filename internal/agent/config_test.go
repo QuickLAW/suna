@@ -171,10 +171,10 @@ func (fakeProvider) MaxOutputTokens() int { return 8192 }
 
 func TestModelRoutingSummaryFiltersSubtaskFor(t *testing.T) {
 	cfg := newAgentConfig(t.TempDir(), []config.ModelConfig{
-		{Provider: "Froghire", Model: "gpt-5.5", BaseURL: "https://api.example.com/v1", ContextWindow: 400000, MaxOutputTokens: 8192, APIKey: "sk-test"},
-		{Provider: "DF", Model: "MiniMax-M3", BaseURL: "https://api.example.com/v1", ContextWindow: 1000000, MaxOutputTokens: 8192, APIKey: "sk-test", SubtaskFor: []string{"Froghire/**"}},
+		{Provider: "openai", Model: "gpt-4.1", BaseURL: "https://api.example.com/v1", ContextWindow: 400000, MaxOutputTokens: 8192, APIKey: "sk-test"},
+		{Provider: "DF", Model: "MiniMax-M3", BaseURL: "https://api.example.com/v1", ContextWindow: 1000000, MaxOutputTokens: 8192, APIKey: "sk-test", SubtaskFor: []string{"openai/**"}},
 		{Provider: "DF", Model: "glm-5.2", BaseURL: "https://api.example.com/v1", ContextWindow: 1000000, MaxOutputTokens: 8192, APIKey: "sk-test", SubtaskFor: []string{"DF/**"}},
-	}, "Froghire/gpt-5.5")
+	}, "openai/gpt-4.1")
 	router, err := model.NewRouter(cfg, media.NewStore(t.TempDir()))
 	if err != nil {
 		t.Fatalf("NewRouter() error = %v", err)
@@ -188,17 +188,17 @@ func TestModelRoutingSummaryFiltersSubtaskFor(t *testing.T) {
 	if strings.Contains(summary, "DF/glm-5.2") {
 		t.Fatalf("modelRoutingSummary() = %q, should hide non-matching subtask model", summary)
 	}
-	if !strings.Contains(summary, "Froghire/gpt-5.5") {
+	if !strings.Contains(summary, "openai/gpt-4.1") {
 		t.Fatalf("modelRoutingSummary() = %q, active model should remain spawnable for itself", summary)
 	}
 }
 
 func TestAvailableModelRefsFiltersSubtaskFor(t *testing.T) {
 	cfg := newAgentConfig(t.TempDir(), []config.ModelConfig{
-		{Provider: "Froghire", Model: "gpt-5.5", BaseURL: "https://api.example.com/v1", ContextWindow: 400000, MaxOutputTokens: 8192, APIKey: "sk-test"},
-		{Provider: "DF", Model: "MiniMax-M3", BaseURL: "https://api.example.com/v1", ContextWindow: 1000000, MaxOutputTokens: 8192, APIKey: "sk-test", SubtaskFor: []string{"Froghire/**"}},
+		{Provider: "openai", Model: "gpt-4.1", BaseURL: "https://api.example.com/v1", ContextWindow: 400000, MaxOutputTokens: 8192, APIKey: "sk-test"},
+		{Provider: "DF", Model: "MiniMax-M3", BaseURL: "https://api.example.com/v1", ContextWindow: 1000000, MaxOutputTokens: 8192, APIKey: "sk-test", SubtaskFor: []string{"openai/**"}},
 		{Provider: "DF", Model: "glm-5.2", BaseURL: "https://api.example.com/v1", ContextWindow: 1000000, MaxOutputTokens: 8192, APIKey: "sk-test", SubtaskFor: []string{"DF/**"}},
-	}, "Froghire/gpt-5.5")
+	}, "openai/gpt-4.1")
 	router, err := model.NewRouter(cfg, media.NewStore(t.TempDir()))
 	if err != nil {
 		t.Fatalf("NewRouter() error = %v", err)
@@ -206,7 +206,7 @@ func TestAvailableModelRefsFiltersSubtaskFor(t *testing.T) {
 	a := &Agent{cfg: cfg, router: router}
 
 	got := a.availableModelRefs()
-	want := []string{"DF/MiniMax-M3", "Froghire/gpt-5.5"}
+	want := []string{"DF/MiniMax-M3", "openai/gpt-4.1"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("availableModelRefs() = %#v, want %#v", got, want)
 	}
@@ -227,14 +227,14 @@ func TestUpdateConfigPreservesSubtaskFor(t *testing.T) {
 			BaseURL:         "https://api.openai.com/v1",
 			ContextWindow:   128000,
 			MaxOutputTokens: 8192,
-			SubtaskFor:      []string{"Froghire/**", "Oio/**"},
+			SubtaskFor:      []string{"openai/**", "anthropic/**"},
 		},
 	})
 	if err != nil {
 		t.Fatalf("UpdateConfig() error = %v", err)
 	}
 	got := updated.Models[0].SubtaskFor
-	want := []string{"Froghire/**", "Oio/**"}
+	want := []string{"openai/**", "anthropic/**"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("SubtaskFor = %#v, want %#v", got, want)
 	}

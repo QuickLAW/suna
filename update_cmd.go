@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
-	"flag"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/alanchenchen/suna/internal/config"
@@ -12,23 +14,25 @@ import (
 )
 
 func updateCommand(args []string) {
-	fs := flag.NewFlagSet("suna update", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	checkOnly := fs.Bool("check", false, "check for updates without installing")
-	if err := fs.Parse(args); err != nil {
+	if len(args) > 0 {
+		fmt.Fprintf(os.Stderr, "Unknown update option: %s\n", args[0])
 		os.Exit(2)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	opts := update.Options{DataDir: config.DefaultDataDir(), Stdout: os.Stdout}
-	if *checkOnly {
-		latest, err := update.Check(ctx, opts)
-		if err != nil {
-			printUpdateError("Error checking update", err)
-			os.Exit(1)
-		}
-		printUpdateStatus(latest)
+	latest, err := update.Check(ctx, opts)
+	if err != nil {
+		printUpdateError("Error checking update", err)
+		os.Exit(1)
+	}
+	printUpdateStatus(latest)
+	if !latest.UpdateNeeded {
+		return
+	}
+	if !confirmUpdate(os.Stdin, os.Stdout) {
+		fmt.Println(updateStyle().dim("Update cancelled."))
 		return
 	}
 
@@ -41,16 +45,16 @@ func updateCommand(args []string) {
 		os.Exit(1)
 	}
 
-	latest, err := update.Install(ctx, opts)
+	installed, err := update.Install(ctx, opts)
 	if err != nil {
 		printUpdateError("Error updating Suna", err)
 		os.Exit(1)
 	}
-	if !latest.UpdateNeeded {
-		printUpdateStatus(latest)
+	if !installed.UpdateNeeded {
+		printUpdateStatus(installed)
 		return
 	}
-	fmt.Printf("\n%s %s. %s\n", updateStyle().success("Suna updated to"), updateStyle().version(latest.LatestVersion), updateStyle().dim("Run `suna` to start the new version."))
+	fmt.Printf("\n%s %s. %s\n", updateStyle().success("Suna updated to"), updateStyle().version(installed.LatestVersion), updateStyle().dim("Run `suna` to start the new version."))
 }
 
 func printUpdateStatus(latest update.Latest) {
@@ -64,11 +68,45 @@ func printUpdateStatus(latest update.Latest) {
 	if latest.ReleaseURL != "" {
 		fmt.Printf("%s         %s\n", style.label("Release:"), style.link(latest.ReleaseURL))
 	}
+	printReleaseNotes(latest.ReleaseNotes, style)
 	if latest.UpdateNeeded {
-		fmt.Println(style.warn("Update available."), style.dim("Run `suna update` to install it."))
+		fmt.Println(style.warn("Update available."))
 		return
 	}
 	fmt.Println(style.success("Already up to date."))
+}
+
+func printReleaseNotes(notes string, style updateCLIStyle) {
+	notes = strings.TrimSpace(notes)
+	if notes == "" {
+		return
+	}
+	fmt.Println()
+	fmt.Println(style.label("What's new:"))
+	fmt.Println(limitReleaseNotes(notes, 4000))
+	fmt.Println()
+}
+
+func limitReleaseNotes(notes string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(notes)
+	if len(runes) <= maxRunes {
+		return notes
+	}
+	return strings.TrimSpace(string(runes[:maxRunes])) + "\n..."
+}
+
+func confirmUpdate(in io.Reader, out io.Writer) bool {
+	fmt.Fprint(out, "Install this update? [y/N] ")
+	reader := bufio.NewReader(in)
+	line, err := reader.ReadString('\n')
+	if err != nil && len(line) == 0 {
+		return false
+	}
+	answer := strings.ToLower(strings.TrimSpace(line))
+	return answer == "y" || answer == "yes"
 }
 
 func printUpdateError(prefix string, err error) {

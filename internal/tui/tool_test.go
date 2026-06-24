@@ -221,13 +221,13 @@ func TestRenderSubtaskEntryShowsModelInLabel(t *testing.T) {
 		RawName:   "spawn",
 		Name:      "Spawn",
 		Intent:    "Analyze code structure",
-		ParamsRaw: map[string]any{"model": "Oio/gpt-5.5"},
+		ParamsRaw: map[string]any{"model": "anthropic/claude-sonnet"},
 		Status:    toolRunning,
 	}
 
 	rendered := tui.renderToolEntry(te, false)
 	plain := stripANSIForTest(rendered)
-	if !strings.Contains(plain, "Subtask [Oio/gpt-5.5] · Analyze code structure") {
+	if !strings.Contains(plain, "Subtask [anthropic/claude-sonnet] · Analyze code structure") {
 		t.Fatalf("renderToolEntry() = %q, want subtask label with model", plain)
 	}
 }
@@ -235,7 +235,7 @@ func TestRenderSubtaskEntryShowsModelInLabel(t *testing.T) {
 func TestRenderToolBlockHidesSubtaskTree(t *testing.T) {
 	tui := &TUI{i18n: newTranslator(LocaleZH), width: 100}
 	block := &toolBlock{Entries: map[string]*toolEntry{}}
-	parent := &toolEntry{ID: "spawn-1", RawName: "spawn", Name: "Spawn", Intent: "分析代码", ParamsRaw: map[string]any{"model": "Oio/gpt-5.5"}, Status: toolRunning}
+	parent := &toolEntry{ID: "spawn-1", RawName: "spawn", Name: "Spawn", Intent: "分析代码", ParamsRaw: map[string]any{"model": "anthropic/claude-sonnet"}, Status: toolRunning}
 	child := &toolEntry{ID: "spawn:spawn-1:tool-1", ParentID: "spawn-1", RawName: "search", Name: "Search", Intent: "搜索代码", Status: toolRunning}
 	main := &toolEntry{ID: "read-1", RawName: "readfile", Name: "Readfile", Intent: "读取文件", Status: toolDone}
 	block.Add(parent)

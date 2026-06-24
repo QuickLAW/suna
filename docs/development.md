@@ -22,23 +22,31 @@ go build -o suna .
 
 Release 构建产物默认放在 `dist/`。压缩包名称带平台/架构后缀，包内二进制统一为 `suna`（Windows 为 `suna.exe`）。`build-release.sh` 会优先使用 `SUNA_BUILD_VERSION`，否则在 tag 上构建时使用当前 Git tag，开发构建回退到 `dev+<short-sha>`。
 
-正式发版通过 GitHub Actions 完成：推送 `v*` tag 后，`.github/workflows/release.yml` 会运行测试、构建全平台包、生成 `checksums.txt`、创建 GitHub Release、自动生成 release notes 并上传 `dist/*`。本地只需：
+正式发版通过 GitHub Actions 完成：推送 `v*` tag 后，`.github/workflows/release.yml` 会运行测试、构建全平台包、生成 `checksums.txt`、创建 GitHub Release，并把 annotated tag message 作为 release notes 上传。建议发版时直接在 tag message 里写本次更新内容，例如：
 
 ```bash
-git tag -a v0.3.0 -m "v0.3.0"
+git tag -a v0.3.0
+# 在编辑器中写 release notes
 git push origin main
 git push origin v0.3.0
 ```
 
-用户可在退出 TUI 后运行 `suna update --check` 或 `suna update`。update 会先检查 daemon 是否仍在运行；如果 daemon 仍在运行，会中止并提示用户先退出 TUI / `suna stop`。下载缓存位于 `~/.suna/update/`，开始前和结束后都会清理。
+也可以用多段 `-m` 快速创建：
+
+```bash
+git tag -a v0.3.0 -m "v0.3.0" -m "- 改进 update 交互" -m "- 优化 daemon 内存占用"
+git push origin main
+git push origin v0.3.0
+```
+
+用户可在退出 TUI 后运行 `suna update`。update 会先检查 GitHub Release 并展示 release notes；如果已有新版本，会询问是否安装，用户确认后再检查 daemon 是否仍在运行并执行下载、校验和替换。如果 daemon 仍在运行，会中止并提示用户先退出 TUI / `suna stop`。下载缓存位于 `~/.suna/update/`，开始前和结束后都会清理。
 
 ## 常用运行命令
 
 ```bash
 ./suna              # 打开 TUI，必要时自动启动 daemon
 ./suna status       # 查看 daemon 状态
-./suna update --check # 检查 GitHub Release 是否有新版本
-./suna update       # 下载、校验并安装最新 GitHub Release
+./suna update       # 检查新版本、展示 release notes，并在确认后安装
 ./suna stop         # 停止 daemon
 ```
 

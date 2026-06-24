@@ -86,7 +86,7 @@ context_window = 1000000
 max_output_tokens = 8192
 reasoning = { reasoning_split = true }
 # 可选：仅当主模型 ref 匹配这些 glob 时，MiniMax-M3 才作为 subtask 候选展示。
-subtask_for = ["Froghire/**", "Oio/**"]
+subtask_for = ["openai/*", "anthropic/claude-*"]
 
 [[models]]
 provider = "dreamfield"

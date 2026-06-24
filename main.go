@@ -75,8 +75,7 @@ Usage:
   suna                 Open the TUI. Starts the daemon if needed.
   suna stop            Stop the running daemon.
   suna status          Show daemon status.
-  suna update --check  Check the latest GitHub Release.
-  suna update          Download and install the latest GitHub Release.
+  suna update          Check for updates, show release notes, and ask before installing.
   suna help            Show this help.
 
 Notes:

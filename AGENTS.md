@@ -68,6 +68,7 @@ Suna 是本地终端 AI Agent：CLI 启动 TUI，TUI 通过 protocol/local trans
 - 版本号使用 SemVer tag，不再使用日期版本；示例：`v0.3.0`、`v0.3.1`、`v0.4.0`。
 - 版本号来源以 Git tag 为准，不在代码或脚本里手动维护固定版本号。
 - 发版前先确认工作区和测试状态，建议执行：`git status --short`、`git diff --check`、`go test ./...`。
-- 推荐使用 annotated tag：`git tag -a v0.3.0 -m "v0.3.0"`。
-- 推送顺序建议先推主分支再推 tag：`git push origin main`，然后 `git push origin v0.3.0`。
+- 发版必须使用 annotated tag，并在 tag message 中写 release notes；GitHub Actions 会把 tag message 作为 GitHub Release body。不要使用 lightweight tag。
+- 推荐交互式创建 tag：`git tag -a v0.3.0`，在编辑器里写本次更新内容；也可用多段 `-m`：`git tag -a v0.3.0 -m "v0.3.0" -m "- 改进 update 交互"`。
+- 推送顺序建议先推主分支再推 tag：`git push origin main`，然后 `git push origin v0.3.0`。也可以合并为 `git push origin main v0.3.0`。
 - 推送 `v*` tag 会触发 GitHub Actions 自动构建 release assets、生成 `checksums.txt`、创建 GitHub Release 并上传产物。

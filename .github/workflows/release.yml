@@ -36,10 +36,30 @@ jobs:
           cd dist
           shasum -a 256 * > checksums.txt
 
+      - name: Read release notes from tag
+        run: |
+          set -euo pipefail
+          tag_ref="refs/tags/${GITHUB_REF_NAME}"
+          object_type="$(git for-each-ref "$tag_ref" --format='%(objecttype)')"
+          if [ "$object_type" = "tag" ]; then
+            git for-each-ref "$tag_ref" --format='%(contents)' > release-notes.md
+          else
+            {
+              echo "${GITHUB_REF_NAME}"
+              echo
+              echo "Release notes were not provided. Use an annotated tag to set release notes:"
+              echo
+              echo "  git tag -a ${GITHUB_REF_NAME}"
+            } > release-notes.md
+          fi
+          if [ ! -s release-notes.md ]; then
+            echo "${GITHUB_REF_NAME}" > release-notes.md
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
-          generate_release_notes: true
+          body_path: release-notes.md
           files: dist/*
