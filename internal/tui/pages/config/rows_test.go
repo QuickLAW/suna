@@ -67,9 +67,9 @@ func TestModelSummaryKeepsCapabilitiesBriefAndPrioritizesStrengths(t *testing.T)
 }
 
 func TestModelSummaryOmitsSubtaskFor(t *testing.T) {
-	mc := ModelConfig{Provider: "DF", Model: "MiniMax-M3", ContextWindow: 1000000, MaxOutputTokens: 8192, SubtaskFor: []string{"Froghire/**"}, HasAPIKey: true}
+	mc := ModelConfig{Provider: "DF", Model: "MiniMax-M3", ContextWindow: 1000000, MaxOutputTokens: 8192, SubtaskFor: []string{"openai/**"}, HasAPIKey: true}
 	got := ModelSummary(mc, false, func(int) string { return "x" })
-	if strings.Contains(got, "Froghire") || strings.Contains(got, "subtask") {
+	if strings.Contains(got, "openai") || strings.Contains(got, "subtask") {
 		t.Fatalf("ModelSummary() = %q, should omit subtask_for", got)
 	}
 }
@@ -87,7 +87,7 @@ func TestDetailRowsShowsSubtaskFor(t *testing.T) {
 				return key
 			}
 		},
-		Models:           []ModelConfig{{Provider: "DF", Model: "MiniMax-M3", ContextWindow: 1000000, MaxOutputTokens: 8192, SubtaskFor: []string{"Froghire/**", "Oio/**"}}},
+		Models:           []ModelConfig{{Provider: "DF", Model: "MiniMax-M3", ContextWindow: 1000000, MaxOutputTokens: 8192, SubtaskFor: []string{"openai/**", "anthropic/**"}}},
 		DisplayEndpoint:  func(string) string { return "" },
 		ContextDisplay:   func(ModelConfig) string { return "" },
 		MaxOutputDisplay: func(ModelConfig) string { return "" },
@@ -95,7 +95,7 @@ func TestDetailRowsShowsSubtaskFor(t *testing.T) {
 	})
 	for _, row := range rows {
 		if row.Label == "Subtask for" {
-			if row.Value != "Froghire/**, Oio/**" {
+			if row.Value != "openai/**, anthropic/**" {
 				t.Fatalf("Subtask for row value = %q", row.Value)
 			}
 			return

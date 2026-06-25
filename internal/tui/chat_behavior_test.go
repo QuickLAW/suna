@@ -803,13 +803,13 @@ func TestSubtaskBlockPrioritizesFailureReasonOverLastChild(t *testing.T) {
 
 func TestChatTopMetaOmitsContextStats(t *testing.T) {
 	tui := &TUI{i18n: newTranslator(LocaleZH), width: 100}
-	tui.providerName = "Froghire"
-	tui.modelName = "gpt-5.5"
+	tui.providerName = "openai"
+	tui.modelName = "gpt-4.1"
 	tui.contextTokens = 36200
 	tui.contextWindow = 400000
 
 	got := stripANSIForTest(tui.chatTopMeta())
-	if !strings.Contains(got, "Froghire/gpt-5.5") {
+	if !strings.Contains(got, "openai/gpt-4.1") {
 		t.Fatalf("chatTopMeta() = %q, want model ref", got)
 	}
 	if strings.Contains(got, "ctx") || strings.Contains(got, "36.2k") || strings.Contains(got, "400k") {
@@ -1102,5 +1102,25 @@ func TestClipboardImagePasteIgnoredAfterTerminalPaste(t *testing.T) {
 	tui = model.(*TUI)
 	if tui.chat.ActiveImagePaste() != nil {
 		t.Fatalf("clipboard image paste should be ignored when a later PasteMsg already arrived")
+	}
+}
+
+func TestCachedStreamingStateKeepsOnlyTailLines(t *testing.T) {
+	tui := &TUI{width: 80}
+	tui.chat.Viewport.SetHeight(2)
+	msg := &chatMsg{Role: "assistant", Streaming: true, Stream: &chatpage.StreamingTextState{}}
+	for i := 0; i < 160; i++ {
+		msg.Stream.Append("line\n")
+	}
+
+	got := tui.cachedStreamingState(msg, 20)
+	if lines := strings.Count(got, "\n") + 1; lines > 120 {
+		t.Fatalf("rendered lines = %d, want <= 120", lines)
+	}
+	if msg.Stream.Raw.Len() == 0 {
+		t.Fatal("raw stream is empty, want full content retained")
+	}
+	if msg.Stream.DroppedLines == 0 {
+		t.Fatal("dropped lines = 0, want tail window to drop early rendered lines")
 	}
 }

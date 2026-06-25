@@ -33,6 +33,8 @@ func main() {
 		stopDaemonCommand()
 	case "status":
 		showStatus()
+	case "update":
+		updateCommand(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", cmd)
 		printHelp()
@@ -63,6 +65,8 @@ func parseCLI(args []string) string {
 		return "status"
 	case "gui":
 		return "gui"
+	case "update":
+		return "update"
 	default:
 		return fs.Arg(0)
 	}
@@ -76,6 +80,7 @@ Usage:
   suna gui             Open the GUI in your browser (file browser + terminal + chat).
   suna stop            Stop the running daemon.
   suna status          Show daemon status.
+  suna update          Check for updates, show release notes, and ask before installing.
   suna help            Show this help.
 
 Notes:

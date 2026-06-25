@@ -654,22 +654,22 @@ func readGuardReviewStream(ctx context.Context, ch <-chan model.Chunk, timeout t
 		timer.Reset(timeout)
 	}
 
-	var result string
+	var result strings.Builder
 	for {
 		select {
 		case chunk, ok := <-ch:
 			if !ok {
-				return result, nil
+				return result.String(), nil
 			}
 			resetTimer()
 			if chunk.Error != "" {
 				return "", fmt.Errorf("%s", chunk.Error)
 			}
 			if chunk.Content != "" {
-				result += chunk.Content
+				result.WriteString(chunk.Content)
 			}
 			if chunk.Done {
-				return result, nil
+				return result.String(), nil
 			}
 		case <-timer.C:
 			return "", fmt.Errorf("guard review LLM stream timeout")

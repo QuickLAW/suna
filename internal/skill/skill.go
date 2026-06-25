@@ -1,8 +1,10 @@
 package skill
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -35,12 +37,13 @@ type CheckResult struct {
 	Error       string   `json:"error,omitempty"`
 }
 
+const maxSkillIndexBytes = 64 * 1024
+
 type Skill struct {
 	Name        string
 	Description string
 	Dir         string
 	Path        string
-	Content     string
 	Valid       bool
 	Error       string
 	Reasons     []string
@@ -127,7 +130,11 @@ func (m *Manager) Load(name string) (string, bool, string) {
 	if !m.records[name].Enabled {
 		return "", false, "skill is not enabled"
 	}
-	return s.Content, true, ""
+	data, err := os.ReadFile(s.Path)
+	if err != nil {
+		return "", false, "read SKILL.md: " + err.Error()
+	}
+	return string(data), true, ""
 }
 
 func (m *Manager) Check(name string) CheckResult {
@@ -171,18 +178,46 @@ func (m *Manager) rebuildInfos() {
 
 func readSkillDir(dir, fallback string) *Skill {
 	path := filepath.Join(dir, "SKILL.md")
-	data, err := os.ReadFile(path)
+	content, err := readSkillIndexContent(path)
 	if err != nil {
 		return &Skill{Name: fallback, Dir: dir, Path: path, Valid: false, Error: "SKILL.md missing or unreadable"}
 	}
-	name, desc := parseSkillHeader(string(data))
+	name, desc := parseSkillHeader(content)
 	if name == "" {
 		name = fallback
 	}
 	if !validName(name) {
-		return &Skill{Name: fallback, Dir: dir, Path: path, Content: string(data), Valid: false, Error: "invalid skill name"}
+		return &Skill{Name: fallback, Dir: dir, Path: path, Valid: false, Error: "invalid skill name"}
 	}
-	return &Skill{Name: name, Description: desc, Dir: dir, Path: path, Content: string(data), Valid: true}
+	return &Skill{Name: name, Description: desc, Dir: dir, Path: path, Valid: true}
+}
+
+func readSkillIndexContent(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	// Reload 只需要 Skill 索引信息，避免 daemon 启动时把完整 SKILL.md 常驻内存。
+	data, err := io.ReadAll(io.LimitReader(file, int64(maxSkillIndexBytes)+1))
+	if err != nil {
+		return "", err
+	}
+	if len(data) > maxSkillIndexBytes {
+		data = trimPartialTrailingLine(data[:maxSkillIndexBytes])
+	}
+	return string(data), nil
+}
+
+func trimPartialTrailingLine(data []byte) []byte {
+	if len(data) == 0 || data[len(data)-1] == '\n' {
+		return data
+	}
+	idx := bytes.LastIndexByte(data, '\n')
+	if idx < 0 {
+		return nil
+	}
+	return data[:idx+1]
 }
 
 func parseSkillHeader(content string) (name, description string) {
@@ -193,6 +228,10 @@ func parseSkillHeader(content string) (name, description string) {
 			fm := content[4:end]
 			body = strings.TrimLeft(content[end+4:], "\r\n")
 			name, description = parseFrontmatter(fm)
+		} else {
+			// 索引窗口可能只包含 frontmatter 前半段；已丢弃半截尾行，因此可安全解析完整行里的元信息。
+			name, description = parseFrontmatter(content[4:])
+			body = ""
 		}
 	}
 	if name == "" {
@@ -201,7 +240,7 @@ func parseSkillHeader(content string) (name, description string) {
 	if description == "" {
 		description = extractDescription(body)
 	}
-	return strings.TrimSpace(name), strings.TrimSpace(description)
+	return strings.Clone(strings.TrimSpace(name)), strings.Clone(strings.TrimSpace(description))
 }
 
 func frontmatterEnd(content string) int {

@@ -34,6 +34,29 @@ const (
 	reasoningDetailMaxRows     = 10
 )
 
+func (t *TUI) renderDisplayDiscardSummary(s chatpage.DisplayDiscardSummary) string {
+	if s.Empty() {
+		return ""
+	}
+	turns := s.Turns
+	if turns <= 0 {
+		turns = s.Messages
+	}
+	text := fmt.Sprintf("已释放 %d 轮早期显示历史 · 约 %s", turns, s.ApproxMB())
+	width := max(24, t.width-8)
+	bodyWidth := max(20, width-4)
+	wrapped := lipgloss.NewStyle().Width(bodyWidth).Render(text)
+	lines := strings.Split(wrapped, "\n")
+	for i := range lines {
+		if i == 0 {
+			lines[i] = styleSysLine.Render("  ◇ ") + styleDim.Render(lines[i])
+		} else {
+			lines[i] = "    " + styleDim.Render(lines[i])
+		}
+	}
+	return "\n" + strings.Join(lines, "\n") + "\n"
+}
+
 func (t *TUI) renderSystemMessage(content string) string {
 	content = strings.TrimSpace(content)
 	if content == "" {
@@ -345,6 +368,71 @@ func clipHeadLinesBytes(s string, maxLines, maxBytes int) string {
 	return strings.Join(lines[:maxLines], "\n")
 }
 
+func (t *TUI) renderSessionRestoreToolSummary(summary protocol.ToolSummaryPayload) string {
+	if summary.Total <= 0 && len(summary.Recent) == 0 && len(summary.Failures) == 0 && len(summary.Changes) == 0 {
+		return ""
+	}
+	var lines []string
+	lines = append(lines, t.tr("session.restore_tools_title"))
+	if summary.Failed <= 0 {
+		lines = append(lines, t.i18n.Tf("session.restore_tools_all_success", summary.Total))
+	} else {
+		lines = append(lines, t.i18n.Tf("session.restore_tools_stats", summary.Total, summary.Success, summary.Failed))
+	}
+	if len(summary.Failures) > 0 {
+		parts := make([]string, 0, len(summary.Failures))
+		for _, item := range summary.Failures {
+			part := strings.TrimSpace(item.Tool)
+			if item.Summary != "" {
+				part += " · " + truncateRunesForUI(item.Summary, 72)
+			}
+			if part != "" {
+				parts = append(parts, part)
+			}
+		}
+		if len(parts) > 0 {
+			lines = append(lines, t.i18n.Tf("session.restore_tools_failures", strings.Join(parts, "; ")))
+		}
+	}
+	if len(summary.Changes) > 0 {
+		parts := make([]string, 0, len(summary.Changes))
+		for _, item := range summary.Changes {
+			if item.Tool != "" && item.Count > 0 {
+				parts = append(parts, fmt.Sprintf("%s ×%d", item.Tool, item.Count))
+			}
+		}
+		if len(parts) > 0 {
+			lines = append(lines, t.i18n.Tf("session.restore_tools_changes", strings.Join(parts, ", ")))
+		}
+	}
+	if len(summary.Recent) > 0 {
+		names := make([]string, 0, len(summary.Recent))
+		for _, item := range summary.Recent {
+			if item.Tool != "" {
+				names = append(names, item.Tool)
+			}
+		}
+		if len(names) > 0 {
+			lines = append(lines, t.i18n.Tf("session.restore_tools_recent", strings.Join(names, " → ")))
+		}
+	}
+	if summary.Omitted > 0 {
+		lines = append(lines, t.i18n.Tf("session.restore_tools_omitted", summary.Omitted))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func truncateRunesForUI(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes]) + "..."
+}
+
 func (t *TUI) renderRestoreSummaryBox(content string) string {
 	content = strings.TrimSpace(content)
 	if content == "" {
@@ -353,8 +441,11 @@ func (t *TUI) renderRestoreSummaryBox(content string) string {
 	width := max(36, min(76, t.width-6))
 	inner := max(20, width-8)
 	lines := strings.Split(content, "\n")
-	if len(lines) > 0 && strings.HasPrefix(lines[0], "上一轮工具操作摘要") {
-		lines = lines[1:]
+	if len(lines) > 0 {
+		first := strings.TrimSpace(lines[0])
+		if first == t.tr("session.restore_tools_title") || strings.HasPrefix(first, "上一轮工具操作摘要") {
+			lines = lines[1:]
+		}
 	}
 	if len(lines) > 5 {
 		lines = append(lines[:4], "...")
@@ -372,7 +463,7 @@ func (t *TUI) renderRestoreSummaryBox(content string) string {
 	if len(body) == 0 {
 		body = []string{styleDim.Render(content)}
 	}
-	title := styleHL.Render("上一轮工具操作")
+	title := styleHL.Render(t.tr("session.restore_tools_title"))
 	return textutil.IndentLines(boxStyle.Width(width).Padding(1, 2).Render(title+"\n"+strings.Join(body, "\n")), "  ")
 }
 
@@ -404,6 +495,9 @@ func (t *TUI) renderAssistantMessage(msg *chatMsg) string {
 	content, _ := msg.Content.(string)
 	width := max(20, t.width-6)
 	if msg.Streaming {
+		if msg.Stream != nil {
+			return textutil.IndentLines(t.cachedStreamingState(msg, width), "  ")
+		}
 		// 流式阶段避免每个 delta 都跑 Glamour，也避免对完整已生成内容反复 wrap。
 		return textutil.IndentLines(t.cachedStreamingText(msg, content, width), "  ")
 	}
@@ -412,6 +506,9 @@ func (t *TUI) renderAssistantMessage(msg *chatMsg) string {
 
 func (t *TUI) renderReasoningMessage(msg *chatMsg) string {
 	content, _ := msg.Content.(string)
+	if msg.Stream != nil {
+		content = msg.Stream.Text()
+	}
 	out := t.renderThinkingBox(content, msg.Streaming, msg.StartedAt, msg.EndedAt)
 	msg.Render = msgRenderCache{Width: t.width, Theme: currentTheme.Name, ContentLen: len(content), LineCount: chatpage.RenderedLineCount(out), Output: out, Mode: reasoningRenderMode(t.chat.ShowReasoningDetail)}
 	return out
@@ -433,6 +530,65 @@ func (t *TUI) cachedMarkdown(msg *chatMsg, content string, width int) string {
 	out := RenderMarkdown(content, width)
 	msg.Render = msgRenderCache{Width: width, Theme: currentTheme.Name, ContentLen: len(content), ContentHash: hash, LineCount: chatpage.RenderedLineCount(out), Output: out}
 	return out
+}
+
+func (t *TUI) cachedStreamingState(msg *chatMsg, width int) string {
+	state := msg.Stream
+	if state == nil {
+		return ""
+	}
+	if width <= 0 {
+		width = 20
+	}
+	tailLines := t.streamingRenderTailLines()
+	if state.Width != width {
+		content := state.Text()
+		out := renderStreamingText(content, width)
+		lines := splitRenderedLines(out)
+		state.Width = width
+		state.Lines = lines
+		state.DroppedLines = 0
+		limitStreamingStateLines(state, tailLines)
+		state.LastLineWidth = lastRenderedLineWidth(state.Lines)
+		state.PendingNewlines = trailingNewlineCount(content)
+		state.RenderedBytes = len(content)
+		state.Pending = nil
+		out = strings.Join(state.Lines, "\n")
+		msg.Render = msgRenderCache{Width: width, ContentLen: len(content), LineCount: len(state.Lines)}
+		return out
+	}
+	if len(state.Pending) > 0 {
+		for _, delta := range state.Pending {
+			appendStreamingDelta(&state.Lines, &state.LastLineWidth, &state.PendingNewlines, delta, width)
+			state.RenderedBytes += len(delta)
+			limitStreamingStateLines(state, tailLines)
+		}
+		state.Pending = nil
+	}
+	limitStreamingStateLines(state, tailLines)
+	out := strings.Join(state.Lines, "\n")
+	msg.Render = msgRenderCache{Width: width, ContentLen: state.Raw.Len(), LineCount: len(state.Lines)}
+	return out
+}
+
+func (t *TUI) streamingRenderTailLines() int {
+	height := t.chat.Viewport.Height()
+	if height <= 0 {
+		return 200
+	}
+	return max(120, min(600, height*4))
+}
+
+func limitStreamingStateLines(state *chatpage.StreamingTextState, maxLines int) {
+	if state == nil || maxLines <= 0 || len(state.Lines) <= maxLines {
+		return
+	}
+	drop := len(state.Lines) - maxLines
+	for i := 0; i < drop; i++ {
+		state.Lines[i] = ""
+	}
+	state.Lines = append([]string(nil), state.Lines[drop:]...)
+	state.DroppedLines += drop
 }
 
 func (t *TUI) cachedStreamingText(msg *chatMsg, content string, width int) string {

@@ -15,7 +15,7 @@ Suna 是本地终端 AI Agent：CLI 启动 TUI，TUI 通过 protocol/local trans
 ## 主要包职责
 
 - `main.go`、`daemon_cmd.go`：CLI 命令、daemon 进程管理入口。
-- `internal/tui`：终端 UI、页面、快捷键、slash command、daemon 事件适配。
+- `internal/tui`：终端 UI、页面、快捷键、slash command、剪贴板输入和 daemon 事件适配。
 - `internal/protocol`、`internal/transport/local`：TUI 与 daemon 的请求、通知和本地连接。
 - `internal/daemon`：长期运行服务，协调配置、会话、Agent、附件和状态通知。
 - `internal/agent`：主 Agent 编排、上下文、工具执行入口、Guard 协调、subtask 委派。
@@ -28,7 +28,8 @@ Suna 是本地终端 AI Agent：CLI 启动 TUI，TUI 通过 protocol/local trans
 - `internal/tools/mcptools`、`internal/mcp`：MCP runtime、server 状态和 MCP tools 适配。
 - `internal/guard`：风险识别、Smart Review 和工具调用安全确认。
 - `internal/memory`、`internal/media`、`internal/config`：记忆、附件、配置和本地路径。
-- `internal/subtask`：独立上下文的子任务执行器，由主 Agent 显式指定模型和工具。
+- `internal/subtask`：独立上下文的子任务执行器，由主 Agent 显式指定模型和工具；子任务结果包含状态、文本和副作用披露。
+- `internal/update`、`internal/version`：自更新流程、GitHub Release 版本检查、构建版本来源。
 
 ## 架构规则
 
@@ -36,8 +37,10 @@ Suna 是本地终端 AI Agent：CLI 启动 TUI，TUI 通过 protocol/local trans
 - 项目指令只从当前工作目录读取第一个非空文件，优先级为 `AGENTS.md`、`CLAUDE.md`、`GEMINI.md`、`.cursorrules`、`.windsurfrules`；不向父目录递归，不读取 `.suna/`。
 - 新模型可见工具优先以 `tools.Provider` 接入，不在 Agent/Runner 中手动拼 schema。
 - Guard 决策由 Agent 统一处理，工具只声明自身 Guard policy。
-- Subtask 必须保持独立上下文，只能看到主 Agent 显式传入的任务、上下文、图片和授权工具。
+- Subtask 必须保持独立上下文，只能看到主 Agent 显式传入的任务、上下文、图片和授权工具；可分析也可行动，但应保持边界清晰并向主 Agent 返回精简结果与副作用披露。
+- Subtask 可见模型由模型配置和 `subtask_for` 过滤，提示词只展示当前可用候选；执行 spawn 时仍需二次校验。
 - MCP 单个 server 失败不得阻塞 Suna/daemon 启动；错误应作为运行态状态展示。
+- 系统剪贴板和粘贴图片识别属于 TUI 输入能力；daemon 只通过 protocol 暴露 attachment root 和接收 attachment refs，不直接访问系统剪贴板或 UI 输入源。
 
 ## 开发规则
 
@@ -59,3 +62,13 @@ Suna 是本地终端 AI Agent：CLI 启动 TUI，TUI 通过 protocol/local trans
 - 普通 `go test ./...` 必须快速、离线、确定性；需要 daemon、网络、真实模型或其他外部依赖的测试必须使用 `integration` build tag。
 - TUI 测试优先验证状态和关键语义文本，避免脆弱的整屏快照；检查渲染文本时应去除 ANSI。
 - 提交前建议执行：`git diff --check`、`git status --short`、相关测试或全量测试。
+
+## 发版规则
+
+- 版本号使用 SemVer tag，不再使用日期版本；示例：`v0.3.0`、`v0.3.1`、`v0.4.0`。
+- 版本号来源以 Git tag 为准，不在代码或脚本里手动维护固定版本号。
+- 发版前先确认工作区和测试状态，建议执行：`git status --short`、`git diff --check`、`go test ./...`。
+- 发版必须使用 annotated tag，并在 tag message 中写 release notes；GitHub Actions 会把 tag message 作为 GitHub Release body。不要使用 lightweight tag。
+- 推荐交互式创建 tag：`git tag -a v0.3.0`，在编辑器里写本次更新内容；也可用多段 `-m`：`git tag -a v0.3.0 -m "v0.3.0" -m "- 改进 update 交互"`。
+- 推送顺序建议先推主分支再推 tag：`git push origin main`，然后 `git push origin v0.3.0`。也可以合并为 `git push origin main v0.3.0`。
+- 推送 `v*` tag 会触发 GitHub Actions 自动构建 release assets、生成 `checksums.txt`、创建 GitHub Release 并上传产物。

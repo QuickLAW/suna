@@ -116,9 +116,6 @@ func (t *TUI) handleStreamNotification(p protocol.StreamParams) {
 	t.chat.ResumeAvailable = false
 	t.lastTextStreamAt = time.Now()
 	t.chat.HandleStreamStart(t.lastTextStreamAt)
-	if p.Chunk != "" {
-		t.chat.LastAssistantText += p.Chunk
-	}
 	t.appendStreamMessage("assistant", p.Chunk)
 }
 
@@ -251,9 +248,15 @@ func (t *TUI) handleSessionRestoreMessageNotification(p sessionRestoreMessageMsg
 }
 
 func (t *TUI) handleSessionRestoreStatusNotification(p protocol.SessionRestoreStatus) {
+	if p.ToolSummary != nil {
+		if content := t.renderSessionRestoreToolSummary(*p.ToolSummary); content != "" {
+			t.appendNonToolMessage(chatMsg{Role: "restore_summary", Content: content})
+		}
+	}
 	if p.Compacted {
 		t.appendNonToolMessage(chatMsg{Role: "system", Content: t.tr("session.restore_compacted")})
 	}
+	t.trimDisplayHistoryIfNeeded()
 	t.chat.ResumeAvailable = false
 	t.scrollToBottomOnNextSync()
 }

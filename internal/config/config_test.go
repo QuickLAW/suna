@@ -376,16 +376,16 @@ func TestModelConfigAvailableAsSubtaskFor(t *testing.T) {
 		activeRef string
 		want      bool
 	}{
-		{name: "empty matches all", model: ModelConfig{Provider: "DF", Model: "MiniMax-M3"}, activeRef: "Froghire/gpt-5.5", want: true},
-		{name: "self always matches", model: ModelConfig{Provider: "DF", Model: "MiniMax-M3", SubtaskFor: []string{"Froghire/**"}}, activeRef: "DF/MiniMax-M3", want: true},
-		{name: "exact match", model: ModelConfig{Provider: "DF", Model: "MiniMax-M3", SubtaskFor: []string{"Froghire/gpt-5.5"}}, activeRef: "Froghire/gpt-5.5", want: true},
-		{name: "provider glob", model: ModelConfig{Provider: "DF", Model: "MiniMax-M3", SubtaskFor: []string{"Froghire/**"}}, activeRef: "Froghire/gpt-5.4", want: true},
+		{name: "empty matches all", model: ModelConfig{Provider: "DF", Model: "MiniMax-M3"}, activeRef: "openai/gpt-4.1", want: true},
+		{name: "self always matches", model: ModelConfig{Provider: "DF", Model: "MiniMax-M3", SubtaskFor: []string{"openai/**"}}, activeRef: "DF/MiniMax-M3", want: true},
+		{name: "exact match", model: ModelConfig{Provider: "DF", Model: "MiniMax-M3", SubtaskFor: []string{"openai/gpt-4.1"}}, activeRef: "openai/gpt-4.1", want: true},
+		{name: "provider glob", model: ModelConfig{Provider: "DF", Model: "MiniMax-M3", SubtaskFor: []string{"openai/**"}}, activeRef: "openai/gpt-4o", want: true},
 		{name: "model glob", model: ModelConfig{Provider: "DF", Model: "MiniMax-M3", SubtaskFor: []string{"DF/glm-*"}}, activeRef: "DF/glm-5.2", want: true},
-		{name: "or semantics miss", model: ModelConfig{Provider: "DF", Model: "MiniMax-M3", SubtaskFor: []string{"Froghire/**", "Oio/**"}}, activeRef: "DF/glm-5.2", want: false},
+		{name: "or semantics miss", model: ModelConfig{Provider: "DF", Model: "MiniMax-M3", SubtaskFor: []string{"openai/**", "anthropic/**"}}, activeRef: "DF/glm-5.2", want: false},
 		{name: "star matches all", model: ModelConfig{Provider: "DF", Model: "MiniMax-M3", SubtaskFor: []string{"*"}}, activeRef: "Any/model", want: true},
-		{name: "provider double star crosses slash", model: ModelConfig{Provider: "DF", Model: "MiniMax-M3", SubtaskFor: []string{"Froghire/**"}}, activeRef: "Froghire/family/gpt-5.5", want: true},
-		{name: "star does not cross slash", model: ModelConfig{Provider: "DF", Model: "MiniMax-M3", SubtaskFor: []string{"Froghire/*"}}, activeRef: "Froghire/family/gpt-5.5", want: false},
-		{name: "invalid-looking pattern treated literal", model: ModelConfig{Provider: "DF", Model: "MiniMax-M3", SubtaskFor: []string{"["}}, activeRef: "Froghire/gpt-5.5", want: false},
+		{name: "provider double star crosses slash", model: ModelConfig{Provider: "DF", Model: "MiniMax-M3", SubtaskFor: []string{"openai/**"}}, activeRef: "openai/family/gpt-4.1", want: true},
+		{name: "star does not cross slash", model: ModelConfig{Provider: "DF", Model: "MiniMax-M3", SubtaskFor: []string{"openai/*"}}, activeRef: "openai/family/gpt-4.1", want: false},
+		{name: "invalid-looking pattern treated literal", model: ModelConfig{Provider: "DF", Model: "MiniMax-M3", SubtaskFor: []string{"["}}, activeRef: "openai/gpt-4.1", want: false},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -408,7 +408,7 @@ func TestConfigSubtaskForRoundTrips(t *testing.T) {
 			BaseURL:         "https://api.example.com/v1",
 			ContextWindow:   1000000,
 			MaxOutputTokens: 8192,
-			SubtaskFor:      []string{"Froghire/**", "Oio/**"},
+			SubtaskFor:      []string{"openai/**", "anthropic/**"},
 		}},
 		Guard:   GuardConfig{Mode: "ask", Workspace: workspace},
 		UI:      UIConfig{Theme: "auto", Locale: "en"},
@@ -420,7 +420,7 @@ func TestConfigSubtaskForRoundTrips(t *testing.T) {
 		t.Fatalf("Save() error = %v", err)
 	}
 	saved := readFile(t, path)
-	if !strings.Contains(saved, `subtask_for = ["Froghire/**", "Oio/**"]`) {
+	if !strings.Contains(saved, `subtask_for = ["openai/**", "anthropic/**"]`) {
 		t.Fatalf("saved config = %q, want subtask_for", saved)
 	}
 	var loaded Config
@@ -428,7 +428,7 @@ func TestConfigSubtaskForRoundTrips(t *testing.T) {
 		t.Fatalf("LoadTOML() error = %v", err)
 	}
 	got := loaded.Models[0].SubtaskFor
-	want := []string{"Froghire/**", "Oio/**"}
+	want := []string{"openai/**", "anthropic/**"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("SubtaskFor = %#v, want %#v", got, want)
 	}
