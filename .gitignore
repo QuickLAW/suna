@@ -32,3 +32,6 @@ Thumbs.db
 memory.db
 memory.db-shm
 memory.db-wal
+
+# 临时
+参考/
