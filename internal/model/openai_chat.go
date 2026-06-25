@@ -15,6 +15,8 @@ import (
 
 type OpenAIChatProvider struct {
 	client          openai.Client
+	apiKey          string
+	baseURL         string
 	model           string
 	contextWindow   int
 	maxOutputTokens int
@@ -29,7 +31,7 @@ func NewOpenAIChatProvider(apiKey, baseURL, model string, contextWindow, maxOutp
 	if baseURL != "" {
 		opts = append(opts, option.WithBaseURL(baseURL))
 	}
-	return &OpenAIChatProvider{client: openai.NewClient(opts...), model: model, contextWindow: contextWindow, maxOutputTokens: maxOutputTokens, media: mediaResolver}
+	return &OpenAIChatProvider{client: openai.NewClient(opts...), apiKey: apiKey, baseURL: baseURL, model: model, contextWindow: contextWindow, maxOutputTokens: maxOutputTokens, media: mediaResolver}
 }
 
 func (p *OpenAIChatProvider) Complete(ctx context.Context, req *CompletionRequest) (<-chan Chunk, error) {
@@ -155,6 +157,14 @@ func (p *OpenAIChatProvider) ContextWindow() int { return p.contextWindow }
 
 func (p *OpenAIChatProvider) MaxOutputTokens() int {
 	return p.maxOutputTokens
+}
+
+// ListModels 调 OpenAI 标准 /v1/models；OpenAI Chat Completions 端点也支持同一 /v1/models 协议。
+// baseURL 由调用方提供，不硬编码任何预设厂商。
+func (p *OpenAIChatProvider) ListModels(ctx context.Context) ([]string, error) {
+	listCtx, cancel := context.WithTimeout(ctx, ListModelsHTTPTimeout)
+	defer cancel()
+	return openaiListModels(listCtx, p.apiKey, p.baseURL)
 }
 
 func (p *OpenAIChatProvider) resolveModel(m string) string {

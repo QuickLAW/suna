@@ -119,7 +119,22 @@ type ConfigParams struct {
 	Theme       string        `json:"theme,omitempty"`
 	GuardMode   string        `json:"guard_mode,omitempty"`
 	Workspace   string        `json:"workspace,omitempty"`
+	// MaxModelRPS 暴露给前端做"高级设置"区显示；mcp/hooks 段落以
+	// HasMCP / HasHooks 布尔提示用户去翻配置文件做精细编辑。
+	MaxModelRPS int  `json:"max_model_rps,omitempty"`
+	HasMCP      bool `json:"has_mcp,omitempty"`
+	HasHooks    bool `json:"has_hooks,omitempty"`
+	// GlobalConfigPath 是 ~/.suna/config.toml 的绝对路径；ProjectConfigPath 是
+	// <cwd>/.suna/config.toml（可能为空表示未启用项目级）。
+	// Sources 记录每个业务字段当前生效值来自哪个文件，UI 据此展示作用域徽标。
+	GlobalConfigPath  string          `json:"global_config_path,omitempty"`
+	ProjectConfigPath string          `json:"project_config_path,omitempty"`
+	Sources           ConfigSourceMap `json:"sources,omitempty"`
 }
+
+// ConfigSourceMap 是字段名 -> "global" / "project" 的映射；与 config.ConfigSources
+// 字段名保持一致。protocol 独立定义避免 protocol 反向依赖 config 内部实现。
+type ConfigSourceMap map[string]string
 
 type ConfigModel struct {
 	Provider        string         `json:"provider"`
@@ -144,6 +159,27 @@ type ConfigSetParams struct {
 	Theme        string      `json:"theme,omitempty"`
 	GuardMode    string      `json:"guard_mode,omitempty"`
 	Workspace    *string     `json:"workspace,omitempty"`
+	// MaxModelRPS 高级设置：0 表示不更新（保持当前值）。
+	MaxModelRPS *int `json:"max_model_rps,omitempty"`
+	// Scope 决定本次写入哪个配置文件："global" / "project"。
+	// 空值时后端按默认作用域推断（model 相关写全局，update_general 走全局）。
+	// 前端面板的顶部作用域切换器显式带 "project" 时走项目级文件。
+	Scope string `json:"scope,omitempty"`
+}
+
+// ConfigListModelsParams 由 TUI 在表单里输入 url + key 后点 Fetch 触发。
+// Provider 决定走哪条标准协议（anthropic / openai），baseURL 和 apiKey 由用户在前端填入，
+// daemon 不依赖任何已加载的 ModelConfig。
+type ConfigListModelsParams struct {
+	Provider string `json:"provider"`
+	BaseURL  string `json:"base_url"`
+	APIKey   string `json:"api_key"`
+}
+
+// ConfigListModelsResult 返回供应商拉取的模型 ID 列表；Error 非空时 Models 为空。
+type ConfigListModelsResult struct {
+	Models []string `json:"models"`
+	Error  string   `json:"error,omitempty"`
 }
 
 type MemoryStats struct {

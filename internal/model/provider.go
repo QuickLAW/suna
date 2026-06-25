@@ -153,6 +153,10 @@ type Provider interface {
 	EstimateTokens(text string) int
 	ContextWindow() int
 	MaxOutputTokens() int
+	// ListModels 向供应商拉取可用模型 ID 列表，供 TUI 配置页的"从供应商获取模型"使用。
+	// 实现应当按标准协议（OpenAI /v1/models、Anthropic /v1/models）调用，
+	// 不硬编码任何预设厂商；baseURL 由调用方提供。
+	ListModels(ctx context.Context) ([]string, error)
 }
 
 // ParseToolCallArguments 将模型返回的工具参数 JSON 解为 map；非法 JSON 会显式保留 raw 字段便于排错。

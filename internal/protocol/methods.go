@@ -16,8 +16,9 @@ const (
 )
 
 const (
-	MethodConfigGet = "config.get"
-	MethodConfigSet = "config.set"
+	MethodConfigGet        = "config.get"
+	MethodConfigSet        = "config.set"
+	MethodConfigListModels = "config.list_models"
 )
 
 const (

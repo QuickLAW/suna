@@ -54,3 +54,6 @@ func (workerTestProvider) EstimateTokens(string) int { return 0 }
 
 func (workerTestProvider) ContextWindow() int   { return 128000 }
 func (workerTestProvider) MaxOutputTokens() int { return 8192 }
+
+// ListModels 在测试中不被调用，保留默认空实现。
+func (workerTestProvider) ListModels(context.Context) ([]string, error) { return nil, nil }

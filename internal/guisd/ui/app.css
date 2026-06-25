@@ -1,0 +1,589 @@
+/* app.css — Suna GUI 全部样式。
+
+   设计系统约定（2024-06 重构）：
+   - 颜色：全走 CSS 变量，禁止硬编码十六进制。
+   - 圆角：统一 --radius(6px) / --radius-sm(4px)，不再出现 8px/5px。
+   - 间距：--sp-xs(4px) / --sp-s(8px) / --sp-m(12px) / --sp-l(16px) / --sp-xl(20px) 梯度。
+   - 组件类：.btn / .btn-primary / .btn-ghost / .btn-danger 统一按钮；.input 统一输入框。
+   - 布局：Activity Bar(48px) + 侧边栏(220px) + 编辑区(1fr) + 聊天面板(360px) / 底部终端(可拖拽)。
+   - 浮层：统一 Esc + 点击外部关闭。 */
+
+:root {
+  --bg: #0d1117; --bg-1: #0d1117; --bg-2: #161b22; --bg-3: #21262d; --bg-hover: #2d333b;
+  --border: #30363d; --border-light: #484f58;
+  --text: #e6edf3; --text-dim: #8b949e; --text-faint: #6e7681;
+  --accent: #6366f1; --accent-hover: #818cf8; --accent-dim: rgba(99, 102, 241, .15);
+  --green: #3fb950; --red: #f85149; --yellow: #d29922; --blue: #58a6ff; --purple: #bc8cff;
+  --radius: 6px; --radius-sm: 4px;
+  --sp-xs: 4px; --sp-s: 8px; --sp-m: 12px; --sp-l: 16px; --sp-xl: 20px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans SC", sans-serif;
+  --mono: "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --shadow: 0 8px 24px rgba(0, 0, 0, .4);
+  --terminal-height: 240px;
+  --activity-bar-width: 48px;
+  --status-bar-height: 24px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
+body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 13px; line-height: 1.5; }
+button { font-family: inherit; cursor: pointer; border: none; outline: none; }
+input, textarea { font-family: inherit; outline: none; }
+
+/* ===== 统一组件：按钮 =====
+   .btn 是基础按钮类，替代 .chat-btn 在全站的复用。
+   变体：.btn-primary / .btn-ghost / .btn-danger / .btn-primary.danger。
+   旧 .chat-btn 保留别名以兼容过渡期。 */
+.btn { padding: 5px 14px; border-radius: var(--radius-sm); font-size: 11px; font-weight: 500; transition: .15s; }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-primary:disabled { opacity: .4; cursor: not-allowed; }
+.btn-ghost { background: var(--bg-3); color: var(--text-dim); }
+.btn-ghost:hover { background: var(--bg-hover); color: var(--text); }
+.btn-danger { background: rgba(248,81,73,.12); color: var(--red); border: 1px solid rgba(248,81,73,.35); }
+.btn-danger:hover { background: rgba(248,81,73,.2); }
+.btn-primary.btn-danger { background: var(--red); color: #fff; border-color: var(--red); }
+.btn-primary.btn-danger:hover { background: #ff7066; }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+
+/* ===== 统一组件：输入框 =====
+   .input 是基础输入框类，替代 .chat-input / .config-form-input / .modal-input / .ask-input / .search-input。 */
+.input { background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 10px; color: var(--text); font-size: 12.5px; outline: none; transition: border-color .15s; }
+.input:focus { border-color: var(--accent); }
+.input:disabled { opacity: .5; cursor: not-allowed; }
+.input-mono { font-family: var(--mono); }
+.input-password { font-family: var(--mono); letter-spacing: .5px; }
+
+/* ===== 统一组件：卡片 =====
+   .card 是通用卡片容器，用于工具卡、Guard 卡、Ask 卡、Error 卡等。
+   左边框色通过 modifier 类控制：.card-blue / .card-yellow / .card-green / .card-red。 */
+.card { background: var(--bg-3); border: 1px solid var(--border); border-left: 3px solid var(--border-light); border-radius: var(--radius); overflow: hidden; transition: border-color .2s; max-width: 92%; }
+.card-blue { border-left-color: var(--blue); }
+.card-yellow { border-left-color: var(--yellow); }
+.card-green { border-left-color: var(--green); }
+.card-red { border-left-color: var(--red); }
+
+/* ===== 统一组件：badge =====
+   .badge 是通用小标签，替代 .config-source-badge / .cmr-active 等散落样式。 */
+.badge { display: inline-block; padding: 1px 7px; border-radius: 9px; font-size: 10.5px; font-weight: 500; line-height: 1.5; letter-spacing: .2px; }
+.badge-neutral { background: var(--bg-3); color: var(--text-faint); border: 1px solid var(--border); }
+.badge-accent { background: var(--accent-dim); color: var(--accent-hover); border: 1px solid var(--accent); }
+.badge-success { background: rgba(63,185,80,.12); color: var(--green); }
+.badge-warning { background: rgba(210,153,34,.12); color: var(--yellow); }
+.badge-error { background: rgba(248,81,73,.12); color: var(--red); }
+
+/* ===== 统一组件：section 标题 =====
+   .section-label 是区块标题，全站统一（配置页、欢迎页、帮助页等复用）。 */
+.section-label { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--accent-hover); font-weight: 600; margin: 16px 0 6px; }
+.section-label:first-of-type { margin-top: 4px; }
+
+/* ===== Activity Bar (左侧图标栏，参考 VSCode) =====
+   48px 宽，垂直排列图标按钮，点击切换侧边栏内容 + 对应编辑区视图。
+   用 .activity-btn 标记每个图标，.activity-btn.active 标记当前激活。 */
+.activity-bar { width: var(--activity-bar-width); display: flex; flex-direction: column; align-items: center; padding: var(--sp-s) 0; gap: var(--sp-xs); background: var(--bg); border-right: 1px solid var(--border); flex-shrink: 0; }
+.activity-btn { width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); background: transparent; color: var(--text-faint); font-size: 18px; position: relative; transition: .15s; }
+.activity-btn:hover { background: var(--bg-3); color: var(--text); }
+.activity-btn.active { color: var(--text); }
+.activity-btn.active::before { content: ''; position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px; background: var(--accent); border-radius: 0 1px 1px 0; }
+
+/* ===== Status Bar (底部状态栏) ===== */
+.status-bar { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; height: var(--status-bar-height); padding: 0 var(--sp-m); background: var(--bg-2); border-top: 1px solid var(--border); font-size: 11px; color: var(--text-dim); z-index: 5; }
+.status-bar-left, .status-bar-right { display: flex; align-items: center; gap: var(--sp-m); }
+.status-bar-item { display: flex; align-items: center; gap: var(--sp-xs); cursor: default; }
+.status-bar-item.clickable { cursor: pointer; }
+.status-bar-item.clickable:hover { color: var(--text); }
+
+/* ===== Layout =====
+   grid：Menu(28px) / Content / Status Bar(24px) 三行，
+   Content 内部用 grid 再分 Activity Bar + Sidebar + Editor + Chat + Terminal。
+   终端跨越 sidebar + editor 两列（不覆盖 Activity Bar 和 Chat）。
+   .no-chat 隐藏聊天面板。 */
+.app { display: grid; grid-template-rows: 28px 1fr 4px var(--terminal-height) var(--status-bar-height); height: 100vh; grid-template-columns: var(--activity-bar-width) 220px 1fr 360px; }
+.app.no-chat { grid-template-columns: var(--activity-bar-width) 220px 1fr 0; }
+.app.no-chat .chat-panel { display: none; }
+/* Activity Bar 占第1列，跨 menu + content + terminal 三行 */
+.activity-bar { grid-row: 1 / 4; grid-column: 1; }
+/* Menu 跨 activity bar + sidebar + editor + chat */
+.menu-bar-host { grid-column: 2 / -1; }
+/* Sidebar 占第2列 */
+.sidebar { grid-column: 2; grid-row: 2; }
+/* Editor 占第3列 */
+.editor-panel { grid-column: 3; grid-row: 2; }
+/* Chat 占第4列 */
+.chat-panel { grid-column: 4; grid-row: 2 / 4; }
+/* Terminal Resizer + Terminal 跨 sidebar + editor（第2-3列） */
+.terminal-resizer { grid-column: 2 / 4; }
+.terminal-panel { grid-column: 2 / 4; }
+/* Status Bar 跨所有列 */
+.status-bar { grid-column: 1 / -1; grid-row: 5; }
+
+/* ===== Header ===== */
+.header { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 0 16px; background: var(--bg-2); border-bottom: 1px solid var(--border); z-index: 10; }
+.logo { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; white-space: nowrap; }
+.logo-dot { width: 20px; height: 20px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--purple)); box-shadow: 0 0 12px rgba(99, 102, 241, .4); }
+.header-cwd { color: var(--text-dim); font-size: 12px; font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 400px; }
+.header-spacer { flex: 1; }
+.status-pill { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 20px; font-size: 11px; background: var(--bg-3); color: var(--text-dim); }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); }
+.status-dot.online { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.status-dot.offline { background: var(--red); }
+
+/* ===== Top Menu Bar (VSCode 风格) =====
+   菜单栏占 28px，背景比 header 略深；trigger 横向排列，
+   hover / 展开时反色高亮。dropdown 用 absolute 定位在容器内。 */
+.menu-bar-host { grid-column: 1 / -1; position: relative; background: var(--bg-2); border-bottom: 1px solid var(--border); z-index: 9; }
+.menu-bar { display: flex; align-items: stretch; height: 100%; }
+.menu-trigger { display: flex; align-items: center; height: 100%; padding: 0 12px; background: transparent; color: var(--text-dim); font-size: 12.5px; font-family: inherit; border: none; cursor: pointer; transition: background .1s, color .1s; }
+.menu-trigger:hover { background: var(--bg-3); color: var(--text); }
+.menu-trigger.open { background: var(--bg-3); color: var(--text); }
+.menu-trigger:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.menu-dropdown { position: absolute; top: 100%; left: 0; min-width: 220px; background: var(--bg-2); border: 1px solid var(--border-light); border-radius: var(--radius); box-shadow: var(--shadow); padding: 4px 0; z-index: 50; }
+.menu-item { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 6px 14px; font-size: 12.5px; color: var(--text); cursor: pointer; user-select: none; outline: none; }
+.menu-item:hover, .menu-item:focus { background: var(--accent-dim); color: var(--accent-hover); }
+.menu-item.disabled { color: var(--text-faint); cursor: not-allowed; }
+.menu-item.disabled:hover, .menu-item.disabled:focus { background: transparent; color: var(--text-faint); }
+.menu-item-label { flex: 1; }
+.menu-item-shortcut { color: var(--text-faint); font-family: var(--mono); font-size: 11px; }
+.menu-item:hover .menu-item-shortcut, .menu-item:focus .menu-item-shortcut { color: var(--accent-hover); }
+.menu-sep { height: 1px; background: var(--border); margin: 4px 0; }
+
+/* ===== File Tree ===== */
+.sidebar { background: var(--bg-2); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+.sidebar-view { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+.sidebar-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.sidebar-title { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--text-dim); font-weight: 600; }
+.icon-btn { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); background: transparent; color: var(--text-dim); font-size: 14px; transition: .15s; }
+.icon-btn:hover { background: var(--bg-hover); color: var(--text); }
+.tree { flex: 1; overflow-y: auto; padding: 4px 0; user-select: none; }
+.tree-node { display: flex; align-items: center; gap: 4px; padding: 3px 12px; cursor: pointer; white-space: nowrap; transition: background .1s; }
+.tree-node:hover { background: var(--bg-hover); }
+.tree-node.active { background: var(--accent-dim); color: var(--accent-hover); }
+.tree-icon { width: 16px; text-align: center; font-size: 13px; flex-shrink: 0; }
+.tree-label { overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; }
+.tree-chevron { width: 14px; font-size: 10px; color: var(--text-faint); flex-shrink: 0; transition: transform .15s; }
+.tree-chevron.open { transform: rotate(90deg); }
+.tree-children { overflow: hidden; }
+
+/* ===== Editor ===== */
+.editor-panel { display: flex; flex-direction: column; background: var(--bg); overflow: hidden; }
+.editor-tabs { display: flex; background: var(--bg-2); border-bottom: 1px solid var(--border); overflow-x: auto; flex-shrink: 0; }
+.editor-tabs::-webkit-scrollbar { height: 0; }
+.editor-tab { display: flex; align-items: center; gap: 6px; padding: 7px 14px; font-size: 12px; color: var(--text-dim); border-right: 1px solid var(--border); cursor: pointer; white-space: nowrap; transition: .15s; position: relative; }
+.editor-tab:hover { background: var(--bg-3); color: var(--text); }
+.editor-tab.active { background: var(--bg); color: var(--text); }
+.editor-tab.active::after { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: var(--accent); }
+.editor-tab .close-btn { width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; border-radius: 3px; font-size: 14px; opacity: 0; color: var(--text-faint); }
+.editor-tab:hover .close-btn, .editor-tab.active .close-btn { opacity: 1; }
+.editor-tab .close-btn:hover { background: var(--bg-hover); color: var(--text); }
+.editor-body { flex: 1; overflow: hidden; position: relative; display: flex; flex-direction: column; }
+.editor-empty { display: flex; align-items: center; justify-content: center; flex: 1; color: var(--text-faint); flex-direction: column; gap: 12px; }
+.editor-empty-icon { font-size: 48px; opacity: .3; }
+.editor-empty-text { font-size: 14px; }
+
+/* 编辑器 tab 区：特殊 tab（设置 / 帮助）与普通文件 tab 共用 tab bar。
+   特殊 tab 用 .editor-tab.special 标记，靠右布局，与文件 tab 之间用 1px 分隔线。 */
+.editor-tab-special-sep { width: 1px; align-self: stretch; background: var(--border); margin: 6px 4px; flex-shrink: 0; }
+.editor-tab.special { margin-left: auto; color: var(--text-dim); gap: 6px; }
+.editor-tab.special:first-of-type { margin-left: auto; }
+.editor-tab.special.active { color: var(--accent-hover); background: var(--accent-dim); }
+.editor-tab.special.active::after { background: var(--accent); }
+.editor-tab.special:hover { color: var(--text); }
+
+/* overlay 编辑器容器：行号槽 + 高亮层 + textarea 三层叠加。行号槽内部用
+   absolute 定位的 inner 层 + transform 模拟滚动，gutter 自身保持 overflow:hidden
+   防止行号层与 textarea 滚动不同步导致 1~N 行号被裁切。 */
+.editor-wrap { flex: 1; display: flex; overflow: hidden; position: relative; background: var(--bg); }
+.editor-gutter { width: 48px; flex-shrink: 0; padding: 16px 8px 16px 0; text-align: right; color: var(--text-faint); font-family: var(--mono); font-size: 13px; line-height: 1.6; overflow: hidden; user-select: none; background: var(--bg); position: relative; }
+.editor-gutter-inner { position: absolute; top: 16px; right: 8px; min-width: 100%; white-space: pre; will-change: transform; transform: translateY(0); }
+.editor-highlight { flex: 1; margin: 0; padding: 16px 20px; font-family: var(--mono); font-size: 13px; line-height: 1.6; tab-size: 2; white-space: pre-wrap; word-break: break-word; color: var(--text); overflow: auto; position: absolute; left: 48px; top: 0; right: 0; bottom: 0; pointer-events: none; z-index: 1; }
+.editor-textarea { flex: 1; background: transparent; color: transparent; caret-color: var(--text); border: none; resize: none; padding: 16px 20px; font-family: var(--mono); font-size: 13px; line-height: 1.6; tab-size: 2; position: absolute; left: 48px; top: 0; right: 0; bottom: 0; z-index: 2; overflow: auto; }
+.editor-textarea:focus { outline: none; }
+.editor-textarea::selection { background: rgba(99, 102, 241, .3); color: transparent; }
+
+/* 语法高亮 token 颜色 */
+.hl-kw { color: #ff7b72; }      /* 关键字 */
+.hl-st { color: #a5d6ff; }      /* 字符串 */
+.hl-cm { color: #8b949e; font-style: italic; } /* 注释 */
+.hl-ty { color: #ffa657; }      /* 类型 */
+.hl-nu { color: #79c0ff; }      /* 数字 */
+.hl-at { color: #d2a8ff; }      /* 属性 */
+
+.editor-footer { display: flex; align-items: center; justify-content: space-between; padding: 4px 12px; background: var(--bg-2); border-top: 1px solid var(--border); font-size: 11px; color: var(--text-dim); flex-shrink: 0; }
+.editor-footer-info { display: flex; gap: 14px; font-family: var(--mono); }
+.save-btn { padding: 4px 12px; border-radius: var(--radius-sm); background: var(--accent); color: #fff; font-size: 11px; font-weight: 500; opacity: 0; transition: .15s; }
+.save-btn.show { opacity: 1; }
+.save-btn:hover { background: var(--accent-hover); }
+.save-btn.saved { background: var(--green); }
+
+/* ===== Quick Open Panel (Ctrl+P) ===== */
+.quick-open-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, .5); z-index: 500; display: none; }
+.quick-open-overlay.show { display: block; }
+.quick-open-box { position: fixed; top: 10vh; left: 50%; transform: translateX(-50%); width: 500px; max-width: 90vw; background: var(--bg-2); border: 1px solid var(--border-light); border-radius: var(--radius); box-shadow: var(--shadow); z-index: 501; overflow: hidden; }
+.quick-open-input { width: 100%; padding: 12px 16px; background: var(--bg-3); border: none; border-bottom: 1px solid var(--border); color: var(--text); font-size: 14px; outline: none; }
+.quick-open-list { max-height: 320px; overflow-y: auto; }
+.quick-open-item { display: flex; align-items: center; gap: 8px; padding: 8px 16px; cursor: pointer; font-size: 13px; color: var(--text-dim); transition: background .1s; }
+.quick-open-item:hover, .quick-open-item.selected { background: var(--accent-dim); color: var(--text); }
+.quick-open-item .qo-icon { flex-shrink: 0; font-size: 14px; }
+.quick-open-item .qo-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quick-open-item .qo-match { color: var(--accent-hover); font-weight: 500; }
+
+/* ===== Global Search Panel (Ctrl+Shift+F) =====
+   新布局中 header 已移除，搜索面板顶部从 Menu Bar(28px) 下方开始。 */
+.search-panel { position: fixed; top: 28px; right: 0; width: 380px; max-width: 50vw; height: calc(100vh - 28px - var(--status-bar-height)); background: var(--bg-2); border-left: 1px solid var(--border); z-index: 200; display: none; flex-direction: column; box-shadow: var(--shadow); }
+.search-panel.show { display: flex; }
+.search-header { padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; }
+.search-input-row { display: flex; gap: 8px; }
+.search-input { flex: 1; background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 10px; color: var(--text); font-size: 12.5px; outline: none; }
+.search-input:focus { border-color: var(--accent); }
+.search-close { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); background: var(--bg-3); color: var(--text-dim); font-size: 16px; flex-shrink: 0; }
+.search-close:hover { background: var(--bg-hover); color: var(--text); }
+.search-options { display: flex; gap: 12px; font-size: 11px; color: var(--text-dim); }
+.search-options label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.search-results { flex: 1; overflow-y: auto; padding: 4px 0; }
+.search-file-group { margin-bottom: 4px; }
+.search-file-header { display: flex; align-items: center; gap: 6px; padding: 4px 12px; font-size: 11px; color: var(--text-dim); font-weight: 600; cursor: pointer; }
+.search-file-header:hover { background: var(--bg-hover); }
+.search-file-count { color: var(--text-faint); font-weight: 400; }
+.search-hit { padding: 3px 12px 3px 28px; font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.search-hit:hover { background: var(--bg-hover); color: var(--text); }
+.search-hit .sh-line { color: var(--text-faint); margin-right: 8px; }
+.search-hit mark { background: var(--accent-dim); color: var(--accent-hover); border-radius: 2px; }
+.search-empty { padding: 20px; text-align: center; color: var(--text-faint); font-size: 12px; }
+
+/* ===== Context Menu ===== */
+.context-menu { position: fixed; background: var(--bg-2); border: 1px solid var(--border-light); border-radius: var(--radius-sm); box-shadow: var(--shadow); z-index: 1000; min-width: 160px; padding: 4px 0; display: none; }
+.context-menu.show { display: block; }
+.context-item { display: flex; align-items: center; gap: 8px; padding: 7px 14px; font-size: 12.5px; color: var(--text); cursor: pointer; }
+.context-item:hover { background: var(--accent-dim); color: var(--accent-hover); }
+.context-item.danger { color: var(--red); }
+.context-item.danger:hover { background: rgba(248, 81, 73, .15); }
+.context-sep { height: 1px; background: var(--border); margin: 4px 0; }
+
+/* ===== Terminal Tabs ===== */
+.terminal-tabs { display: flex; align-items: center; gap: 2px; padding: 0 8px; background: var(--bg-2); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.terminal-tab { display: flex; align-items: center; gap: 4px; padding: 4px 10px; font-size: 11px; color: var(--text-dim); border-radius: var(--radius-sm) var(--radius-sm) 0 0; cursor: pointer; white-space: nowrap; transition: .15s; }
+.terminal-tab:hover { background: var(--bg-3); color: var(--text); }
+.terminal-tab.active { background: var(--bg); color: var(--text); }
+.terminal-tab .tt-close { width: 14px; height: 14px; display: flex; align-items: center; justify-content: center; border-radius: 3px; font-size: 12px; opacity: 0; color: var(--text-faint); }
+.terminal-tab:hover .tt-close, .terminal-tab.active .tt-close { opacity: 1; }
+.terminal-tab .tt-close:hover { background: var(--bg-hover); color: var(--text); }
+.terminal-tab-add { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); color: var(--text-dim); font-size: 14px; cursor: pointer; margin-left: 4px; }
+.terminal-tab-add:hover { background: var(--bg-3); color: var(--text); }
+
+/* ===== Chat Panel ===== */
+.chat-panel { background: var(--bg-2); border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+.chat-header { padding: 8px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.chat-title { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--text-dim); font-weight: 600; }
+.chat-messages { flex: 1; overflow-y: auto; padding: 12px; }
+/* ===== Chat Messages ===== */
+/* 参考 trae 的 surface/radius 设计：用户右侧气泡（4/12 不对称圆角），助手左侧带头像行。
+   整体间距走 4/8/12 节奏，避免出现 trae 那种过度密集的小细节。 */
+.chat-msg { margin-bottom: 14px; display: flex; flex-direction: column; min-width: 0; }
+.chat-msg-user { align-items: flex-end; }
+.chat-msg-assistant { align-items: flex-start; }
+.chat-msg-tool { align-items: flex-start; }
+
+/* 用户消息气泡：紧凑、右对齐、不对称圆角。 */
+.user-bubble { max-width: 86%; background: var(--accent-dim); color: var(--text); padding: 8px 12px; border-radius: 12px 12px 4px 12px; font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; box-shadow: 0 1px 0 0 rgba(255,255,255,.04) inset; }
+
+/* 助手消息头：avatar + 名字 + 模型小字。 */
+.assistant-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; min-width: 0; }
+.assistant-avatar { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, var(--purple), var(--blue)); flex-shrink: 0; position: relative; box-shadow: 0 0 0 1px rgba(255,255,255,.06) inset; }
+.assistant-avatar::after { content: ''; position: absolute; left: 5px; right: 5px; top: 8px; bottom: 8px; background: var(--bg); border-radius: 2px; opacity: .25; }
+.assistant-name { font-size: 12.5px; font-weight: 600; color: var(--text); letter-spacing: .2px; }
+.assistant-sub { font-size: 11px; color: var(--text-faint); font-family: var(--mono); margin-left: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.chat-msg-content { font-size: 12.5px; line-height: 1.6; color: var(--text); white-space: pre-wrap; word-break: break-word; max-width: 92%; }
+/* markdown 渲染样式 */
+.chat-msg-content.markdown { white-space: normal; }
+.chat-msg-content.markdown p { margin: 0 0 8px; }
+.chat-msg-content.markdown p:last-child { margin-bottom: 0; }
+.chat-msg-content.markdown h2, .chat-msg-content.markdown h3, .chat-msg-content.markdown h4 { margin: 12px 0 6px; font-weight: 600; line-height: 1.3; }
+.chat-msg-content.markdown h2 { font-size: 15px; }
+.chat-msg-content.markdown h3 { font-size: 14px; }
+.chat-msg-content.markdown h4 { font-size: 13px; }
+.chat-msg-content.markdown code { background: var(--bg-3); padding: 1px 5px; border-radius: 3px; font-family: var(--mono); font-size: 11.5px; color: var(--blue); }
+.chat-msg-content.markdown pre { background: var(--bg-3); padding: 10px 12px; border-radius: var(--radius-sm); overflow-x: auto; margin: 8px 0; }
+.chat-msg-content.markdown pre code { background: none; padding: 0; color: var(--text); font-size: 11.5px; }
+.chat-msg-content.markdown ul, .chat-msg-content.markdown ol { margin: 4px 0 8px; padding-left: 20px; }
+.chat-msg-content.markdown li { margin-bottom: 2px; }
+.chat-msg-content.markdown a { color: var(--accent-hover); text-decoration: none; }
+.chat-msg-content.markdown a:hover { text-decoration: underline; }
+.chat-msg-content.markdown blockquote { border-left: 3px solid var(--border); padding-left: 10px; margin: 8px 0; color: var(--text-dim); }
+/* chat-empty 的样式见文件底部"Chat Empty / Welcome"区段，用于承载欢迎指引。 */
+.chat-input-area { padding: 10px 12px; border-top: 1px solid var(--border); flex-shrink: 0; }
+.chat-input { width: 100%; background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; color: var(--text); font-size: 12.5px; resize: none; height: 60px; max-height: 120px; transition: border-color .15s; }
+.chat-input:focus { border-color: var(--accent); }
+.chat-input:disabled { opacity: .5; cursor: not-allowed; }
+.chat-send-row { display: flex; justify-content: flex-end; margin-top: 6px; gap: 8px; }
+.chat-btn { padding: 5px 14px; border-radius: var(--radius-sm); font-size: 11px; font-weight: 500; transition: .15s; }
+.chat-btn.primary { background: var(--accent); color: #fff; }
+.chat-btn.primary:hover { background: var(--accent-hover); }
+.chat-btn.primary:disabled { opacity: .4; cursor: not-allowed; }
+.chat-btn.ghost { background: var(--bg-3); color: var(--text-dim); }
+.chat-btn.ghost:hover { background: var(--bg-hover); color: var(--text); }
+
+/* ===== 思考过程折叠（reasoning）===== */
+/* Reasoning 折叠：参考 trae 的"思考过程"surface 风格 —— bg-overlay-l1 背景 + 6px 圆角 + 左边紫色细条。 */
+.chat-reasoning-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; font-size: 11px; color: var(--text-dim); background: var(--bg-3); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; user-select: none; transition: background .15s, border-color .15s; margin-bottom: 4px; }
+.chat-reasoning-toggle:hover { background: var(--bg-hover); border-color: var(--border-light); color: var(--text); }
+.chat-reasoning-toggle .rt-icon { font-size: 9px; transition: transform .15s; }
+.chat-reasoning-toggle.open .rt-icon { transform: rotate(90deg); }
+.chat-reasoning-toggle .rt-label { font-weight: 600; }
+.chat-reasoning-toggle .rt-duration { color: var(--text-faint); font-family: var(--mono); font-size: 10px; }
+.chat-reasoning-body { display: none; color: var(--text-dim); font-size: 11.5px; margin: 4px 0 6px; padding: 8px 10px; background: var(--bg-3); border: 1px solid var(--border); border-left: 2px solid var(--purple); border-radius: 0 6px 6px 0; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
+.chat-reasoning-body.show { display: block; }
+
+/* Tool Call 卡片：trae 风格 6px 圆角、bg-overlay-l1 表面、左侧细条按状态变色。
+   默认 neutral，运行时蓝，成功绿，失败红；状态色通过 .tool-card- 的 modifier 类切换。 */
+.tool-card { background: var(--bg-3); border: 1px solid var(--border); border-left: 3px solid var(--border-light); border-radius: 6px; margin: 6px 0; overflow: hidden; transition: border-color .2s; max-width: 92%; }
+.tool-card.tool-running { border-left-color: var(--blue); }
+.tool-card.tool-success { border-left-color: var(--green); }
+.tool-card.tool-error { border-left-color: var(--red); }
+.tool-card-header { display: flex; align-items: center; gap: 6px; padding: 7px 10px; cursor: pointer; user-select: none; font-size: 11.5px; transition: background .15s; }
+.tool-card-header:hover { background: var(--bg-hover); }
+.tool-card-header .tc-icon { font-size: 9px; transition: transform .15s; flex-shrink: 0; color: var(--text-faint); }
+.tool-card-header.open .tc-icon { transform: rotate(90deg); }
+.tool-card-header .tc-tool { font-weight: 600; color: var(--yellow); }
+.tool-card-header .tc-intent { color: var(--text-dim); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-card-header .tc-status { font-size: 10px; flex-shrink: 0; padding: 1px 6px; border-radius: 10px; font-weight: 500; }
+.tool-card-header .tc-status.running { color: var(--blue); background: rgba(88,166,255,.12); }
+.tool-card-header .tc-status.success { color: var(--green); background: rgba(63,185,80,.12); }
+.tool-card-header .tc-status.error { color: var(--red); background: rgba(248,81,73,.12); }
+.tool-card-header .tc-spinner { width: 10px; height: 10px; border: 2px solid var(--border-light); border-top-color: var(--blue); border-radius: 50%; animation: tc-spin .6s linear infinite; flex-shrink: 0; }
+@keyframes tc-spin { to { transform: rotate(360deg); } }
+.tool-card-body { display: none; padding: 8px 10px; border-top: 1px solid var(--border); background: var(--bg-2); }
+.tool-card-body.show { display: block; }
+.tool-card-params { font-family: var(--mono); font-size: 11px; color: var(--text-dim); background: var(--bg); padding: 6px 8px; border-radius: 4px; margin-bottom: 6px; white-space: pre-wrap; word-break: break-all; max-height: 150px; overflow-y: auto; }
+.tool-card-params .tcp-label { color: var(--text-faint); display: block; margin-bottom: 2px; }
+.tool-card-result { font-family: var(--mono); font-size: 11px; color: var(--text-dim); background: var(--bg); padding: 6px 8px; border-radius: 4px; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; }
+.tool-card-result.error { color: var(--red); }
+.tool-card-truncated { font-size: 10px; color: var(--text-faint); margin-top: 4px; font-style: italic; }
+
+/* Guard 决策展示（事后回执） */
+.guard-card { background: var(--bg-3); border: 1px solid var(--border); border-left: 3px solid var(--yellow); border-radius: 6px; padding: 6px 10px; margin: 6px 0; font-size: 11.5px; max-width: 92%; }
+.guard-card.guard-reject { border-left-color: var(--red); }
+.guard-card.guard-approve { border-left-color: var(--green); }
+.guard-card.guard-confirm { border-left-color: var(--yellow); }
+.guard-header { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.guard-header .gh-risk { font-size: 10px; padding: 1px 6px; border-radius: 10px; font-weight: 500; }
+.guard-header .gh-risk.high { background: rgba(248,81,73,.2); color: var(--red); }
+.guard-header .gh-risk.medium { background: rgba(210,153,34,.2); color: var(--yellow); }
+.guard-header .gh-risk.low { background: rgba(63,185,80,.2); color: var(--green); }
+
+/* ===== 工具调用卡片（tool card，重复定义留作兜底，已由上方块替代） ===== */
+/* 此处已并入"Tool Call 卡片"区段，避免重复声明造成特异性冲突。 */
+
+/* ===== Guard 决策展示（重复定义兜底） ===== */
+/* 此处已并入"Guard 决策展示"区段。 */
+.guard-reason { color: var(--text-dim); margin-top: 4px; font-size: 11px; }
+.guard-suggestion { color: var(--accent-hover); margin-top: 2px; font-size: 11px; }
+
+/* ===== Usage 信息条 ===== */
+.usage-bar { display: flex; align-items: center; gap: 10px; padding: 3px 0; margin-top: 4px; font-size: 10px; color: var(--text-faint); font-family: var(--mono); }
+.usage-bar .ub-item { display: flex; align-items: center; gap: 3px; }
+.usage-bar .ub-label { color: var(--text-faint); }
+.usage-bar .ub-value { color: var(--text-dim); }
+
+/* ===== Terminal Resizer ===== */
+.terminal-resizer { height: 4px; cursor: ns-resize; background: var(--border); transition: background .15s; z-index: 10; }
+.terminal-resizer:hover { background: var(--accent); }
+
+/* ===== Terminal ===== */
+.terminal-panel { background: var(--bg-2); border-top: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+.terminal-header { display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.terminal-title { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--text-dim); font-weight: 600; }
+.terminal-actions { display: flex; gap: 6px; }
+.terminal-body { flex: 1; overflow: hidden; position: relative; padding: 4px 8px; }
+.terminal-body .xterm { height: 100%; }
+.terminal-body .xterm-viewport { overflow-y: auto !important; }
+/* 降级终端样式（xterm.js 不可用时）：接入设计变量 */
+.terminal-fallback { height: 100%; overflow-y: auto; background: var(--bg-2); color: var(--text); font-family: var(--mono); font-size: 13px; line-height: 1.4; padding: 4px 8px; white-space: pre-wrap; word-break: break-all; }
+
+/* ===== Scrollbars ===== */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
+
+/* ===== Toast ===== */
+.toast { position: fixed; bottom: calc(var(--terminal-height) + 20px); left: 50%; transform: translateX(-50%) translateY(20px); background: var(--bg-3); border: 1px solid var(--border); padding: 10px 18px; border-radius: var(--radius); font-size: 12px; box-shadow: var(--shadow); opacity: 0; transition: .3s; z-index: 1000; pointer-events: none; }
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast.success { border-color: var(--green); }
+.toast.error { border-color: var(--red); }
+
+/* ===== 模态对话框（替代原生 prompt/confirm）===== */
+.modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, .55); z-index: 800; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity .15s; }
+.modal-overlay.show { opacity: 1; }
+.modal-box { width: 460px; max-width: 92vw; background: var(--bg-2); border: 1px solid var(--border-light); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px 20px 14px; display: flex; flex-direction: column; gap: 10px; }
+.modal-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.modal-message { color: var(--text-dim); font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
+.modal-input { background: var(--bg-3); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; font-size: 13px; font-family: var(--mono); outline: none; }
+.modal-input:focus { border-color: var(--accent); }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+
+/* 列表模态：更宽更高，单击选中即关闭。
+   列表项 hover 时轻微背景强调，区分主操作按钮风格避免误以为是 link。 */
+.modal-list-box { width: 560px; max-height: 78vh; }
+.modal-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; max-height: 60vh; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-1); }
+.modal-list-item { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; border-radius: var(--radius-sm); cursor: pointer; user-select: none; }
+.modal-list-item:hover { background: var(--bg-3); }
+.modal-list-item-label { font-family: var(--mono); font-size: 12px; color: var(--text); word-break: break-all; }
+.modal-list-item-hint { font-size: 11px; color: var(--text-dim); }
+.modal-list-empty { padding: 14px; color: var(--text-dim); font-size: 12px; text-align: center; }
+
+/* ===== Chat Empty / Welcome ===== */
+/* chat-empty 既承担"等待 daemon"提示，也承担欢迎页容器；用 flex 让内部 welcome 撑满。 */
+.chat-empty { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; color: var(--text); font-size: 12.5px; padding: 18px 14px; text-align: left; }
+.welcome { display: flex; flex-direction: column; gap: 8px; }
+.welcome-brand { display: flex; align-items: center; gap: 10px; }
+.welcome-brand .logo-dot { width: 22px; height: 22px; }
+.welcome-title { font-size: 18px; font-weight: 600; color: var(--text); letter-spacing: .3px; }
+.welcome-subtitle { color: var(--text-dim); font-size: 12px; margin-bottom: 4px; }
+.welcome-status { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 11.5px; }
+.welcome-row { display: flex; justify-content: space-between; gap: 8px; }
+.welcome-row .wr-key { color: var(--text-faint); }
+.welcome-row .wr-val { color: var(--text); }
+.welcome-row .wr-val.ok { color: var(--green); }
+.welcome-row .wr-val.bad { color: var(--red); }
+.welcome-row .wr-val.mono { font-family: var(--mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+.welcome-hint { color: var(--text-dim); font-size: 12px; line-height: 1.55; padding: 6px 0; }
+.welcome-hint code { background: var(--bg-3); padding: 1px 5px; border-radius: 3px; font-family: var(--mono); font-size: 11px; color: var(--accent-hover); }
+.welcome-section { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--text-dim); font-weight: 600; margin-top: 4px; }
+.welcome-tips { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.welcome-tips li { position: relative; padding-left: 14px; color: var(--text-dim); font-size: 12px; line-height: 1.55; }
+.welcome-tips li::before { content: '·'; position: absolute; left: 4px; color: var(--accent); font-weight: 700; }
+.welcome-tips code { background: var(--bg-3); padding: 1px 5px; border-radius: 3px; font-family: var(--mono); font-size: 11px; color: var(--accent-hover); }
+.welcome-tips b { color: var(--text); font-weight: 600; }
+
+/* ===== Ask User 卡片 ===== */
+/* ask_user 卡片：trae 风格 surface + 6px 圆角 + 顶部图标行 + 左蓝条。 */
+.ask-card { background: var(--bg-3); border: 1px solid var(--border); border-left: 3px solid var(--blue); border-radius: 6px; padding: 10px 12px; margin: 8px 0; max-width: 92%; }
+.ask-header { font-size: 11px; font-weight: 600; color: var(--blue); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
+.ask-question { color: var(--text); font-size: 12.5px; line-height: 1.55; margin-bottom: 8px; white-space: pre-wrap; word-break: break-word; }
+.ask-options { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.ask-option { padding: 5px 12px; border-radius: 6px; background: var(--bg-2); border: 1px solid var(--border); color: var(--text); font-size: 12px; cursor: pointer; transition: .15s; }
+.ask-option:hover:not(:disabled) { background: var(--accent-dim); border-color: var(--accent); color: var(--accent-hover); }
+.ask-option:disabled { opacity: .5; cursor: not-allowed; }
+.ask-custom { display: flex; gap: 6px; align-items: center; }
+.ask-input { flex: 1; background: var(--bg-2); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; color: var(--text); font-size: 12px; outline: none; }
+.ask-input:focus { border-color: var(--accent); }
+.ask-input:disabled { opacity: .5; }
+.ask-status { margin-top: 6px; font-size: 11px; color: var(--text-dim); font-style: italic; }
+
+/* ===== Guard Confirm 卡片 ===== */
+/* 待用户决策的高风险工具确认卡：trae 风格 surface + 状态色左边细条。 */
+.guard-confirm-card { background: var(--bg-3); border: 1px solid var(--border); border-left: 3px solid var(--yellow); border-radius: 6px; padding: 10px 12px; margin: 8px 0; font-size: 12px; max-width: 92%; }
+.guard-confirm-card.risk-high { border-left-color: var(--red); }
+.guard-confirm-card.risk-medium { border-left-color: var(--yellow); }
+.guard-confirm-card.risk-low { border-left-color: var(--green); }
+.guard-confirm-card .gc-header { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+.guard-confirm-card .gc-tool { color: var(--yellow); font-family: var(--mono); font-size: 11px; }
+.guard-confirm-card .gc-reason { color: var(--text-dim); font-size: 12px; margin-bottom: 4px; line-height: 1.5; }
+.guard-confirm-card .gc-suggestion { color: var(--accent-hover); font-size: 12px; margin-bottom: 6px; line-height: 1.5; }
+.guard-confirm-card .gc-params { background: var(--bg); border-radius: 4px; padding: 6px 8px; font-family: var(--mono); font-size: 11px; color: var(--text-dim); white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow-y: auto; margin: 4px 0 8px; }
+.guard-confirm-card .gc-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.guard-confirm-card .gc-status { margin-top: 6px; font-size: 11px; color: var(--text-dim); font-style: italic; }
+
+/* ===== Error 卡片 ===== */
+/* 错误/系统提示：trae 风格 error surface + 完整圆角（trae 的卡片不带左细条，更柔和）。 */
+.error-card { background: rgba(248,81,73,.08); border: 1px solid rgba(248,81,73,.35); border-radius: 6px; padding: 10px 12px; margin: 8px 0; max-width: 92%; }
+.error-card .ec-header { font-size: 11px; font-weight: 600; color: var(--red); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; }
+.error-card .ec-body { color: var(--text); font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+.error-card .ec-hint { color: var(--text-dim); font-size: 11.5px; margin-top: 6px; font-style: italic; }
+
+/* ===== Help Overlay（已废弃，help.js 改用 editor tab 渲染。
+   保留类名以兼容可能的遗留引用；新代码不要使用。） ===== */
+
+/* ===== Config 面板（编辑区特殊 tab 渲染）===== */
+.config-view { display: flex; flex-direction: column; flex: 1; overflow-y: auto; padding: 18px 22px 24px; font-size: 12.5px; color: var(--text); }
+.config-view-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; gap: 12px; }
+.config-view-title { font-size: 15px; font-weight: 600; color: var(--text); letter-spacing: .2px; }
+.config-view-sub { color: var(--text-dim); font-size: 12px; line-height: 1.55; margin-top: 4px; }
+.config-view code { background: var(--bg-3); padding: 1px 5px; border-radius: 3px; font-family: var(--mono); font-size: 11px; color: var(--accent-hover); }
+
+.config-section { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--accent-hover); font-weight: 600; margin: 16px 0 6px; }
+.config-section:first-of-type { margin-top: 4px; }
+.config-row { display: flex; align-items: center; gap: 12px; padding: 7px 10px; border-radius: var(--radius-sm); border: 1px solid transparent; }
+.config-row + .config-row { margin-top: 2px; }
+.config-row.clickable { cursor: pointer; transition: background .15s, border-color .15s; }
+.config-row.clickable:hover { background: var(--bg-3); border-color: var(--border); }
+.config-row-label { min-width: 110px; color: var(--text-faint); font-size: 12px; }
+.config-row-value { flex: 1; color: var(--text); font-size: 12.5px; }
+.config-row-value.mono { font-family: var(--mono); font-size: 12px; }
+.config-row-value.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.config-row-actions { display: flex; gap: 6px; }
+.config-select { background: var(--bg-3); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px 8px; font-size: 12px; cursor: pointer; outline: none; min-width: 160px; }
+.config-select:focus { border-color: var(--accent); }
+.config-empty { padding: 28px 12px; text-align: center; color: var(--text-dim); font-size: 12.5px; line-height: 1.6; }
+
+/* Provider 表单网格：1 列输入（窄屏友好），实际在桌面端 2 列也用 1 列布局更易读。 */
+.config-form-grid { display: flex; flex-direction: column; gap: 10px; max-width: 720px; }
+.config-form-field { display: flex; flex-direction: column; gap: 4px; }
+.config-form-label { font-size: 11.5px; color: var(--text-dim); }
+.config-form-input { background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 10px; color: var(--text); font-size: 12.5px; font-family: var(--mono); outline: none; transition: border-color .15s; }
+.config-form-input:focus { border-color: var(--accent); }
+.config-form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); }
+
+/* ===== Scope Switcher (顶部"全局 / 项目"切换) =====
+   segmented control 风格；active 用 accent-dim 反色。
+   顶级（与 .config-view 平级）渲染时需靠自身撑满右上角，用 margin-left:auto。 */
+.config-scope-switcher { display: inline-flex; gap: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; background: var(--bg-3); }
+.config-scope-btn { padding: 4px 14px; background: transparent; border: none; color: var(--text-dim); font-size: 12px; font-family: inherit; cursor: pointer; transition: background .12s, color .12s; }
+.config-scope-btn + .config-scope-btn { border-left: 1px solid var(--border); }
+.config-scope-btn:hover { background: var(--bg-2); color: var(--text); }
+.config-scope-btn.active { background: var(--accent-dim); color: var(--accent-hover); }
+.config-scope-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.config-scope-info { color: var(--text-faint); font-size: 11.5px; }
+.config-scope-hint { margin-top: 8px; padding: 6px 10px; background: var(--bg-3); border-left: 2px solid var(--accent); color: var(--text-dim); font-size: 11.5px; line-height: 1.5; }
+/* Scope 区域与下方 header 留出间距。 */
+.config-scope-wrap { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+
+/* ===== Setup Banner (0 模型时的引导卡片) ===== */
+.config-setup-banner { display: flex; flex-direction: column; gap: 6px; padding: 14px 16px; margin-bottom: 14px; background: var(--bg-3); border: 1px dashed var(--accent); border-radius: var(--radius); }
+.config-setup-title { font-size: 13px; font-weight: 600; color: var(--accent); }
+.config-setup-hint { color: var(--text-dim); font-size: 11.5px; line-height: 1.55; }
+.config-setup-actions { margin-top: 6px; }
+
+/* ===== Source Badge (字段来源徽标) ===== */
+.config-source-badge { display: inline-block; padding: 1px 7px; border-radius: 9px; font-size: 10.5px; font-weight: 500; line-height: 1.5; letter-spacing: .2px; }
+.config-source-badge.global { background: var(--bg-3); color: var(--text-faint); border: 1px solid var(--border); }
+.config-source-badge.project { background: var(--accent-dim); color: var(--accent-hover); border: 1px solid var(--accent); }
+.config-form-error { margin-top: 10px; padding: 8px 12px; background: rgba(248,81,73,.08); border: 1px solid rgba(248,81,73,.35); border-radius: var(--radius-sm); color: var(--red); font-size: 12px; }
+
+/* Provider kind 标签 + 重新选择按钮：让用户清楚感知到"协议标准"是选中项，不是手填字段。 */
+.config-form-kind-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.config-form-kind-tag { display: inline-block; padding: 4px 10px; background: var(--bg-3); border: 1px solid var(--accent); border-radius: var(--radius-sm); font-family: var(--mono); font-size: 12px; color: var(--accent); font-weight: 600; }
+.config-form-kind-tag.dim { border-color: var(--border); color: var(--text-dim); font-weight: 400; }
+/* Model 输入框 + Fetch 按钮同一行；Fetch 触发 config.list_models 拉取供应商模型。 */
+.config-form-model-row { display: flex; gap: 6px; }
+.config-form-model-row .config-form-input { flex: 1; }
+.config-form-model-row .chat-btn { white-space: nowrap; }
+.config-form-hint { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+
+/* 模型列表 / 详情里的行条目。 */
+.config-model-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid transparent; border-radius: var(--radius-sm); cursor: pointer; transition: background .15s, border-color .15s; }
+.config-model-row + .config-model-row { margin-top: 2px; }
+.config-model-row:hover { background: var(--bg-3); border-color: var(--border); }
+.cmr-mark { width: 18px; text-align: center; color: var(--text-faint); font-family: var(--mono); }
+.cmr-ref { color: var(--text); font-size: 12.5px; }
+.cmr-active { color: var(--green); font-size: 10.5px; background: rgba(63,185,80,.12); padding: 1px 6px; border-radius: 10px; margin-left: 4px; }
+.cmr-summary { color: var(--text-dim); font-size: 11.5px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmr-reason { color: var(--text-faint); font-size: 11px; }
+
+/* 删除确认条。 */
+.config-confirm { margin-top: 16px; padding: 12px 14px; border: 1px solid var(--border); background: var(--bg-2); border-radius: var(--radius); }
+.config-confirm-title { font-size: 12.5px; color: var(--text); margin-bottom: 6px; }
+.config-confirm-title code { background: var(--bg-3); padding: 1px 5px; border-radius: 3px; font-family: var(--mono); font-size: 11px; color: var(--accent-hover); }
+.config-confirm-hint { color: var(--text-dim); font-size: 12px; margin: 6px 0 8px; line-height: 1.5; }
+
+.chat-btn.danger { background: rgba(248,81,73,.12); color: var(--red); border: 1px solid rgba(248,81,73,.35); }
+.chat-btn.danger:hover { background: rgba(248,81,73,.2); }
+.chat-btn.primary.danger { background: var(--red); color: #fff; border-color: var(--red); }
+.chat-btn.primary.danger:hover { background: #ff7066; }
+
+/* ===== Help 视图（编辑区特殊 tab 渲染）===== */
+.help-view { display: flex; flex-direction: column; flex: 1; overflow-y: auto; padding: 18px 22px 24px; font-size: 12.5px; color: var(--text); line-height: 1.6; }
+.help-view-header { margin-bottom: 12px; }
+.help-view-title { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+.help-view-sub { color: var(--text-dim); font-size: 12px; }
+.help-view code { background: var(--bg-3); padding: 1px 5px; border-radius: 3px; font-family: var(--mono); font-size: 11px; color: var(--accent-hover); }

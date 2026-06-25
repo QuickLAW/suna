@@ -25,6 +25,11 @@ func (p *captureCompressProvider) EstimateTokens(text string) int { return len(t
 func (p *captureCompressProvider) ContextWindow() int             { return 100000 }
 func (p *captureCompressProvider) MaxOutputTokens() int           { return 8192 }
 
+// ListModels 在测试中永远不被调用；返回 nil 是因为 NewCompressor 不会触发 listing。
+func (p *captureCompressProvider) ListModels(ctx context.Context) ([]string, error) {
+	return nil, nil
+}
+
 func TestCompressHistoryBuildsSessionState(t *testing.T) {
 	provider := &captureCompressProvider{text: "# Session State\n\n## Active context\n- continue task"}
 	compressor := NewCompressor(provider)

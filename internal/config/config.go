@@ -17,6 +17,10 @@ import (
 
 // Config 表示 Suna 的持久化配置，对应设计文档中的“单二进制 + daemon/TUI 共享配置”。
 // 这里不保存运行态字段；纯界面设置统一放在 UI，模型密钥统一放在 credentials.toml。
+//
+// 字段在运行时是“全局 + 项目级”两阶段合并后的视图：c.GlobalView 是全局真实值，
+// c.ProjectOverrides 是项目级文件内容（可能为 nil）；c 的其余业务字段是 merged 视图。
+// Sources 记录每个字段当前来源是 “global” 还是 “project”，供 UI 展示。
 type Config struct {
 	ActiveModel string                  `toml:"active_model"`
 	Models      []ModelConfig           `toml:"models"`
@@ -27,6 +31,16 @@ type Config struct {
 	Hooks       []HookConfig            `toml:"hooks"`
 	MaxModelRPS int                     `toml:"max_model_rps,omitempty"`
 	DataDir     string                  `toml:"-"`
+
+	// GlobalConfigPath 是全局 config.toml 绝对路径；SaveToGlobal 写到这。
+	// ProjectConfigPath 是项目级 config.toml 路径；可能为空（未启用项目级）。
+	// GlobalView 保存全局原始 cfg，ProjectOverrides 保存项目级原始 cfg。
+	// Sources 标记每个字段的来源，UI 据此决定作用域徽标。
+	GlobalConfigPath  string        `toml:"-"`
+	ProjectConfigPath string        `toml:"-"`
+	GlobalView        *Config       `toml:"-"`
+	ProjectOverrides  *Config       `toml:"-"`
+	Sources           ConfigSources `toml:"-"`
 }
 
 func (c *Config) Clone() *Config {
@@ -318,6 +332,16 @@ func (c *Config) Save(path string) error {
 	if err := c.NormalizeGuard(); err != nil {
 		return err
 	}
+	return c.saveUnchecked(path)
+}
+
+// saveUnchecked 写入配置但跳过业务校验；用于 SaveToGlobal / SaveToProject 这类
+// 写“视图快照”的场景——视图里的 Models 可能为空（项目级 cfg 不一定含 models），
+// 不应被 ValidateModelLimits 拦住。
+func (c *Config) saveUnchecked(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(c.tomlView()); err != nil {
 		return fmt.Errorf("encode config: %w", err)
@@ -326,6 +350,82 @@ func (c *Config) Save(path string) error {
 	writeMCPConfigTOML(&buf, c.MCP)
 	writeHooksTOML(&buf, c.Hooks)
 	return os.WriteFile(path, buf.Bytes(), 0644)
+}
+
+// SaveToGlobal 写“全局真实值”到全局 config.toml。
+// 全局真实值 = 合并视图 c 减去 ProjectOverrides 的非零覆盖字段。
+// 把项目级字段还原为零后再调用 saveUnchecked，避免全局文件被项目级字段污染。
+func (c *Config) SaveToGlobal() error {
+	if c.GlobalConfigPath == "" {
+		return fmt.Errorf("config: global config path not set")
+	}
+	view := c.cloneForGlobalView()
+	return view.saveUnchecked(c.GlobalConfigPath)
+}
+
+// SaveToProject 写“项目级覆盖”到项目级 config.toml。
+// 首次写时 ProjectOverrides 可能为 nil，会从空 Config 起步。
+func (c *Config) SaveToProject() error {
+	if c.ProjectConfigPath == "" {
+		return fmt.Errorf("config: project config path not set")
+	}
+	view := c.ProjectOverrides
+	if view == nil {
+		view = &Config{UI: UIConfig{Theme: "auto", Locale: "en"}}
+	}
+	view.GlobalConfigPath = c.GlobalConfigPath
+	view.ProjectConfigPath = c.ProjectConfigPath
+	return view.saveUnchecked(c.ProjectConfigPath)
+}
+
+// cloneForGlobalView 克隆当前 cfg，并把“被项目级覆盖”的字段还原为零，
+// 使得 saveUnchecked 写出的是“全局真实值”。
+// Skills / MCP 的 enabled 标志直接读取 GlobalView 原始值，避免对布尔字段取反导致语义错误。
+func (c *Config) cloneForGlobalView() *Config {
+	if c.GlobalView == nil {
+		return c.Clone()
+	}
+	// 直接以 GlobalView 为基础：它已经保存了上次“全局真实值”，只需补充本次改动。
+	view := c.GlobalView.Clone()
+	// 若项目级未覆盖，则用 merged 当前值（即本次 UpdateConfig 改动后的值）。
+	p := c.ProjectOverrides
+	if p == nil {
+		return view
+	}
+	if p.ActiveModel == "" {
+		view.ActiveModel = c.ActiveModel
+	}
+	if len(p.Models) == 0 {
+		view.Models = append([]ModelConfig(nil), c.Models...)
+	}
+	if p.Guard.Mode == "" {
+		view.Guard.Mode = c.Guard.Mode
+	}
+	if p.Guard.Workspace == "" {
+		view.Guard.Workspace = c.Guard.Workspace
+	}
+	if len(p.Guard.Blocked) == 0 {
+		view.Guard.Blocked = append([]GuardRule(nil), c.Guard.Blocked...)
+	}
+	if len(p.Guard.Allowed) == 0 {
+		view.Guard.Allowed = append([]GuardAllowRule(nil), c.Guard.Allowed...)
+	}
+	if p.UI.Theme == "" {
+		view.UI.Theme = c.UI.Theme
+	}
+	if p.UI.Locale == "" {
+		view.UI.Locale = c.UI.Locale
+	}
+	// Skills/MCP 的 enabled 标志：GlobalView 已包含原始全局值，
+	// 不需要对项目级 enabled 做取反——项目级只覆盖 enabled 标志，
+	// 全局真实值就是 GlobalView 里保存的值。
+	if len(p.Hooks) == 0 {
+		view.Hooks = append([]HookConfig(nil), c.Hooks...)
+	}
+	if p.MaxModelRPS == 0 {
+		view.MaxModelRPS = c.MaxModelRPS
+	}
+	return view
 }
 
 func (c *Config) tomlView() configTOML {

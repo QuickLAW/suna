@@ -106,6 +106,15 @@ func (p routedProvider) MaxOutputTokens() int {
 	return p.router.ActiveMaxOutputTokens()
 }
 
+// ListModels 透传到当前 active provider；routedProvider 仅是包装器，没有自己的列表实现。
+func (p routedProvider) ListModels(ctx context.Context) ([]string, error) {
+	provider := p.defaultProvider()
+	if provider == nil {
+		return nil, fmt.Errorf("model router is not configured")
+	}
+	return provider.ListModels(ctx)
+}
+
 func (p routedProvider) defaultProvider() Provider {
 	if p.router == nil {
 		return nil
@@ -313,5 +322,26 @@ func createProvider(mc config.ModelConfig, resolver MediaResolver) (Provider, er
 		return NewOpenAIResponsesProvider(apiKey, mc.BaseURL, mc.Model, mc.ContextWindow, mc.MaxOutputTokens, resolver), nil
 	default:
 		return NewOpenAIChatProvider(apiKey, mc.BaseURL, mc.Model, mc.ContextWindow, mc.MaxOutputTokens, resolver), nil
+	}
+}
+
+// NewProviderForListing 构造一个仅用于"拉取可用模型列表"的 Provider 临时实例。
+// 不需要 model 字段（ListModels 走供应商的 /v1/models 端点），
+// 也不依赖 media resolver；供 daemon 处理 config.list_models 时使用。
+func NewProviderForListing(provider, baseURL, apiKey string) (Provider, error) {
+	if strings.TrimSpace(apiKey) == "" {
+		return nil, fmt.Errorf("api_key is required to list models")
+	}
+	if strings.TrimSpace(baseURL) == "" {
+		return nil, fmt.Errorf("base_url is required to list models")
+	}
+	switch provider {
+	case "anthropic":
+		return NewAnthropicProvider(apiKey, baseURL, "", 0, 0, nil), nil
+	case "openai":
+		return NewOpenAIResponsesProvider(apiKey, baseURL, "", 0, 0, nil), nil
+	default:
+		// "openai-compatible" 等其它类型复用 OpenAI Chat SDK 走 OpenAI 标准 /v1/models。
+		return NewOpenAIChatProvider(apiKey, baseURL, "", 0, 0, nil), nil
 	}
 }

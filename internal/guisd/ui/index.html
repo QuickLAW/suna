@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Suna</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%236366f1'/></svg>">
+<link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/vendor/xterm/xterm.css">
+</head>
+<body>
+<!--
+  新布局（参考 VSCode）：
+  ┌────────────────────────────────────────────────────┐
+  │  Menu Bar (File / Edit / View / Help)        28px  │
+  ├────┬──────┬────────────────────────┬───────────────┤
+  │    │      │                        │               │
+  │ A  │ Side │     Editor Area        │   Chat Panel  │
+  │ c  │ bar  │  (code / config / help)│  (right 360px)│
+  │ t  │      │                        │               │
+  │ i  │      │                        │               │
+  │ v  │      │                        │               │
+  │ i  │      ├────────────────────────┤               │
+  │ t  │      │  Terminal (resizable)  │               │
+  │ y  │      │                        │               │
+  │    │      │                        │               │
+  ├────┴──────┴────────────────────────┴───────────────┤
+  │  Status Bar (daemon status / cwd / model)    24px  │
+  └────────────────────────────────────────────────────┘
+
+  Activity Bar: 48px，纯图标，点击切换侧边栏 + 对应编辑区视图。
+  侧边栏：220px（文件树 / 配置侧栏 / 帮助侧栏）。
+  编辑区：1fr（代码编辑 / 配置面板 / 帮助页，由 editor.js 控制）。
+  聊天面板：360px，右侧独立区域。
+  终端面板：底部，可拖拽调整高度。
+  Status Bar：底部状态栏，替代旧 header 的 daemon 状态显示。
+-->
+<div class="app" id="app">
+
+  <!-- Menu Bar (VSCode 风格顶部菜单) -->
+  <div class="menu-bar-host" id="menuBar"></div>
+
+  <!-- Activity Bar (左侧图标栏) -->
+  <nav class="activity-bar" id="activityBar">
+    <button class="activity-btn active" data-activity="files" title="文件浏览器" aria-label="文件浏览器">📁</button>
+    <button class="activity-btn" data-activity="config" title="设置" aria-label="设置">⚙</button>
+    <button class="activity-btn" data-activity="help" title="帮助" aria-label="帮助">?</button>
+    <div style="flex:1"></div>
+    <button class="activity-btn" id="toggleChat" title="切换聊天面板" aria-label="切换聊天">💬</button>
+  </nav>
+
+  <!-- Sidebar -->
+  <div class="sidebar" id="sidebar">
+    <!-- 文件树视图（默认显示） -->
+    <div class="sidebar-view" id="sidebarFiles">
+      <div class="sidebar-header">
+        <span class="sidebar-title">资源管理器</span>
+        <button class="icon-btn" id="goHome" title="回到工作目录">⌂</button>
+      </div>
+      <div class="tree" id="fileTree"></div>
+    </div>
+  </div>
+
+  <!-- Editor Area -->
+  <div class="editor-panel">
+    <div class="editor-tabs" id="editorTabs">
+      <!-- 特殊 tab（设置/帮助）现在由 Activity Bar 控制，
+           不再在 tab bar 里渲染；保留 ID 和结构以兼容 JS。 -->
+    </div>
+    <div class="editor-body" id="editorBody">
+      <div class="editor-empty">
+        <div class="editor-empty-icon">📄</div>
+        <div class="editor-empty-text">选择文件查看或编辑</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chat Panel (右侧) -->
+  <div class="chat-panel">
+    <div class="chat-header"><span class="chat-title">助手对话</span></div>
+    <div class="chat-messages" id="chatMessages">
+      <div class="chat-empty" id="chatEmpty">连接 daemon 后可与 Suna 对话</div>
+    </div>
+    <div class="chat-input-area">
+      <textarea class="chat-input" id="chatInput" placeholder="输入消息..." disabled></textarea>
+      <div class="chat-send-row">
+        <button class="btn btn-ghost" id="cancelBtn" style="display:none">取消</button>
+        <button class="btn btn-primary" id="sendBtn" disabled>发送</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Terminal Resizer -->
+  <div class="terminal-resizer" id="termResizer"></div>
+
+  <!-- Terminal Panel (底部，跨越所有列) -->
+  <div class="terminal-panel" id="terminalPanel">
+    <div class="terminal-header">
+      <span class="terminal-title">终端</span>
+      <div class="terminal-actions">
+        <button class="icon-btn" id="clearTerm" title="清空终端">✕</button>
+      </div>
+    </div>
+    <div class="terminal-tabs" id="terminalTabs">
+      <div class="terminal-tab-add" id="newTermBtn" title="新建终端">+</div>
+    </div>
+    <div id="terminalBodies" style="flex:1;overflow:hidden;position:relative"></div>
+  </div>
+
+  <!-- Status Bar (底部状态栏，替代旧 header) -->
+  <div class="status-bar">
+    <div class="status-bar-left">
+      <div class="status-bar-item">
+        <div class="status-dot offline" id="daemonDot"></div>
+        <span id="daemonStatus">Daemon offline</span>
+      </div>
+      <div class="status-bar-item">
+        <span id="cwdDisplay">~</span>
+      </div>
+    </div>
+    <div class="status-bar-right">
+      <div class="status-bar-item" id="statusModel"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Quick Open (Ctrl+P) -->
+<div class="quick-open-overlay" id="quickOpenOverlay">
+  <div class="quick-open-box">
+    <input type="text" class="quick-open-input" id="quickOpenInput" placeholder="按文件名搜索..." autocomplete="off">
+    <div class="quick-open-list" id="quickOpenList"></div>
+  </div>
+</div>
+
+<!-- Global Search (Ctrl+Shift+F) -->
+<div class="search-panel" id="searchPanel">
+  <div class="search-header">
+    <div class="search-input-row">
+      <input type="text" class="search-input" id="searchInput" placeholder="在文件中搜索..." autocomplete="off">
+      <button class="search-close" id="searchCloseBtn">×</button>
+    </div>
+    <div class="search-options">
+      <label><input type="checkbox" id="searchRegex"> 正则</label>
+      <label><input type="checkbox" id="searchCase"> 区分大小写</label>
+    </div>
+  </div>
+  <div class="search-results" id="searchResults"></div>
+</div>
+
+<!-- Context Menu -->
+<div class="context-menu" id="contextMenu"></div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script type="module" src="/main.js"></script>
+</body>
+</html>

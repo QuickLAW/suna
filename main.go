@@ -25,6 +25,8 @@ func main() {
 	switch cmd {
 	case "tui":
 		runTUI()
+	case "gui":
+		runGUI()
 	case "help":
 		printHelp()
 	case "stop":
@@ -59,6 +61,8 @@ func parseCLI(args []string) string {
 		return "stop"
 	case "status":
 		return "status"
+	case "gui":
+		return "gui"
 	default:
 		return fs.Arg(0)
 	}
@@ -69,6 +73,7 @@ func printHelp() {
 
 Usage:
   suna                 Open the TUI. Starts the daemon if needed.
+  suna gui             Open the GUI in your browser (file browser + terminal + chat).
   suna stop            Stop the running daemon.
   suna status          Show daemon status.
   suna help            Show this help.
@@ -124,7 +129,10 @@ func runTUI() {
 
 func loadOrCreateConfig(configPath string) *config.Config {
 	if !config.NeedsSetup(configPath) {
-		cfg, err := config.Load(configPath)
+		// 项目级配置从 daemon 启动时的 cwd 向上查找 .suna/config.toml。
+		// 找不到时 LoadWithProject 会退化为纯全局加载，行为与旧版一致。
+		projectPath := config.FindProjectConfigPath(mustGetwd())
+		cfg, err := config.LoadWithProject(configPath, projectPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "sunad: config error: %s\n", err)
 			os.Exit(1)
@@ -135,6 +143,15 @@ func loadOrCreateConfig(configPath string) *config.Config {
 		DataDir: config.DefaultDataDir(),
 		UI:      config.UIConfig{Locale: "en", Theme: "auto"},
 	}
+}
+
+// mustGetwd 返回当前工作目录；失败时退化为 "."。
+// 配置加载路径不应因 Getwd 失败而中断，所以使用 best-effort。
+func mustGetwd() string {
+	if cwd, err := os.Getwd(); err == nil {
+		return cwd
+	}
+	return "."
 }
 
 func initLogging(dataDir string) {

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -115,6 +116,9 @@ func newAgentConfig(dir string, models []config.ModelConfig, activeModel string)
 		UI:          config.UIConfig{Theme: "auto", Locale: "en"},
 		Guard:       config.GuardConfig{Mode: "ask"},
 		DataDir:     dir,
+		// UpdateConfig 会通过 commitConfigUpdate 走 SaveToGlobal，要求 cfg 知道
+		// 全局配置路径；测试里给一个 tmpdir 下的路径即可。
+		GlobalConfigPath: filepath.Join(dir, "config.toml"),
 	}
 }
 
@@ -168,6 +172,9 @@ func (fakeProvider) EstimateTokens(string) int { return 0 }
 
 func (fakeProvider) ContextWindow() int   { return 128000 }
 func (fakeProvider) MaxOutputTokens() int { return 8192 }
+
+// ListModels 在测试中不被调用，保留默认空实现。
+func (fakeProvider) ListModels(context.Context) ([]string, error) { return nil, nil }
 
 func TestModelRoutingSummaryFiltersSubtaskFor(t *testing.T) {
 	cfg := newAgentConfig(t.TempDir(), []config.ModelConfig{

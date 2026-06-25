@@ -45,3 +45,33 @@ func (c *Config) SkillsDir() string       { return DataDirSkillsDir(c.DataDir) }
 func (c *Config) PIDPath() string         { return DataDirPIDPath(c.DataDir) }
 func (c *Config) SocketPath() string      { return DataDirSocketPath(c.DataDir) }
 func (c *Config) AttachmentsDir() string  { return DataDirAttachmentsDir(c.DataDir) }
+
+// ProjectDirName 是 Suna 项目级配置的目录名，与全局 AppDirName 保持风格一致。
+// 项目级 config.toml 默认路径为 <cwd>/.suna/config.toml。
+const ProjectDirName = ".suna"
+const ProjectConfigFileName = "config.toml"
+
+// FindProjectConfigPath 从 cwd 向上查找最近的 .suna/config.toml，找到即返回。
+// 遍历到文件系统根目录才终止；任何一级找到即立即返回。
+// 没找到或 cwd 为空时返回空字符串。
+func FindProjectConfigPath(cwd string) string {
+	if cwd == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		return ""
+	}
+	dir := abs
+	for {
+		candidate := filepath.Join(dir, ProjectDirName, ProjectConfigFileName)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/alanchenchen/suna/internal/logging"
 	"github.com/alanchenchen/suna/internal/mcp"
 	"github.com/alanchenchen/suna/internal/memory"
+	"github.com/alanchenchen/suna/internal/model"
 	"github.com/alanchenchen/suna/internal/protocol"
 	"github.com/alanchenchen/suna/internal/skill"
 )
@@ -117,6 +119,8 @@ func (s *service) Handle(ctx context.Context, req protocol.Request, sink protoco
 		return configToParams(s.daemon.agent.Config()), nil
 	case protocol.MethodConfigSet:
 		return s.handleConfigSet(ctx, req, sink)
+	case protocol.MethodConfigListModels:
+		return s.handleConfigListModels(ctx, req)
 	case protocol.MethodDaemonStop:
 		go func() {
 			time.Sleep(100 * time.Millisecond)
@@ -408,7 +412,7 @@ func (s *service) handleConfigSet(ctx context.Context, req protocol.Request, sin
 	if err := decodeParams(req.Params, &params); err != nil {
 		return nil, invalidParams(err.Error())
 	}
-	updated, err := s.daemon.agent.UpdateConfig(agent.ConfigSetParams{Action: params.Action, ModelRef: params.ModelRef, ActiveModel: params.ActiveModel, APIKey: params.APIKey, DeleteAPIKey: params.DeleteAPIKey, Locale: params.Locale, Theme: params.Theme, GuardMode: params.GuardMode, Workspace: params.Workspace, Model: agent.ConfigModel{Provider: params.Model.Provider, Model: params.Model.Model, BaseURL: params.Model.BaseURL, ContextWindow: params.Model.ContextWindow, MaxOutputTokens: params.Model.MaxOutputTokens, Strengths: params.Model.Strengths, SubtaskFor: params.Model.SubtaskFor, Reasoning: params.Model.Reasoning}})
+	updated, err := s.daemon.agent.UpdateConfig(agent.ConfigSetParams{Action: params.Action, ModelRef: params.ModelRef, ActiveModel: params.ActiveModel, APIKey: params.APIKey, DeleteAPIKey: params.DeleteAPIKey, Locale: params.Locale, Theme: params.Theme, GuardMode: params.GuardMode, Workspace: params.Workspace, MaxModelRPS: params.MaxModelRPS, Scope: params.Scope, Model: agent.ConfigModel{Provider: params.Model.Provider, Model: params.Model.Model, BaseURL: params.Model.BaseURL, ContextWindow: params.Model.ContextWindow, MaxOutputTokens: params.Model.MaxOutputTokens, Strengths: params.Model.Strengths, SubtaskFor: params.Model.SubtaskFor, Reasoning: params.Model.Reasoning}})
 	if err != nil {
 		logging.Error("config", "update_failed", err, logging.Event{"action": params.Action, "model_ref": params.ModelRef, "active_model": params.ActiveModel})
 		return nil, invalidParams(err.Error())
@@ -418,6 +422,38 @@ func (s *service) handleConfigSet(ctx context.Context, req protocol.Request, sin
 	emit(ctx, sink, protocol.NotifyConfigState, result)
 	emit(ctx, sink, protocol.NotifyDaemonFullStatus, s.buildDaemonStatus(ctx))
 	return result, nil
+}
+
+// handleConfigListModels 按标准协议向供应商拉取可用模型 ID 列表。
+// 由 TUI 在表单里填好 url + key 后点 Fetch 触发；不依赖任何已加载的 ModelConfig。
+// 返回值始终非 nil：成功时 Models 非空且 Error 为空；失败时 Models 为 nil 且 Error 带可读消息。
+// 这样 TUI 解析时无需分别处理 transport error 和 result error 两路。
+func (s *service) handleConfigListModels(ctx context.Context, req protocol.Request) (protocol.ConfigListModelsResult, error) {
+	var params protocol.ConfigListModelsParams
+	if err := decodeParams(req.Params, &params); err != nil {
+		return protocol.ConfigListModelsResult{}, invalidParams(err.Error())
+	}
+	provider := strings.TrimSpace(params.Provider)
+	if provider == "" {
+		return protocol.ConfigListModelsResult{Error: "provider is required"}, nil
+	}
+	if strings.TrimSpace(params.BaseURL) == "" {
+		return protocol.ConfigListModelsResult{Error: "base_url is required"}, nil
+	}
+	if params.APIKey == "" {
+		return protocol.ConfigListModelsResult{Error: "api_key is required"}, nil
+	}
+	prov, err := model.NewProviderForListing(provider, params.BaseURL, params.APIKey)
+	if err != nil {
+		return protocol.ConfigListModelsResult{Error: err.Error()}, nil
+	}
+	models, listErr := prov.ListModels(ctx)
+	if listErr != nil {
+		logging.Error("config", "list_models_failed", listErr, logging.Event{"provider": provider, "base_url": params.BaseURL})
+		return protocol.ConfigListModelsResult{Error: listErr.Error()}, nil
+	}
+	logging.Info("config", "list_models_success", logging.Event{"provider": provider, "base_url": params.BaseURL, "count": len(models)})
+	return protocol.ConfigListModelsResult{Models: models}, nil
 }
 
 func (s *service) buildDaemonStatus(ctx context.Context) protocol.DaemonStatusParams {
@@ -477,11 +513,40 @@ func periodFromSummary(sum *memory.UsageSummary) protocol.UsagePeriod {
 }
 
 func configToParams(cfg *config.Config) protocol.ConfigParams {
-	out := protocol.ConfigParams{ActiveModel: cfg.ActiveModel, Locale: cfg.UI.Locale, Theme: cfg.UI.Theme, GuardMode: cfg.Guard.ModeOrDefault(), Workspace: cfg.Guard.Workspace}
+	out := protocol.ConfigParams{
+		ActiveModel:       cfg.ActiveModel,
+		Locale:            cfg.UI.Locale,
+		Theme:             cfg.UI.Theme,
+		GuardMode:         cfg.Guard.ModeOrDefault(),
+		Workspace:         cfg.Guard.Workspace,
+		MaxModelRPS:       cfg.MaxModelRPS,
+		HasMCP:            len(cfg.MCP.Servers) > 0,
+		HasHooks:          len(cfg.Hooks) > 0,
+		GlobalConfigPath:  cfg.GlobalConfigPath,
+		ProjectConfigPath: cfg.ProjectConfigPath,
+		Sources:           sourcesToMap(cfg.Sources),
+	}
 	for _, mc := range cfg.Models {
 		out.Models = append(out.Models, protocol.ConfigModel{Provider: mc.Provider, Model: mc.Model, BaseURL: mc.BaseURL, ContextWindow: mc.ContextWindow, MaxOutputTokens: mc.MaxOutputTokens, Strengths: mc.Strengths, SubtaskFor: mc.SubtaskFor, Reasoning: mc.Reasoning, HasAPIKey: mc.APIKey != ""})
 	}
 	return out
+}
+
+// sourcesToMap 把 config.ConfigSources 拍扁成 map[string]string，protocol 层用。
+// 字段名沿用 ConfigSources 的 json tag，UI 直接按字段名取来源。
+func sourcesToMap(s config.ConfigSources) protocol.ConfigSourceMap {
+	return protocol.ConfigSourceMap{
+		"active_model":    s.ActiveModel,
+		"models":          s.Models,
+		"guard_mode":      s.GuardMode,
+		"guard_workspace": s.GuardWorkspace,
+		"ui_theme":        s.UITheme,
+		"ui_locale":       s.UILocale,
+		"skills":          s.Skills,
+		"mcp":             s.MCP,
+		"hooks":           s.Hooks,
+		"max_model_rps":   s.MaxModelRPS,
+	}
 }
 
 type toolDisplay struct {

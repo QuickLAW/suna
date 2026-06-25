@@ -15,6 +15,8 @@ import (
 
 type AnthropicProvider struct {
 	client          *anthropic.Client
+	apiKey          string
+	baseURL         string
 	model           string
 	contextWindow   int
 	maxOutputTokens int
@@ -32,6 +34,8 @@ func NewAnthropicProvider(apiKey, baseURL, model string, contextWindow, maxOutpu
 	client := anthropic.NewClient(opts...)
 	return &AnthropicProvider{
 		client:          &client,
+		apiKey:          apiKey,
+		baseURL:         baseURL,
 		model:           model,
 		contextWindow:   contextWindow,
 		maxOutputTokens: maxOutputTokens,
@@ -291,6 +295,14 @@ func (p *AnthropicProvider) ContextWindow() int { return p.contextWindow }
 
 func (p *AnthropicProvider) MaxOutputTokens() int {
 	return p.maxOutputTokens
+}
+
+// ListModels 调 Anthropic 标准 /v1/models 拉取模型 ID 列表。
+// baseURL 由调用方提供，不硬编码任何预设厂商。
+func (p *AnthropicProvider) ListModels(ctx context.Context) ([]string, error) {
+	listCtx, cancel := context.WithTimeout(ctx, ListModelsHTTPTimeout)
+	defer cancel()
+	return anthropicListModels(listCtx, p.apiKey, p.baseURL)
 }
 
 func (p *AnthropicProvider) resolveMaxTokens(m int) int {

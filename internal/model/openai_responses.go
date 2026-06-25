@@ -13,6 +13,8 @@ import (
 
 type OpenAIResponsesProvider struct {
 	client          openai.Client
+	apiKey          string
+	baseURL         string
 	model           string
 	contextWindow   int
 	maxOutputTokens int
@@ -24,7 +26,7 @@ func NewOpenAIResponsesProvider(apiKey, baseURL, model string, contextWindow, ma
 	// 关闭 SDK 隐式重试，避免一次 Suna Complete 在上游产生多次不可见请求；
 	// 未来如需重试应由 Suna 自己实现并记录日志。
 	client := openai.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseURL), option.WithHTTPClient(httpClient), option.WithMaxRetries(0))
-	return &OpenAIResponsesProvider{client: client, model: model, contextWindow: contextWindow, maxOutputTokens: maxOutputTokens, media: mediaResolver}
+	return &OpenAIResponsesProvider{client: client, apiKey: apiKey, baseURL: baseURL, model: model, contextWindow: contextWindow, maxOutputTokens: maxOutputTokens, media: mediaResolver}
 }
 
 func (p *OpenAIResponsesProvider) Complete(ctx context.Context, req *CompletionRequest) (<-chan Chunk, error) {
@@ -126,6 +128,14 @@ func (p *OpenAIResponsesProvider) ContextWindow() int { return p.contextWindow }
 
 func (p *OpenAIResponsesProvider) MaxOutputTokens() int {
 	return p.maxOutputTokens
+}
+
+// ListModels 调 OpenAI 标准 /v1/models；OpenAI 官方以及兼容 OpenAI /v1/models 协议的供应商均可使用。
+// baseURL 由调用方提供，不硬编码任何预设厂商。
+func (p *OpenAIResponsesProvider) ListModels(ctx context.Context) ([]string, error) {
+	listCtx, cancel := context.WithTimeout(ctx, ListModelsHTTPTimeout)
+	defer cancel()
+	return openaiListModels(listCtx, p.apiKey, p.baseURL)
 }
 
 func (p *OpenAIResponsesProvider) resolveModel(m string) string {
