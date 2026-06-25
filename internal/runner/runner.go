@@ -16,6 +16,12 @@ import (
 	"github.com/alanchenchen/suna/internal/tools"
 )
 
+const (
+	modelRequestMaxRetries  = 3
+	modelRequestMaxAttempts = 1 + modelRequestMaxRetries
+	modelRequestRetryDelay  = 8 * time.Second
+)
+
 func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	var result Result
 	if r.Router == nil {
@@ -199,8 +205,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 }
 
 func (r *Runner) completeWithRecovery(ctx context.Context, modelRef string, completionReq *model.CompletionRequest, req Request) (string, []model.ToolCall, *model.Usage, error) {
-	const maxAttempts = 3
-	const retryDelay = 8 * time.Second
 	streamTimeout := req.StreamTimeout
 	dynamicReasoningTimeout := false
 	if streamTimeout <= 0 {
@@ -208,13 +212,16 @@ func (r *Runner) completeWithRecovery(ctx context.Context, modelRef string, comp
 		dynamicReasoningTimeout = true
 	}
 	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
+	for attempt := 1; attempt <= modelRequestMaxAttempts; attempt++ {
 		ch, err := r.Router.Complete(ctx, modelRef, completionReq)
 		if err != nil {
 			lastErr = err
 		} else {
 			content, toolCalls, usage, streamErr, visibleOutput := r.readStream(ctx, ch, streamTimeout, dynamicReasoningTimeout, req)
 			if streamErr == nil {
+				if attempt > 1 {
+					logModelRecovery("recovered", completionReq, modelRef, attempt, modelRequestMaxAttempts, 0, nil)
+				}
 				return content, toolCalls, usage, nil
 			}
 			if visibleOutput {
@@ -222,18 +229,18 @@ func (r *Runner) completeWithRecovery(ctx context.Context, modelRef string, comp
 			}
 			lastErr = streamErr
 		}
-		if attempt >= maxAttempts || !retryableModelRequestError(lastErr) {
+		if attempt >= modelRequestMaxAttempts || !retryableModelRequestError(lastErr) {
 			if attempt > 1 || retryableModelRequestError(lastErr) {
-				logModelRecovery("exhausted", completionReq, modelRef, attempt, maxAttempts, 0, lastErr)
+				logModelRecovery("exhausted", completionReq, modelRef, attempt, modelRequestMaxAttempts, 0, lastErr)
 			}
 			return "", nil, nil, lastErr
 		}
-		logModelRecovery("retrying", completionReq, modelRef, attempt, maxAttempts, retryDelay, lastErr)
+		logModelRecovery("retrying", completionReq, modelRef, attempt, modelRequestMaxAttempts, modelRequestRetryDelay, lastErr)
 		if r.Sink != nil {
-			r.Sink.Status(StatusEvent{Kind: StatusLLMRetrying, Attempt: attempt + 1, MaxAttempts: maxAttempts, Delay: retryDelay, Error: model.NewModelError(lastErr)})
+			r.Sink.Status(StatusEvent{Kind: StatusLLMRetrying, Attempt: attempt + 1, MaxAttempts: modelRequestMaxAttempts, Delay: modelRequestRetryDelay, Error: model.NewModelError(lastErr)})
 		}
 		select {
-		case <-time.After(retryDelay):
+		case <-time.After(modelRequestRetryDelay):
 		case <-ctx.Done():
 			return "", nil, nil, ctx.Err()
 		}

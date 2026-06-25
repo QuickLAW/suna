@@ -101,6 +101,16 @@ func TestReadStreamReportsNoVisibleOutputBeforeInitialError(t *testing.T) {
 	}
 }
 
+func TestModelRequestRecoveryAllowsThreeRetries(t *testing.T) {
+	t.Parallel()
+	if got, want := modelRequestMaxRetries, 3; got != want {
+		t.Fatalf("modelRequestMaxRetries = %d, want %d", got, want)
+	}
+	if got, want := modelRequestMaxAttempts, 4; got != want {
+		t.Fatalf("modelRequestMaxAttempts = %d, want %d", got, want)
+	}
+}
+
 func TestRetryableModelRequestErrorUsesStructuredStatus(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
